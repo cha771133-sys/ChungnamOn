@@ -56,6 +56,8 @@ git commit -m "feat: 문서 업로드 API 추가"
 git push origin feature/be-document-api
 
 # 5. GitHub에서 PR 생성 (대상 브랜치는 기본값인 dev)
+
+# 6. 리뷰 승인 + CI 통과 후 PR 작성자가 Squash and merge
 ```
 
 ---
@@ -75,24 +77,45 @@ git push origin feature/be-document-api
 | 작업 브랜치 → `dev` | **Squash and merge** | 기능 하나를 커밋 하나로 정리 |
 | `dev` → `main` | **Create a merge commit** | Squash하면 `main`과 `dev` 이력이 어긋나 다음 merge 때 충돌 발생 |
 
-### 머지 담당
+### 머지
 
-- 모든 PR의 merge는 **차성진**이 일괄 진행합니다.
-- 머지 담당이 부재 중일 때는 대리인 **TODO: 대리인 지정**이 merge합니다.
-- 그 외 팀원은 merge 버튼을 누르지 않습니다.
+- 작업 브랜치 → `dev`: **Approve 1개 이상 + CI 통과** 후 **PR 작성자가 직접** Squash and merge합니다.
+- `dev` → `main`: 데모 전에 **차성진**이 진행합니다.
+- 리뷰 승인 전이거나 CI가 실패한 PR은 merge하지 않습니다.
 
 ### 리뷰
 
-- 모든 PR은 작성자가 아닌 팀원 **1명 이상의 리뷰**를 받은 뒤 merge합니다.
-- **머지 담당 본인의 PR도** 다른 팀원의 리뷰를 받습니다.
+- 작성자가 아닌 팀원 **누구든** 확인하고 승인(Approve)할 수 있습니다.
 - 리뷰 요청을 받으면 **4시간 안에** 리뷰를 남깁니다. 늦어지면 팀 채팅에 알립니다.
+- CodeRabbit 자동 리뷰는 1차 확인용입니다. **사람 리뷰를 대신하지 않습니다.**
+
+### CI
+
+`dev`, `main`으로 PR을 올리면 GitHub Actions가 자동으로 검사합니다. PR 하단 체크가 모두 ✅여야 merge할 수 있습니다.
+
+| 영역 | 실행 조건 | 검사 내용 |
+| --- | --- | --- |
+| 백엔드 | `backend/**` 변경 | 마이그레이션 체크(`makemigrations --check`) + 테스트 |
+| 프론트 | `frontend/**` 변경 | lint + build |
+
+- CI가 실패하면 Checks 탭에서 로그를 확인하고 수정한 뒤 다시 push합니다.
+- 모델을 바꿨다면 `python manage.py makemigrations`로 만든 마이그레이션 파일을 함께 커밋해야 CI를 통과합니다.
+
+### CodeRabbit
+
+PR이 올라오면 CodeRabbit이 변경된 코드를 분석해 리뷰 코멘트를 자동으로 남깁니다.
+
+- 코멘트를 확인하고 반영하거나, 반영하지 않을 경우 이유를 답글로 남깁니다.
+- PR 코멘트에서 `@coderabbitai`를 언급하면 추가 질문을 할 수 있습니다.
 
 ### PR 올릴 때
 
 1. Reviewers에 리뷰할 팀원, Assignees에 본인 지정
 2. 템플릿에 관련 이슈를 `close #이슈번호`로 적기 → `dev`에 merge되면 이슈가 자동으로 닫힘
 3. 팀 채팅에 PR 링크 공유
-4. 충돌이 생기면 **PR 작성자**가 `dev`를 pull 받아 해결한 뒤 다시 push (Django 마이그레이션 충돌은 `python manage.py makemigrations --merge`로 해결)
+4. CI 결과와 CodeRabbit 코멘트 확인
+5. 충돌이 생기면 **PR 작성자**가 `dev`를 pull 받아 해결한 뒤 다시 push (Django 마이그레이션 충돌은 `python manage.py makemigrations --merge`로 해결)
+6. Approve와 CI 통과를 확인한 뒤 **PR 작성자가 Squash and merge**
 
 ### PR 템플릿
 
