@@ -1,4 +1,4 @@
-from rest_framework.exceptions import NotAuthenticated, ParseError, ValidationError
+from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, ParseError, ValidationError
 from rest_framework.views import exception_handler
 
 
@@ -29,6 +29,8 @@ def api_exception_handler(exc, context):
         }
     elif isinstance(exc, NotAuthenticated):
         code, message = 'NOT_AUTHENTICATED', '인증이 필요합니다.'
+    elif isinstance(exc, AuthenticationFailed):
+        code, message = 'AUTHENTICATION_FAILED', '인증 정보가 유효하지 않습니다.'
     elif isinstance(exc, ParseError):
         code, message = 'PARSE_ERROR', '요청 본문을 해석할 수 없습니다.'
     else:

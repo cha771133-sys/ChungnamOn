@@ -2,6 +2,7 @@ from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.http import Http404
 from django.test import SimpleTestCase
 from rest_framework import serializers
+from rest_framework.authentication import BasicAuthentication, SessionAuthentication
 from rest_framework.exceptions import (
     APIException, AuthenticationFailed, MethodNotAllowed, NotAuthenticated,
     NotFound, ParseError, PermissionDenied, Throttled, UnsupportedMediaType,
@@ -75,6 +76,28 @@ class ExceptionHandlerTests(SimpleTestCase):
         self.assertEqual(api_exception_handler(Throttled(wait=12), {})['Retry-After'], '12')
 
     def test_existing_session_authentication_403_policy_is_respected(self):
-        response = APIView.as_view(permission_classes=[IsAuthenticated])(APIRequestFactory().get('/'))
+        response = APIView.as_view(
+            authentication_classes=[SessionAuthentication], permission_classes=[IsAuthenticated],
+        )(APIRequestFactory().get('/'))
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.data['code'], 'NOT_AUTHENTICATED')
+
+    def test_authentication_failure_code_survives_drf_403_coercion(self):
+        response = APIView.as_view(
+            authentication_classes=[SessionAuthentication, BasicAuthentication],
+            permission_classes=[IsAuthenticated],
+        )(APIRequestFactory().get('/', HTTP_AUTHORIZATION='Basic invalid'))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data['code'], 'AUTHENTICATION_FAILED')
+        self.assertEqual(response.data['details'], {})
+
+    def test_unknown_exceptions_are_not_swallowed_by_api_views(self):
+        class BrokenView(APIView):
+            authentication_classes = []
+            permission_classes = []
+
+            def get(self, request):
+                raise RuntimeError('내부 오류')
+
+        with self.assertRaises(RuntimeError):
+            BrokenView.as_view()(APIRequestFactory().get('/'))
