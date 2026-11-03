@@ -57,3 +57,25 @@ class Document(models.Model):
         if not self.expires_at:
             self.expires_at = (self.created_at or timezone.now()) + timedelta(days=RETENTION_DAYS)
         super().save(*args, **kwargs)
+
+
+class InterpretationResult(models.Model):
+    """문서 해석 결과. JSON 필드 안의 형식은 services/pipeline.py의 docstring 참고."""
+
+    document = models.OneToOneField(Document, on_delete=models.CASCADE, related_name='result')
+    doc_type = models.CharField(max_length=50, blank=True)
+    title = models.CharField(max_length=200, blank=True)
+    # 마스킹된 원문
+    original_text = models.TextField(blank=True)
+    translated_text = models.TextField(blank=True)
+    summary = models.JSONField(default=list)
+    terms = models.JSONField(default=list)
+    deadlines = models.JSONField(default=list)
+    required_docs = models.JSONField(default=list)
+    agency = models.JSONField(default=dict)
+    verification = models.JSONField(default=dict)
+    language = models.CharField(max_length=10, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.document_id} {self.title}'

@@ -4,6 +4,7 @@ from django.test import TestCase, override_settings
 from django.urls import path
 from rest_framework.generics import ListAPIView
 from rest_framework.test import APIRequestFactory, APITestCase
+from rest_framework_simplejwt.tokens import AccessToken
 
 from core.pagination import StandardPagination
 from core.permissions import IsOwner
@@ -73,7 +74,7 @@ class OwnedListIntegrationTests(APITestCase):
             ])
 
     def setUp(self):
-        self.client.force_authenticate(self.owner)
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + str(AccessToken.for_user(self.owner)))
 
     def test_global_pagination_and_stable_owner_only_order(self):
         expected = list(Document.objects.filter(owner=self.owner).order_by('pk').values_list('pk', flat=True))
@@ -91,7 +92,7 @@ class OwnedListIntegrationTests(APITestCase):
         self.assertEqual(response.json()['code'], 'NOT_FOUND')
 
     def test_anonymous_list_is_denied(self):
-        self.client.force_authenticate(None)
+        self.client.credentials()
         response = self.client.get('/owned/')
-        self.assertIn(response.status_code, (401, 403))
+        self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()['code'], 'NOT_AUTHENTICATED')

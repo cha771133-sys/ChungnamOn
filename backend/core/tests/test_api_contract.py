@@ -75,9 +75,10 @@ class APIContractTests(APITestCase):
         self.assertEqual(other.json(), missing.json())
         self.assertEqual(other.json()['code'], 'NOT_FOUND')
 
-    def test_missing_authentication_obeys_existing_status_policy(self):
+    def test_missing_authentication_uses_jwt_401_policy(self):
         response = self.client.get(self.status_url)
-        self.assertIn(response.status_code, (401, 403))
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response['WWW-Authenticate'], 'Bearer realm="api"')
         self.assertEqual(response.json(), {
             'code': 'NOT_AUTHENTICATED', 'message': '인증이 필요합니다.', 'details': {},
         })

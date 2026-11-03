@@ -46,6 +46,13 @@ DRF 기본 예외 처리기가 처리한 오류에만 다음 형식을 적용합
 
 그 밖에 DRF가 처리한 예외는 상태에 맞는 일반 코드 또는 `API_ERROR`를 반환합니다.
 프론트엔드는 기존 최상위 필드 오류 대신 `details`에서 검증 메시지를 읽어야 합니다.
+회원가입·프로필 검증도 같은 계약을 사용합니다. JWT 인증 누락·실패는 401과
+`WWW-Authenticate: Bearer realm="api"`를 유지하고, 인증 후 객체 권한 거부는 403입니다.
+소유자 필터에 걸린 타인 문서는 존재하지 않는 문서와 같은 `NOT_FOUND` 404입니다.
+
+문서 결과 조회가 직접 반환하는 처리 중·실패 409는 기존 업무 응답인
+`{detail, status, step, failReason?}`를 보존합니다. 이는 예외 처리기가 정규화하는
+오류와 구분되며 OpenAPI에도 별도 응답으로 명시합니다.
 
 ## 페이지네이션
 
@@ -63,27 +70,34 @@ API이므로 페이지네이션을 적용하지 않습니다.
 
 - `/api/schema/`: OpenAPI 3.0.3 명세 (YAML 기본, JSON은 `?format=json`)
 - `/api/docs/`: 공개 Swagger UI
-- 문서화 대상: Health, 문서 업로드, 내 문서 상태 조회
+- 문서화 대상: Health, 회원가입·로그인·JWT 갱신·로그아웃, 내 프로필 조회·수정, 문서 업로드·상태·결과 조회
 - 업로드: `multipart/form-data`의 `file`, jpg/jpeg/png/pdf, 최대 20MB
 - Swagger UI 정적 리소스는 drf-spectacular 기본 CDN을 사용하므로 브라우저에서 인터넷 접근이 필요합니다.
 
 `drf-spectacular==0.30.0`으로 고정했으며 기존 Django 6.1.2 / DRF 3.18.3 환경에서
 의존성 검사, 명세 검증과 API 회귀 테스트를 통과했습니다.
 
-### P0-1 통합 시 확인할 사항
+### P0-1 통합 완료 — 이슈 #20
 
-작업 기준 `dev`에는 accounts 앱과 JWT 로그인 API가 없습니다. Session/Basic 기본 인증을
-보존하고 이를 실제 명세에 표시합니다. 인증 누락은 현재 403이며 JWT 로그인 경로를 만들지 않습니다.
+기존 PR #17 브랜치에 `origin/dev`의 P0-1(#15)과 문서 비동기 처리·결과 조회(#13)를
+일반 merge로 통합했습니다. `AUTH_USER_MODEL=accounts.User`, 전역 JWT 인증 및
+`IsAuthenticated` 권한을 유지하면서 공통 예외 처리·페이지네이션·OpenAPI 설정을 합쳤습니다.
 
-P0-1 병합 시 기존 JWT·권한 설정과 이번 `REST_FRAMEWORK` 항목을 병합해야 합니다.
-drf-spectacular의 SimpleJWT 자동 연동은 JWTAuthentication을 사용하는 뷰에 Bearer 보안
-스키마와 Swagger Authorize를 제공합니다. 테스트에서 Bearer 스키마 및 유효/무효 토큰
-호환성을 별도로 검증합니다. 병합 후 실제 인증·프로필 API의 요청/성공 응답을 명시하고,
-문서 API의 인증 오류 명세에 401을 추가해야 합니다. accounts의 검증 오류 테스트도
-`details` 계약으로 갱신하고 토큰 회전·로그아웃·프로필 회귀 테스트를 실행해야 합니다.
+Access 15분·Refresh 7일, Refresh 회전 및 이전 토큰 blacklist 정책은 변경하지 않았습니다.
+회원가입·로그인·갱신·로그아웃과 Health·Swagger는 기존 공개 정책을 유지합니다.
+프로필·문서 API는 실제 Bearer JWT 보안 스키마와 401 오류 응답을 문서화합니다.
+프로필 PATCH 입력은 `language`, `nationality`, `visaType`만 포함하며 최초 세 항목 필수
+검증과 설정 완료 후 부분 수정 정책을 유지합니다.
 
-현재 회원가입·로그인·프로필 회귀 검증은 선행 기능이 미병합이므로 실행 대상이 아닙니다.
-운영용 목록·수정·삭제 API도 없어 공통 권한 단위 테스트와 격리된 목록 뷰로 검증합니다.
+문서 업로드의 커밋 후 처리 실행, 상태의 선택적 `failReason`, 해석 결과 및 409 응답을
+보존했습니다. 상태·결과 조회 모두 소유자 필터와 `IsOwner`를 적용합니다. 모델·서비스·
+마이그레이션은 최신 dev와 같습니다. 운영용 목록·수정·삭제 API는 없으므로 공통 권한
+단위 테스트와 실제 JWT를 사용하는 격리된 목록 뷰로 권한·페이지네이션을 검증합니다.
+
+통합 후 격리된 메모리 SQLite DB에서 전체 115개 테스트, 시스템 검사, 마이그레이션 누락
+검사, 경고를 오류로 처리한 OpenAPI 생성·검증, 패키지 의존성 검사를 통과했습니다.
+기존 로컬 DB·운영 DB는 변경하지 않았습니다. 사용자 모델 전환에 따른 기존 DB 이관
+위험은 [accounts 문서](../accounts/README.md)의 별도 전환 검토 사항으로 남습니다.
 
 ## 검증 명령
 
@@ -91,9 +105,10 @@ drf-spectacular의 SimpleJWT 자동 연동은 JWTAuthentication을 사용하는 
 
 ```powershell
 python manage.py check
+python manage.py makemigrations --check --dry-run
 python manage.py test
 python manage.py spectacular --validate --fail-on-warn --file schema.yaml
-pip check
+python -m pip check
 ```
 
 생성 명세는 검증용 산출물이며 저장소에 커밋할 필요가 없습니다. DB 모델·마이그레이션은 변경하지 않습니다.

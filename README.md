@@ -11,6 +11,8 @@ React(Vite + TypeScript) 프론트엔드와 Django(DRF) 백엔드로 구성된 �
 
 Windows PowerShell 기준입니다.
 
+기존 DB가 있다면 `migrate` 전에 [인증 사용자 모델 전환 주의사항](backend/accounts/README.md#기존-db-전환-차단-사항)을 확인하세요. 기본 User로 `admin` 마이그레이션을 적용한 DB는 별도 전환이 필요합니다.
+
 ```powershell
 cd backend
 python -m venv .venv

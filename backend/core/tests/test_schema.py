@@ -1,17 +1,12 @@
 import json
 from io import StringIO
-from unittest.mock import patch
 
-from django.apps import apps
 from django.conf import settings
 from django.core.management import call_command
 from django.urls import resolve
 from drf_spectacular.generators import SchemaGenerator
 from drf_spectacular.validation import validate_schema
 from rest_framework.test import APISimpleTestCase
-from rest_framework_simplejwt.authentication import JWTAuthentication
-
-from documents.views import DocumentStatusView, DocumentUploadView
 
 
 class OpenAPITests(APISimpleTestCase):
@@ -50,6 +45,8 @@ class OpenAPITests(APISimpleTestCase):
     def test_only_actual_api_paths_are_documented(self):
         self.assertTrue({
             '/api/health/', '/api/documents/', '/api/documents/{pk}/status/',
+            '/api/documents/{pk}/result/', '/api/auth/register/', '/api/auth/login/',
+            '/api/auth/token/refresh/', '/api/auth/logout/', '/api/auth/me/',
         }.issubset(self.schema['paths']))
         for path in self.schema['paths']:
             with self.subTest(path=path):
@@ -76,9 +73,14 @@ class OpenAPITests(APISimpleTestCase):
         self.assertEqual(set(response['properties']), {'documentId', 'status'})
         status = self.schema['paths']['/api/documents/{pk}/status/']['get']['responses']
         response = self.dereference(status['200']['content']['application/json']['schema'])
-        self.assertEqual(set(response['properties']), {'documentId', 'status', 'step'})
+        self.assertEqual(set(response['properties']), {'documentId', 'status', 'step', 'failReason'})
         self.assertEqual(set(response['required']), {'documentId', 'status', 'step'})
-        for responses, codes in ((upload, ('400', '403', '405', '415')), (status, ('403', '404', '405'))):
+        result = self.schema['paths']['/api/documents/{pk}/result/']['get']['responses']
+        for responses, codes in (
+            (upload, ('400', '401', '403', '405', '415')),
+            (status, ('401', '403', '404', '405')),
+            (result, ('401', '403', '404', '405')),
+        ):
             for code in codes:
                 error = self.dereference(responses[code]['content']['application/json']['schema'])
                 self.assertEqual(set(error['properties']), {'code', 'message', 'details'})
@@ -90,29 +92,66 @@ class OpenAPITests(APISimpleTestCase):
         response = self.client.get('/api/health/', HTTP_AUTHORIZATION='Bearer invalid')
         self.assertEqual(response.json(), {'status': 'ok'})
 
-    def test_current_authentication_is_documented_without_fake_jwt_login(self):
+    def test_protected_operations_require_real_jwt_authentication(self):
         schemes = self.schema['components']['securitySchemes']
-        for path, method in (('/api/documents/', 'post'), ('/api/documents/{pk}/status/', 'get')):
-            security = self.schema['paths'][path][method]['security']
-            self.assertTrue(security)
-            self.assertNotIn({}, security)
-            for requirement in security:
-                self.assertTrue(set(requirement).issubset(schemes))
-        if not apps.is_installed('accounts'):
-            self.assertNotIn('/api/auth/login/', self.schema['paths'])
-
-    def test_simplejwt_schema_integration_when_authentication_is_enabled(self):
-        # P0-1 미병합 상태에서는 운영 인증 정책을 변경하지 않고 전환 호환성만 확인한다.
-        with patch.object(DocumentUploadView, 'authentication_classes', [JWTAuthentication]), \
-                patch.object(DocumentStatusView, 'authentication_classes', [JWTAuthentication]):
-            schema = SchemaGenerator().get_schema(request=None, public=True)
-        validate_schema(schema)
-        self.assertEqual(schema['components']['securitySchemes']['jwtAuth'], {
+        self.assertEqual(schemes['jwtAuth'], {
             'type': 'http', 'scheme': 'bearer', 'bearerFormat': 'JWT',
         })
-        for path, method in (('/api/documents/', 'post'), ('/api/documents/{pk}/status/', 'get')):
-            self.assertEqual(schema['paths'][path][method]['security'], [{'jwtAuth': []}])
-        self.assertFalse(schema['paths']['/api/health/']['get'].get('security'))
+        for path, method in (
+            ('/api/documents/', 'post'), ('/api/documents/{pk}/status/', 'get'),
+            ('/api/documents/{pk}/result/', 'get'), ('/api/auth/me/', 'get'),
+            ('/api/auth/me/', 'patch'),
+        ):
+            security = self.schema['paths'][path][method]['security']
+            self.assertEqual(security, [{'jwtAuth': []}])
+            self.assertIn('401', self.schema['paths'][path][method]['responses'])
+
+    def test_public_authentication_requests_and_responses_are_documented(self):
+        for path, fields, success, output in (
+            ('/api/auth/register/', {'email', 'password'}, '201', {'id', 'email'}),
+            ('/api/auth/login/', {'email', 'password'}, '200', {'access', 'refresh'}),
+            ('/api/auth/token/refresh/', {'refresh'}, '200', {'access', 'refresh'}),
+            ('/api/auth/logout/', {'refresh'}, '200', set()),
+        ):
+            with self.subTest(path=path):
+                operation = self.schema['paths'][path]['post']
+                self.assertFalse(operation.get('security'))
+                request = self.dereference(operation['requestBody']['content']['application/json']['schema'])
+                self.assertEqual(set(request['properties']), fields)
+                response = self.dereference(operation['responses'][success]['content']['application/json']['schema'])
+                self.assertEqual(set(response.get('properties', {})), output)
+                for code in (('400',) if success == '201' else ('400', '401')):
+                    error = self.dereference(operation['responses'][code]['content']['application/json']['schema'])
+                    self.assertEqual(set(error['properties']), {'code', 'message', 'details'})
+
+    def test_profile_patch_documents_only_editable_fields(self):
+        operation = self.schema['paths']['/api/auth/me/']['patch']
+        request = self.dereference(operation['requestBody']['content']['application/json']['schema'])
+        self.assertEqual(set(request['properties']), {'language', 'nationality', 'visaType'})
+        response = self.dereference(operation['responses']['200']['content']['application/json']['schema'])
+        self.assertEqual(set(response['properties']), {
+            'id', 'email', 'language', 'nationality', 'visaType', 'onboardingCompleted',
+        })
+        self.assertEqual(response['properties']['onboardingCompleted']['type'], 'boolean')
+        for field in ('language', 'nationality', 'visaType'):
+            self.assertTrue(response['properties'][field]['nullable'])
+        for method in ('get', 'patch'):
+            operation = self.schema['paths']['/api/auth/me/'][method]
+            for code in (('401',) if method == 'get' else ('400', '401')):
+                error = self.dereference(operation['responses'][code]['content']['application/json']['schema'])
+                self.assertEqual(set(error['properties']), {'code', 'message', 'details'})
+
+    def test_document_result_includes_business_409_and_optional_failure_reason(self):
+        responses = self.schema['paths']['/api/documents/{pk}/result/']['get']['responses']
+        result = self.dereference(responses['200']['content']['application/json']['schema'])
+        self.assertEqual(set(result['properties']), {
+            'documentId', 'docType', 'title', 'originalText', 'translatedText',
+            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'verification',
+            'maskedCount', 'lowConfidence',
+        })
+        pending = self.dereference(responses['409']['content']['application/json']['schema'])
+        self.assertEqual(set(pending['properties']), {'detail', 'status', 'step', 'failReason'})
+        self.assertEqual(set(pending['required']), {'detail', 'status', 'step'})
 
     def test_schema_contains_no_secret_configuration(self):
         self.assertNotIn(settings.SECRET_KEY, json.dumps(self.schema))
