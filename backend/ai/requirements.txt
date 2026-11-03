@@ -1,0 +1,6 @@
+# 챗봇 AI 모듈이 쓰는 패키지. backend/requirements.txt에 아래 줄을 추가해야 함 (공통 파일이라 B와 합의 후).
+numpy>=1.26
+httpx>=0.27
+anthropic>=0.40
+# 선택: Ollama 없는 서버에서 임베딩을 앱 안에서 돌릴 때만 (AI_EMBEDDER=fastembed)
+# fastembed>=0.4
