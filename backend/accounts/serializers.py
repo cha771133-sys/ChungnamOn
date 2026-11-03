@@ -84,10 +84,17 @@ class ActiveUserTokenRefreshSerializer(TokenRefreshSerializer):
             ) from exc
 
 
+class TokenPairResponseSerializer(serializers.Serializer):
+    """로그인·갱신 성공 응답에 대한 명세."""
+
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+
+
 class MeSerializer(serializers.ModelSerializer):
-    language = serializers.CharField(source='profile.language', read_only=True, default=None)
-    nationality = serializers.CharField(source='profile.nationality', read_only=True, default=None)
-    visaType = serializers.CharField(source='profile.visa_type', read_only=True, default=None)
+    language = serializers.CharField(source='profile.language', read_only=True, default=None, allow_null=True)
+    nationality = serializers.CharField(source='profile.nationality', read_only=True, default=None, allow_null=True)
+    visaType = serializers.CharField(source='profile.visa_type', read_only=True, default=None, allow_null=True)
     onboardingCompleted = serializers.SerializerMethodField()
 
     class Meta:
@@ -95,7 +102,7 @@ class MeSerializer(serializers.ModelSerializer):
         fields = ('id', 'email', 'language', 'nationality', 'visaType', 'onboardingCompleted')
         read_only_fields = fields
 
-    def get_onboardingCompleted(self, user):
+    def get_onboardingCompleted(self, user) -> bool:
         try:
             return user.profile.onboarding_completed
         except UserProfile.DoesNotExist:

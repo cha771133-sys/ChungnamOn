@@ -37,7 +37,7 @@ class RegistrationTests(APITestCase):
             with self.subTest(email=email):
                 response = self.register(email)
                 self.assertEqual(response.status_code, 400)
-                self.assertIn('email', response.json())
+                self.assertIn('email', response.json()['details'])
         self.assertEqual(User.objects.count(), 1)
 
     def test_invalid_and_missing_email(self):
@@ -45,7 +45,7 @@ class RegistrationTests(APITestCase):
             with self.subTest(email=email):
                 response = self.register(email)
                 self.assertEqual(response.status_code, 400)
-                self.assertIn('email', response.json())
+                self.assertIn('email', response.json()['details'])
         self.assertEqual(self.client.post(REGISTER, {'password': PASSWORD}).status_code, 400)
 
     def test_password_validators_and_missing_password(self):
@@ -53,7 +53,7 @@ class RegistrationTests(APITestCase):
             with self.subTest(password=password):
                 response = self.register(password=password)
                 self.assertEqual(response.status_code, 400)
-                self.assertIn('password', response.json())
+                self.assertIn('password', response.json()['details'])
         self.assertEqual(self.client.post(REGISTER, {'email': 'person@example.com'}).status_code, 400)
         self.assertFalse(User.objects.exists())
 
@@ -67,7 +67,7 @@ class RegistrationTests(APITestCase):
         with patch('accounts.serializers.RegistrationSerializer.validate_email', return_value='person@example.com'):
             response = self.register()
         self.assertEqual(response.status_code, 400)
-        self.assertIn('email', response.json())
+        self.assertIn('email', response.json()['details'])
 
 
 class JWTTests(APITestCase):

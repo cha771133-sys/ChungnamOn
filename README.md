@@ -37,6 +37,9 @@ npm run dev
 
 ## 테스트
 
+Swagger UI는 `/api/docs/`, OpenAPI 명세는 `/api/schema/`에서 확인할 수 있습니다.
+공통 권한·오류 응답·페이지네이션과 인증 통합 주의사항은 [공통 API 안내](backend/core/README.md)를 참고하세요.
+
 ```powershell
 cd backend
 python manage.py test

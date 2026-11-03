@@ -53,18 +53,18 @@ class ProfileTests(APITestCase):
             with self.subTest(missing=missing):
                 response = self.patch_profile({k: v for k, v in PROFILE.items() if k != missing})
                 self.assertEqual(response.status_code, 400)
-                self.assertIn(missing, response.json())
+                self.assertIn(missing, response.json()['details'])
                 self.assertFalse(UserProfile.objects.exists())
         response = self.patch_profile({})
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(set(response.json()), set(PROFILE))
+        self.assertEqual(set(response.json()['details']), set(PROFILE))
 
     def test_existing_incomplete_profile_still_requires_all_fields(self):
         profile = UserProfile.objects.create(user=self.user, language='vi')
         self.assertFalse(self.client.get(ME).json()['onboardingCompleted'])
         response = self.patch_profile({'nationality': 'VN', 'visaType': 'E-9'})
         self.assertEqual(response.status_code, 400)
-        self.assertIn('language', response.json())
+        self.assertIn('language', response.json()['details'])
         profile.refresh_from_db()
         self.assertEqual(profile.nationality, '')
         self.assertTrue(self.complete_profile().json()['onboardingCompleted'])
@@ -96,7 +96,7 @@ class ProfileTests(APITestCase):
             with self.subTest(field=field, value=value):
                 response = self.patch_profile({**PROFILE, field: value})
                 self.assertEqual(response.status_code, 400)
-                self.assertIn(field, response.json())
+                self.assertIn(field, response.json()['details'])
                 self.assertFalse(UserProfile.objects.exists())
 
     def test_blank_or_null_fields_cannot_complete_or_clear_profile(self):
@@ -108,7 +108,7 @@ class ProfileTests(APITestCase):
                     with self.subTest(complete=complete, field=field, value=value):
                         response = self.patch_profile({**PROFILE, field: value})
                         self.assertEqual(response.status_code, 400)
-                        self.assertIn(field, response.json())
+                        self.assertIn(field, response.json()['details'])
             self.assertEqual(self.client.get(ME).json()['onboardingCompleted'], complete)
 
     def test_id_email_privileges_password_and_unknown_fields_are_rejected(self):
@@ -121,7 +121,7 @@ class ProfileTests(APITestCase):
             with self.subTest(field=field):
                 response = self.patch_profile({**PROFILE, field: value})
                 self.assertEqual(response.status_code, 400)
-                self.assertIn(field, response.json())
+                self.assertIn(field, response.json()['details'])
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_staff)
         self.assertFalse(self.user.is_superuser)

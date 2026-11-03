@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'drf_spectacular',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'accounts',
@@ -66,6 +67,21 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'SCHEMA_COERCE_PATH_PK': False,
+    'EXCEPTION_HANDLER': 'core.exceptions.api_exception_handler',
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.StandardPagination',
+    'PAGE_SIZE': 20,
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'ChungnamOn API',
+    'VERSION': '1.0.0',
+    'DESCRIPTION': 'ChungnamOn backend REST API',
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SERVE_AUTHENTICATION': [],
+    'SERVE_PERMISSIONS': ['rest_framework.permissions.AllowAny'],
 }
 
 SIMPLE_JWT = {
