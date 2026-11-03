@@ -67,14 +67,14 @@ class DocumentUploadTests(APITestCase):
                 response = self.upload(name)
 
                 self.assertEqual(response.status_code, 400)
-                self.assertIn('file', response.json())
+                self.assertIn('file', response.json()['details'])
         self.assertFalse(Document.objects.exists())
 
     def test_rejects_file_over_20mb(self):
         response = self.upload('large.png', b'0' * (MAX_FILE_SIZE + 1), 'image/png')
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn('file', response.json())
+        self.assertIn('file', response.json()['details'])
         self.assertFalse(Document.objects.exists())
 
     def test_requires_login(self):
