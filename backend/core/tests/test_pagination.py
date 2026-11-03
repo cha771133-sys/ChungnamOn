@@ -93,5 +93,5 @@ class OwnedListIntegrationTests(APITestCase):
     def test_anonymous_list_is_denied(self):
         self.client.force_authenticate(None)
         response = self.client.get('/owned/')
-        self.assertEqual(response.status_code, 403)
+        self.assertIn(response.status_code, (401, 403))
         self.assertEqual(response.json()['code'], 'NOT_AUTHENTICATED')

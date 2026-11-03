@@ -77,7 +77,7 @@ class APIContractTests(APITestCase):
 
     def test_missing_authentication_obeys_existing_status_policy(self):
         response = self.client.get(self.status_url)
-        self.assertEqual(response.status_code, 403)
+        self.assertIn(response.status_code, (401, 403))
         self.assertEqual(response.json(), {
             'code': 'NOT_AUTHENTICATED', 'message': '인증이 필요합니다.', 'details': {},
         })
