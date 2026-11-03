@@ -7,6 +7,8 @@ from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 
+from .models import UserProfile
+
 User = get_user_model()
 DUPLICATE_EMAIL = '이미 사용 중인 이메일입니다.'
 
@@ -80,3 +82,48 @@ class ActiveUserTokenRefreshSerializer(TokenRefreshSerializer):
             raise AuthenticationFailed(
                 self.error_messages['no_active_account'], code='no_active_account',
             ) from exc
+
+
+class MeSerializer(serializers.ModelSerializer):
+    language = serializers.CharField(source='profile.language', read_only=True, default=None)
+    nationality = serializers.CharField(source='profile.nationality', read_only=True, default=None)
+    visaType = serializers.CharField(source='profile.visa_type', read_only=True, default=None)
+    onboardingCompleted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'email', 'language', 'nationality', 'visaType', 'onboardingCompleted')
+        read_only_fields = fields
+
+    def get_onboardingCompleted(self, user):
+        try:
+            return user.profile.onboarding_completed
+        except UserProfile.DoesNotExist:
+            return False
+
+
+class ProfileUpdateSerializer(StrictFieldsMixin, serializers.ModelSerializer):
+    visaType = serializers.ChoiceField(
+        source='visa_type', choices=UserProfile.VisaType.choices, required=False,
+    )
+
+    class Meta:
+        model = UserProfile
+        fields = ('language', 'nationality', 'visaType')
+        extra_kwargs = {
+            'language': {'required': False, 'allow_blank': False},
+            'nationality': {'required': False, 'allow_blank': False},
+        }
+
+    def validate(self, attrs):
+        if self.instance is None or not self.instance.onboarding_completed:
+            missing = {
+                external: '초기 설정에는 세 항목이 모두 필요합니다.'
+                for external, internal in (
+                    ('language', 'language'), ('nationality', 'nationality'), ('visaType', 'visa_type'),
+                )
+                if internal not in attrs
+            }
+            if missing:
+                raise serializers.ValidationError(missing)
+        return attrs
