@@ -2,7 +2,7 @@ from pathlib import Path
 
 from rest_framework import serializers
 
-from .models import Document
+from .models import Document, InterpretationResult
 
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'pdf'}
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -37,3 +37,30 @@ class DocumentStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = ['documentId', 'status', 'step']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.status == Document.Status.FAILED:
+            data['failReason'] = instance.fail_reason
+        return data
+
+
+class DocumentResultSerializer(serializers.ModelSerializer):
+    """결과 조회 응답 형식. 형식이 바뀌면 이 serializer만 고친다."""
+
+    documentId = serializers.IntegerField(source='document_id')
+    docType = serializers.CharField(source='doc_type')
+    originalText = serializers.CharField(source='original_text')
+    translatedText = serializers.CharField(source='translated_text')
+    requiredDocs = serializers.JSONField(source='required_docs')
+    maskedCount = serializers.IntegerField(source='document.masked_count')
+    lowConfidence = serializers.BooleanField(source='document.low_confidence')
+
+    class Meta:
+        model = InterpretationResult
+        fields = [
+            'documentId', 'docType', 'title', 'originalText', 'translatedText',
+            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'verification',
+            'maskedCount', 'lowConfidence',
+        ]
+        read_only_fields = fields
