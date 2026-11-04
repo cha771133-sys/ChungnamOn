@@ -83,3 +83,9 @@ class AgencyModelTests(TestCase):
         agency.full_clean()
         self.assertEqual(agency.source_url, 'https://www.asan.go.kr/test')
         self.assertEqual(agency.phone, '+82-2-0000-0000')
+
+    def test_invalid_checked_date_is_a_validation_error(self):
+        agency = Agency(name='가상시청', region='아산시', source_url='https://www.asan.go.kr/test', checked_at='잘못된 날짜')
+        with self.assertRaises(ValidationError) as error:
+            agency.full_clean()
+        self.assertIn('checked_at', error.exception.message_dict)

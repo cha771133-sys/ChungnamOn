@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -159,8 +161,10 @@ class Agency(models.Model):
                 self.source_url = validate_agency_source(self.source_url)
             except (ValidationError, ValueError):
                 raise ValidationError({'source_url': '허용된 공식 HTTPS 출처가 필요합니다.'}) from None
-        if self.checked_at and (not self.source_url or timezone.is_naive(self.checked_at)
-                                or self.checked_at > timezone.now()):
+        if self.checked_at is not None and (
+            not isinstance(self.checked_at, datetime) or not self.source_url
+            or timezone.is_naive(self.checked_at) or self.checked_at > timezone.now()
+        ):
             raise ValidationError({'checked_at': '공식 출처와 시간대가 있는 과거 확인 시각이 필요합니다.'})
         if self.phone and (not self.source_url or not self.checked_at):
             raise ValidationError({'phone': '연락처는 공식 출처와 실제 확인일을 함께 기록해야 합니다.'})
