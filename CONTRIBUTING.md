@@ -4,24 +4,40 @@
 
 ### 브랜치 구조
 
+작업 브랜치 → `dev`(중간 통합) → `main`(최종 제출·배포) 순서로 올라갑니다.
+
 ```
-main      ← 데모·배포용 (항상 동작하는 상태)
- └ dev    ← 개발 통합용 · 저장소 기본 브랜치
+main      ← 최종 제출·데모 배포용 (항상 동작하는 상태)
+ └ dev    ← 중간 통합용 · 저장소 기본 브랜치
     ├ feature/...   기능 개발
     ├ fix/...       버그 수정
-    └ docs/...      문서 작업
+    ├ docs/...      문서 작업
+    └ chore/...     설정·CI·패키지
 ```
 
-| 브랜치 | 용도 | 직접 push |
+| 브랜치 | 용도 | 들어오는 방법 |
 | --- | --- | --- |
-| `main` | 실제 배포 (데모 주소) | ❌ 금지 — `dev`에서 PR로만 |
-| `dev` | 기능 통합·테스트 (테스트 배포 주소), **기본 브랜치** | ❌ 금지 — 작업 브랜치에서 PR로만 |
-| `feature/*` | 새 기능 | ⭕ 본인 브랜치만 |
-| `fix/*` | 버그 수정 | ⭕ |
-| `docs/*` | 문서 수정 | ⭕ |
+| `main` | 최종 제출·실제 배포 (데모 주소) | `dev`에서 올린 PR만 · **승인 1명** + CI 통과 |
+| `dev` | 중간 통합·테스트 (테스트 배포 주소), **기본 브랜치** | 작업 브랜치에서 PR · **승인 없이** CI 통과만 하면 바로 merge |
+| `feature/*` 등 | 작업 브랜치 | 본인 브랜치에 직접 push |
 
 - 모든 작업 브랜치는 **반드시 `dev`에서 생성**합니다.
-- `main`과 `dev`는 삭제하지 않습니다.
+- `main`과 `dev`에는 직접 push할 수 없고, 삭제·force push도 막혀 있습니다.
+- `main`에 `dev`가 아닌 브랜치로 PR을 올리면 `main-source-check` 체크가 실패해 merge할 수 없습니다.
+
+### dev에 merge하기 전 로컬 확인
+
+`dev`는 승인 없이 merge되므로, **PR을 올리기 전에 본인이 로컬에서 빌드·테스트를 통과시킵니다.** CI도 같은 검사를 다시 합니다.
+
+```bash
+# 백엔드 (backend/에서, 가상환경 활성화 후)
+python manage.py makemigrations --check --dry-run
+python manage.py test
+
+# 프론트 (frontend/에서)
+npm run lint
+npm run build
+```
 
 ### 브랜치 이름 규칙
 
@@ -48,7 +64,7 @@ git pull origin dev
 # 2. dev에서 작업 브랜치 생성
 git checkout -b feature/be-document-api
 
-# 3. 작업 후 커밋
+# 3. 로컬에서 빌드·테스트 확인 후 커밋
 git add .
 git commit -m "feat: 문서 업로드 API 추가"
 
@@ -57,7 +73,7 @@ git push origin feature/be-document-api
 
 # 5. GitHub에서 PR 생성 (대상 브랜치는 기본값인 dev)
 
-# 6. 리뷰 승인 + CI 통과 후 PR 작성자가 Squash and merge
+# 6. CI 통과 후 PR 작성자가 Squash and merge
 ```
 
 ---
@@ -79,25 +95,28 @@ git push origin feature/be-document-api
 
 ### 머지
 
-- 작업 브랜치 → `dev`: **Approve 1개 이상 + CI 통과** 후 **PR 작성자가 직접** Squash and merge합니다.
-- `dev` → `main`: 데모 전에 **차성진**이 진행합니다.
-- 리뷰 승인 전이거나 CI가 실패한 PR은 merge하지 않습니다.
+- 작업 브랜치 → `dev`: **CI 통과** 후 **PR 작성자가 직접** Squash and merge합니다. 승인은 필요 없습니다.
+- `dev` → `main`: 데모 전에 **차성진**이 PR을 올리고, **승인 1명 + CI 통과** 후 merge합니다.
+- CI가 실패한 PR은 merge할 수 없습니다.
 
 ### 리뷰
 
-- 작성자가 아닌 팀원 **누구든** 확인하고 승인(Approve)할 수 있습니다.
+- `dev` PR은 승인 없이 merge할 수 있지만, 다른 팀원 코드와 맞물리는 변경은 리뷰를 요청하는 것을 권장합니다.
+- `main` PR은 작성자가 아닌 팀원 **1명 이상의 승인**이 필요합니다.
 - 리뷰 요청을 받으면 **4시간 안에** 리뷰를 남깁니다. 늦어지면 팀 채팅에 알립니다.
 - CodeRabbit 자동 리뷰는 1차 확인용입니다. **사람 리뷰를 대신하지 않습니다.**
 
 ### CI
 
-`dev`, `main`으로 PR을 올리면 GitHub Actions가 자동으로 검사합니다. PR 하단 체크가 모두 ✅여야 merge할 수 있습니다.
+`dev`, `main`으로 PR을 올리면 GitHub Actions가 자동으로 검사합니다. 아래 체크가 모두 ✅여야 merge할 수 있습니다.
 
-| 영역 | 실행 조건 | 검사 내용 |
+| 체크 | 대상 | 검사 내용 |
 | --- | --- | --- |
-| 백엔드 | `backend/**` 변경 | 마이그레이션 체크(`makemigrations --check`) + 테스트 |
-| 프론트 | `frontend/**` 변경 | lint + build |
+| `backend-test` | `dev`, `main` | 마이그레이션 체크(`makemigrations --check`) + 테스트 |
+| `frontend-build` | `dev`, `main` | lint + build |
+| `main-source-check` | `main` | PR이 `dev`에서 올라왔는지 확인 |
 
+- `backend-test`, `frontend-build`는 항상 실행되지만, 해당 영역(`backend/`, `frontend/`) 변경이 없으면 검사 단계를 건너뛰고 통과합니다.
 - CI가 실패하면 Checks 탭에서 로그를 확인하고 수정한 뒤 다시 push합니다.
 - 모델을 바꿨다면 `python manage.py makemigrations`로 만든 마이그레이션 파일을 함께 커밋해야 CI를 통과합니다.
 
@@ -110,12 +129,12 @@ PR이 올라오면 CodeRabbit이 변경된 코드를 분석해 리뷰 코멘트�
 
 ### PR 올릴 때
 
-1. Reviewers에 리뷰할 팀원, Assignees에 본인 지정
+1. Assignees에 본인 지정 (리뷰가 필요하면 Reviewers에 팀원 지정)
 2. 템플릿에 관련 이슈를 `close #이슈번호`로 적기 → `dev`에 merge되면 이슈가 자동으로 닫힘
 3. 팀 채팅에 PR 링크 공유
 4. CI 결과와 CodeRabbit 코멘트 확인
 5. 충돌이 생기면 **PR 작성자**가 `dev`를 pull 받아 해결한 뒤 다시 push (Django 마이그레이션 충돌은 `python manage.py makemigrations --merge`로 해결)
-6. Approve와 CI 통과를 확인한 뒤 **PR 작성자가 Squash and merge**
+6. CI 통과를 확인한 뒤 **PR 작성자가 Squash and merge**
 
 ### PR 템플릿
 
