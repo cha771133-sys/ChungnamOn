@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CrawlLog, SourceChunk, SourceDocument
+from .models import Agency, AgencyAlias, CrawlLog, SourceChunk, SourceDocument
 
 
 class PipelineReadOnlyMixin:
@@ -55,3 +55,17 @@ class CrawlLogAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
     list_filter = ('result',)
     search_fields = ('source_url',)
     readonly_fields = ('id', 'source_url', 'started_at', 'finished_at', 'result', 'error_message')
+
+
+class AgencyAliasInline(admin.TabularInline):
+    model = AgencyAlias
+    extra = 0
+
+
+@admin.register(Agency)
+class AgencyAdmin(admin.ModelAdmin):
+    list_display = ('name', 'department', 'region', 'phone', 'phone_type', 'source_url', 'checked_at')
+    list_filter = ('region', 'phone_type')
+    search_fields = ('name', 'department', 'aliases__name')
+    readonly_fields = ('id', 'created_at', 'updated_at')
+    inlines = (AgencyAliasInline,)
