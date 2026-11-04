@@ -19,6 +19,7 @@ class SourceDocument(models.Model):
     published_at = models.DateField('발행일·기준일', null=True, blank=True)
     collected_at = models.DateTimeField('공식자료 확인일', null=True, blank=True)
     content_hash = models.CharField('본문 해시', max_length=128, blank=True)
+    content_text = models.TextField('정제된 공식자료 본문', blank=True, default='')
     status = models.CharField(
         '자료 상태', max_length=10, choices=Status.choices, default=Status.PENDING,
     )
