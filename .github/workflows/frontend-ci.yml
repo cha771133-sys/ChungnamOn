@@ -3,6 +3,8 @@ name: Frontend CI
 on:
   pull_request:
     branches: [dev, main]
+    # edited: 대상 브랜치를 바꾼 PR에도 필수 체크가 생기게 한다.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
