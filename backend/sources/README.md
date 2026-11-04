@@ -6,6 +6,10 @@ HTML 수집 명령을 추가했다. 관리 API·임베딩 생성·검색 기능�
 
 수집 명령·URL 선정 근거·실제 검증 결과·AI 최신성 확인 계약은 [수집 운영 문서](COLLECTION.md)를 참고한다.
 
+P1-9의 독립 담당기관 모델·시드·JWT 조회 API·documents 연동 계약은
+[담당기관 안내](AGENCIES.md)를 참고한다. 자료 발행기관(`SourceDocument.agency`)과 실제 업무
+담당기관(`Agency`)은 별개이며 자동 연결하지 않는다.
+
 ## 모델과 보존 정책
 
 - `SourceDocument`: 기관명(`agency` 문자열), 적용 지역(`region`), 분류, 발행일·확인일과 상태를 저장한다.
