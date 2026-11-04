@@ -103,6 +103,7 @@ git push origin feature/be-document-api
 
 - `dev` PR은 승인 없이 merge할 수 있지만, 다른 팀원 코드와 맞물리는 변경은 리뷰를 요청하는 것을 권장합니다.
 - `main` PR은 작성자가 아닌 팀원 **1명 이상의 승인**이 필요합니다.
+- `main` PR을 리뷰할 때는 **`.github/workflows/` 변경 여부를 꼭 확인**합니다. PR에서 워크플로 파일을 고치면 `main-source-check` 같은 필수 체크를 우회할 수 있습니다.
 - 리뷰 요청을 받으면 **4시간 안에** 리뷰를 남깁니다. 늦어지면 팀 채팅에 알립니다.
 - CodeRabbit 자동 리뷰는 1차 확인용입니다. **사람 리뷰를 대신하지 않습니다.**
 
@@ -134,7 +135,9 @@ PR이 올라오면 CodeRabbit이 변경된 코드를 분석해 리뷰 코멘트�
 3. 팀 채팅에 PR 링크 공유
 4. CI 결과와 CodeRabbit 코멘트 확인
 5. 충돌이 생기면 **PR 작성자**가 `dev`를 pull 받아 해결한 뒤 다시 push (Django 마이그레이션 충돌은 `python manage.py makemigrations --merge`로 해결)
-6. CI 통과를 확인한 뒤 **PR 작성자가 Squash and merge**
+6. CI 통과를 확인한 뒤 merge
+   - 작업 브랜치 → `dev`: **PR 작성자가 Squash and merge**
+   - `dev` → `main`: 승인 1명 후 **Create a merge commit**
 
 ### PR 템플릿
 

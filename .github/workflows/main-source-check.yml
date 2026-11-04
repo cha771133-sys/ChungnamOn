@@ -1,10 +1,14 @@
 name: Main Source Check
 
 # main에는 dev에서 올린 PR만 들어오게 한다. main ruleset의 필수 체크로 등록되어 있다.
+# pull_request 이벤트는 PR 쪽 워크플로 정의로 실행되므로, PR에서 이 파일을 고치면 검사를 우회할 수 있다.
+# main PR 리뷰 때 .github/workflows/ 변경을 확인한다. pull_request_target 전환은 해커톤 이후 검토.
 on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, edited]
+
+permissions: {}
 
 jobs:
   check:
