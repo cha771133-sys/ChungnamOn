@@ -1,7 +1,7 @@
 import codecs
 import re
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import parse_qsl, unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, NavigableString
 
@@ -131,6 +131,7 @@ def parse_html(body, content_type='text/html; charset=utf-8', url=''):
                 parts.scheme == 'https' and not parts.username and not parts.password
                 and parts.hostname in (OFFICIAL_HOSTS | {'law.go.kr', 'www.law.go.kr'})
                 and not any(SENSITIVE_KEY.search(key) for key, _ in parse_qsl(parts.query))
+                and not re.search(r';[^/]*(?:session|token|password)', unquote(parts.path), re.I)
                 and anchor.get_text(strip=True) and len(reference) <= 2048
             ):
                 anchor.append(NavigableString(f' ({reference})'))

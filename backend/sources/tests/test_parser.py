@@ -116,6 +116,23 @@ class ParserTests(SimpleTestCase):
                 self.assertIn('잘못된 주소의 안내문', text)
                 self.assertIn('https://www.law.go.kr/법령/지방세법', text)
 
+    def test_sensitive_path_values_are_not_saved_but_link_labels_are_preserved(self):
+        for path in (
+            '/notice;jsessionid=secret-value', '/notice;TOKEN=secret-value',
+            '/notice;password=secret-value', '/notice%3Bjsessionid%3Dsecret-value',
+        ):
+            with self.subTest(path=path):
+                links = (
+                    f'<a href="https://www.asan.go.kr{path}">신청 안내</a>'
+                    '<a href="/notice?id=2">정상 안내</a>'
+                    '<a href="https://www.law.go.kr/법령/지방세법">근거법령</a>'
+                ).encode()
+                text = parse_html(HTML.replace(b'</main>', links + b'</main>'), url=URL).content_text
+                self.assertNotIn('secret-value', text)
+                self.assertIn('신청 안내', text)
+                self.assertIn('https://www.asan.go.kr/notice?id=2', text)
+                self.assertIn('https://www.law.go.kr/법령/지방세법', text)
+
     def test_site_specific_body_excludes_long_menu_and_hidden_popups(self):
         notice = HTML.decode().split('<main>')[1].split('</main>')[0]
         body = ('<html><title>행정 안내</title><body><div class="contentsWrap">'
