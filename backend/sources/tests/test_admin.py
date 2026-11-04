@@ -111,7 +111,7 @@ class SourcesAdminTests(TestCase):
         self.assertContains(response, self.chunk.chunk_text)
         self.assertContains(response, self.url(self.chunk, 'change'))
         form_fields = response.context['adminform'].form.fields
-        for field in ('source_url', 'content_hash', 'collected_at'):
+        for field in ('source_url', 'content_hash', 'collected_at', 'content_text'):
             self.assertNotIn(field, form_fields)
         inlines = response.context['inline_admin_formsets']
         self.assertEqual(len(inlines), 1)

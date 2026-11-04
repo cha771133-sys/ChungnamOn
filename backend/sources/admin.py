@@ -28,7 +28,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
     list_display = ('id', 'title', 'agency', 'region', 'category', 'status', 'collected_at')
     list_filter = ('agency', 'region', 'category', 'status')
     search_fields = ('title', 'source_url', 'agency')
-    readonly_fields = ('id', 'collected_at', 'content_hash')
+    readonly_fields = ('id', 'collected_at', 'content_hash', 'content_text')
     inlines = (SourceChunkInline,)
 
     def get_readonly_fields(self, request, obj=None):

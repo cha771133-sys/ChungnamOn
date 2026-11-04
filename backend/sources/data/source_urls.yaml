@@ -1,0 +1,51 @@
+# 개발자가 상세 HTML·robots·이용조건을 확인한 고정 목록이다.
+# 확인일: 2026-11-04. enabled=false 자료는 요청하지 않는다.
+# 기관이 공식 자료를 제공한다는 사실과 현재 유효성·개인별 적용 가능성은 별개다.
+sources:
+  - url: "https://www.asan.go.kr/main/cms/?no=93"
+    title: "인터넷지방세 | 아산시청"
+    agency: "아산시청"
+    region: "아산시"
+    category: "지방세"
+    published_at: "2025-09-11"
+    notes: "페이지에 명시된 최종 업데이트일. 주민세를 포함한 인터넷 신고·납부·환급 절차와 담당 연락처. robots 404. 이용약관의 영리 가공·판매 제한 준수: 공개 사실정보의 비상업 내부 확인용이며 상업적 재배포 허가를 의미하지 않는다."
+
+  - url: "https://www.gov.kr/mw/AA020InfoCappView.do?CappBizCD=12700000025"
+    title: "외국인등록 | 민원안내 및 신청 | 정부24"
+    agency: "법무부(정부24)"
+    region: "전국"
+    category: "출입국·체류"
+    published_at: "2025-03-25"
+    notes: "최근 내용 확인일이 명시된 공개 민원 안내. 등록기한·서류·관할기관을 HTML로 확인. robots의 민원안내 경로 Allow 확인. 신청·로그인 기능은 사용하지 않는다. 사진 규격 등 타 안내와의 차이는 후속 검증 대상이며 자동으로 현재 유효하다고 판단하지 않는다."
+
+  - url: "https://www.gov.kr/mw/AA020InfoCappView.do?CappBizCD=12700000027&tp_seq=01"
+    title: "외국인등록 사실증명 | 민원안내 및 신청 | 정부24"
+    agency: "법무부(정부24)"
+    region: "전국"
+    category: "출입국·체류"
+    notes: "등록 사실증명 신청자격·절차·제출서류·담당기관의 공개 사실 안내. robots Allow 확인. 발행일은 확정하지 않아 null로 유지. 발급·로그인·개인정보 조회는 수행하지 않는다."
+
+  - url: "https://www.cheonan.go.kr/kor/sub06_10_01.do"
+    title: "지방세 안내 | 천안시청"
+    agency: "천안시청"
+    region: "천안시"
+    category: "지방세"
+    enabled: false
+    notes: "실제 HTML에서 월별 주민세 납부기한 표·시세팀 연락처, robots Allow 확인. 대표포털 저작권정책의 공공누리 4유형 및 사전협의 조건 확인. 정제·후속 AI 이용 허용범위 확인 전 수집 제외."
+
+  - url: "https://www.asan.go.kr/main/cms/?m_mode=view&no=131&pds_no=2026080516334789583&tb_nm=city_news_notice"
+    title: "2026년 8월 주민세(개인분, 사업소분) 신고·납부 안내"
+    agency: "아산시청"
+    region: "아산시"
+    category: "지방세"
+    published_at: "2026-08-05"
+    enabled: false
+    notes: "등록일·2026년 8월 한정 납부기한·납부방법의 실제 본문 확인. 첨부 HWPX는 처리하지 않는다. 본문의 공공누리 출처표시+상업적이용금지+변경금지 조건 때문에 후속 AI 이용 허용범위 확인 전 수집 제외."
+
+  - url: "https://www.immigration.go.kr/bbs/moj/93/559234/artclView.do"
+    title: "외국인 등록증이란? | 법무부"
+    agency: "법무부"
+    region: "전국"
+    category: "출입국·체류"
+    enabled: false
+    notes: "등록대상·90일 기한·사진 규격·신청서류·1345 연락처의 실제 HTML 및 robots 허용 확인. 페이지 HTML에 여러 라이선스 유형 템플릿이 함께 있어 적용 유형을 확정하지 못했다. 최신성·이용조건 확인 전 수집 제외."
