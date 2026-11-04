@@ -1,9 +1,12 @@
+from unittest.mock import patch
+
+from bs4 import BeautifulSoup
 from django.test import SimpleTestCase
 
 from sources.services.errors import CollectionError
-from sources.services.parser import parse_html
+from sources.services.parser import _table_text, parse_html
 
-from .pipeline_helpers import HTML
+from .pipeline_helpers import HTML, URL
 
 
 class ParserTests(SimpleTestCase):
@@ -24,10 +27,45 @@ class ParserTests(SimpleTestCase):
         self.assertIn('개인 | 세대주 | 8월 31일', text)
         self.assertIn('개인 | 조건 확인 필요 | 관할 기관 문의', text)
 
+    def test_rowspan_stays_within_each_table_row_group(self):
+        table = (
+            '<table><thead><tr><th rowspan="2">구분</th><th>기한</th></tr></thead>'
+            '<tbody><tr><td rowspan="3">개인</td><td>8월 31일</td></tr>'
+            '<tr><td>세대주 조건</td></tr></tbody>'
+            '<tbody><tr><td rowspan="3">사업소</td><td>9월 1일</td></tr>'
+            '<tr><td>사업장 조건</td></tr></tbody>'
+            '<tfoot><tr><td>문의</td><td>041-000-0000</td></tr></tfoot></table>'
+        ).encode()
+        lines = parse_html(HTML.replace(b'</main>', table + b'</main>')).content_text.splitlines()
+        for row in ('구분 | 기한', '개인 | 8월 31일', '개인 | 세대주 조건',
+                    '사업소 | 9월 1일', '사업소 | 사업장 조건', '문의 | 041-000-0000'):
+            self.assertIn(row, lines)
+
     def test_deterministic_and_menu_only_changes_do_not_change_body(self):
         self.assertEqual(parse_html(HTML), parse_html(HTML))
         changed = HTML.replace('메뉴 공통'.encode(), '완전히 다른 메뉴'.encode())
         self.assertEqual(parse_html(HTML).content_text, parse_html(changed).content_text)
+
+    def test_expanded_table_budget_includes_repeated_cells_and_caption(self):
+        table = BeautifulSoup(
+            '<table><caption>안내</caption><tr><td colspan="50" rowspan="1000">'
+            + '조건' * 100 + '</td></tr>' + '<tr></tr>' * 999 + '</table>',
+            'html.parser',
+        ).table
+        with self.assertRaisesMessage(CollectionError, 'BODY_TOO_LARGE'):
+            _table_text(table)
+        small = BeautifulSoup('<table><caption>안내</caption><tr><td>값</td></tr></table>', 'html.parser').table
+        expected = '\n안내\n값\n'
+        self.assertEqual(_table_text(small, len(expected)), expected)
+        with self.assertRaisesMessage(CollectionError, 'BODY_TOO_LARGE'):
+            _table_text(small, len(expected) - 1)
+
+    def test_expanded_tables_share_a_page_budget(self):
+        table = ('<table><tr><td colspan="50">' + '조건' * 10 + '</td></tr></table>').encode()
+        for tables in (table * 2, table + b'<p>' + ('추가 본문' * 200).encode() + b'</p>'):
+            with self.subTest(tables=len(tables)), patch('sources.services.parser.MAX_TEXT_CHARS', 1500):
+                with self.assertRaisesMessage(CollectionError, 'BODY_TOO_LARGE'):
+                    parse_html(HTML.replace(b'</main>', tables + b'</main>'))
 
     def test_utf8_cp949_euc_kr_and_meta_encoding(self):
         text = HTML.decode().replace('utf-8', 'cp949')
@@ -65,6 +103,18 @@ class ParserTests(SimpleTestCase):
         self.assertIn('https://www.law.go.kr/법령/지방세법', text)
         self.assertNotIn('token=secret', text)
         self.assertNotIn('javascript:', text)
+
+    def test_malformed_link_does_not_discard_body_or_valid_references(self):
+        for href in ('//[', 'http://[bad'):
+            with self.subTest(href=href):
+                links = (
+                    f'<a href="{href}">잘못된 주소의 안내문</a>'
+                    '<a href="https://www.law.go.kr/법령/지방세법">정상 근거법령</a>'
+                ).encode()
+                text = parse_html(HTML.replace(b'</main>', links + b'</main>'), url=URL).content_text
+                self.assertIn('8월 31일', text)
+                self.assertIn('잘못된 주소의 안내문', text)
+                self.assertIn('https://www.law.go.kr/법령/지방세법', text)
 
     def test_site_specific_body_excludes_long_menu_and_hidden_popups(self):
         notice = HTML.decode().split('<main>')[1].split('</main>')[0]

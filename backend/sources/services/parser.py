@@ -28,6 +28,9 @@ REMOVE = (
     '[style*="display:none"], [style*="display: none"]'
 )
 
+# 내려받기 크기 제한과 별개로 병합 셀 복제로 늘어나는 정제 원문을 제한한다.
+MAX_TEXT_CHARS = 2 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ParsedPage:
@@ -54,12 +57,21 @@ def decode_html(body, content_type):
     raise CollectionError('ENCODING_FAILED', '본문의 문자 인코딩을 안전하게 해석하지 못했습니다.')
 
 
-def _table_text(table):
+def _table_text(table, max_chars=MAX_TEXT_CHARS):
     """행·열 순서와 병합 셀을 보존하여 조건/값의 대응이 사라지지 않게 한다."""
-    grid, carried = [], {}
+    caption = table.find('caption', recursive=False)
+    title = ' '.join(caption.stripped_strings) if caption else '표 (각 줄은 행, |는 열 구분)'
+    characters = len(title) + 3
+    if characters > max_chars:
+        raise CollectionError('BODY_TOO_LARGE', '정제 원문의 길이가 제한을 초과했습니다.')
+    grid, carried, group = [], {}, None
     for row in table.find_all('tr'):
         if row.find_parent('table') is not table:
             continue
+        if row.parent is not group:
+            # rowspan은 thead/tbody/tfoot 또는 다른 tbody 경계를 넘지 않는다.
+            carried.clear()
+            group = row.parent
         cells, column = {}, 0
         for col, (remaining, text) in list(carried.items()):
             cells[col] = text
@@ -84,9 +96,11 @@ def _table_text(table):
                     carried[col] = (rowspan - 1, text)
             column += colspan
         if cells:
+            # join 전에 계산하여 큰 병합 문자열을 만들기 전에 중단한다.
+            characters += sum(len(value) for value in cells.values()) + 3 * max(cells) + bool(grid)
+            if characters > max_chars:
+                raise CollectionError('BODY_TOO_LARGE', '정제 원문의 길이가 제한을 초과했습니다.')
             grid.append(' | '.join(cells.get(col, '') for col in range(max(cells) + 1)))
-    caption = table.find('caption', recursive=False)
-    title = ' '.join(caption.stripped_strings) if caption else '표 (각 줄은 행, |는 열 구분)'
     return '\n' + title + '\n' + '\n'.join(grid) + '\n'
 
 
@@ -110,8 +124,8 @@ def parse_html(body, content_type='text/html; charset=utf-8', url=''):
     title = document_title or (' '.join(heading.stripped_strings) if heading else '')
     # 근거법령·공식 출처 링크는 텍스트와 함께 보존하되 추가 요청하지 않는다.
     for anchor in root.select('a[href]'):
-        reference = urljoin(url, anchor['href'])
         try:
+            reference = urljoin(url, anchor['href'])
             parts = urlsplit(reference)
             if (
                 parts.scheme == 'https' and not parts.username and not parts.password
@@ -122,13 +136,18 @@ def parse_html(body, content_type='text/html; charset=utf-8', url=''):
                 anchor.append(NavigableString(f' ({reference})'))
         except ValueError:
             pass
+    table_characters = 0
     for table in list(root.find_all('table', recursive=True)):
         if table.find_parent('table') is None:
-            table.replace_with(NavigableString(_table_text(table)))
+            table_text = _table_text(table, MAX_TEXT_CHARS - table_characters)
+            table_characters += len(table_text)
+            table.replace_with(NavigableString(table_text))
     for br in root.find_all('br'):
         br.replace_with(NavigableString('\n'))
     lines = [' '.join(line.split()) for line in root.get_text('\n').splitlines()]
     text = '\n'.join(line for line in lines if line)
+    if len(text) > MAX_TEXT_CHARS:
+        raise CollectionError('BODY_TOO_LARGE', '정제 원문의 길이가 제한을 초과했습니다.')
     if (
         len(text) < 80 or len(re.findall('[가-힣]', text)) < 15
         or not re.search(r'주민세|보험|외국인|체류|등록', text)
