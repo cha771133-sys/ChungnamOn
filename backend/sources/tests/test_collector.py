@@ -1,8 +1,12 @@
 import socket
+import time
+from http.client import HTTPResponse
+from threading import Event, Thread
 from unittest.mock import Mock, patch
 
 import requests
 from django.test import SimpleTestCase
+from urllib3.response import HTTPResponse as Urllib3Response
 
 from sources.services.collector import Collector, MAX_BYTES, PinnedHTTPSAdapter, resolve_public_host, retry_delay
 from sources.services.errors import CollectionError
@@ -118,6 +122,65 @@ class CollectorTests(SimpleTestCase):
         self.collector.fetch(URL)
         self.collector.fetch(URL)
         self.assertTrue(any(call.args[0] > 0 for call in self.sleep.call_args_list))
+
+
+class BodyDeadlineTests(SimpleTestCase):
+    def test_trickling_body_is_interrupted_before_iter_content_yields(self):
+        # 실제 소켓·HTTP 디코더로 청크가 완성되지 않는 읽기를 재현한다. 외부 요청은 없다.
+        for framing in ('length', 'chunked', 'close'):
+            with self.subTest(framing=framing):
+                reader, writer = socket.socketpair()
+                reader.settimeout(2)
+                stop = Event()
+                headers = {
+                    'length': b'Content-Length: 100000\r\n',
+                    'chunked': b'Transfer-Encoding: chunked\r\n',
+                    'close': b'Connection: close\r\n',
+                }[framing]
+                writer.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n' + headers + b'\r\n')
+                if framing == 'chunked':
+                    writer.sendall(b'186a0\r\n')
+
+                def trickle():
+                    try:
+                        for _ in range(40):
+                            if stop.wait(0.02):
+                                break
+                            writer.sendall(b'x')
+                        writer.shutdown(socket.SHUT_WR)
+                    except OSError:
+                        pass
+
+                sender = Thread(target=trickle, daemon=True)
+                sender.start()
+                reply = requests.Response()
+                wire = HTTPResponse(reader, method='GET')
+                wire.begin()
+                reply.status_code = 200
+                reply.headers.update(dict(wire.getheaders()))
+                reply.raw = Urllib3Response(
+                    body=wire, headers=reply.headers, original_response=wire,
+                    preload_content=False, request_method='GET',
+                )
+                client = Collector()
+                try:
+                    with (
+                        patch.object(client, '_check_robots'),
+                        patch.object(client, '_request', return_value=reply),
+                        patch('sources.services.collector.BODY_TIMEOUT', 0.2, create=True),
+                    ):
+                        started = time.monotonic()
+                        with self.assertRaisesMessage(CollectionError, 'RESPONSE_TIMEOUT'):
+                            client.fetch(URL)
+                        self.assertLess(time.monotonic() - started, 1.5)
+                        self.assertTrue(reply.raw.closed)
+                finally:
+                    stop.set()
+                    writer.close()
+                    reader.close()
+                    sender.join(timeout=2)
+                    reply.close()
+                    client.close()
 
 
 class RobotsTests(SimpleTestCase):

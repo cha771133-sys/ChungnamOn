@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from threading import Event, Timer
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -16,6 +17,7 @@ from .source_registry import validate_source_url
 
 USER_AGENT = 'ChungnamOnSources/1.0 (+https://github.com/cha771133-sys/ChungnamOn)'
 MAX_BYTES = 2 * 1024 * 1024
+BODY_TIMEOUT = 30
 MAX_WAIT = 60
 RETRIES = 2
 REDIRECTS = {301, 302, 303, 307, 308}
@@ -118,6 +120,53 @@ class Collector:
                 continue
             return response
 
+    def _read_body(self, response, limit):
+        # requests/urllib3의 고정 버전에서 사용하는 실제 소켓을 보존한다.
+        # Connection: close 응답은 connection.sock이 이미 비어 있어 HTTP 파일에서 찾는다.
+        transport = getattr(getattr(response.raw, '_connection', None), 'sock', None)
+        if transport is None:
+            try:
+                transport = response.raw._fp.fp.raw._sock
+            except AttributeError:
+                raise CollectionError('BODY_FAILED', '응답 읽기의 제한 시간을 적용하지 못했습니다.') from None
+        if transport is None:
+            raise CollectionError('BODY_FAILED', '응답 읽기의 제한 시간을 적용하지 못했습니다.')
+        expired = Event()
+        deadline = time.monotonic() + BODY_TIMEOUT
+
+        def interrupt():
+            expired.set()
+            # response.close()는 읽기 버퍼의 잠금을 기다릴 수 있으므로 소켓 읽기를 먼저 깨운다.
+            try:
+                transport.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        timer = Timer(BODY_TIMEOUT, interrupt)
+        timer.daemon = True
+        timer.start()
+        chunks, size = [], 0
+        try:
+            try:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if expired.is_set() or time.monotonic() >= deadline:
+                        raise CollectionError('RESPONSE_TIMEOUT', '본문 읽기 제한 시간을 초과했습니다.')
+                    size += len(chunk)
+                    if size > limit:
+                        raise CollectionError('RESPONSE_TOO_LARGE', '압축 해제한 응답이 크기 제한을 초과했습니다.')
+                    chunks.append(chunk)
+            except (requests.RequestException, OSError):
+                if not expired.is_set() and time.monotonic() < deadline:
+                    raise CollectionError('BODY_FAILED', '응답 본문을 읽지 못했습니다.') from None
+                raise CollectionError('RESPONSE_TIMEOUT', '본문 읽기 제한 시간을 초과했습니다.') from None
+            if expired.is_set() or time.monotonic() >= deadline:
+                raise CollectionError('RESPONSE_TIMEOUT', '본문 읽기 제한 시간을 초과했습니다.')
+            return b''.join(chunks)
+        finally:
+            # 응답을 닫거나 연결을 재사용하기 전에 감시 스레드가 반드시 종료되어야 한다.
+            timer.cancel()
+            timer.join()
+
     def _fetch(self, url, *, robots=False):
         for hop in range(4):
             url = validate_source_url(url)
@@ -148,18 +197,7 @@ class Collector:
                     raise CollectionError('CONTENT_LENGTH', '잘못된 응답 크기입니다.') from None
                 if length < 0 or length > limit:
                     raise CollectionError('RESPONSE_TOO_LARGE', '응답 크기가 제한을 초과했습니다.')
-                chunks, size, started = [], 0, time.monotonic()
-                try:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        size += len(chunk)
-                        if size > limit:
-                            raise CollectionError('RESPONSE_TOO_LARGE', '압축 해제한 응답이 크기 제한을 초과했습니다.')
-                        if time.monotonic() - started > 30:
-                            raise CollectionError('RESPONSE_TIMEOUT', '본문 읽기 제한 시간을 초과했습니다.')
-                        chunks.append(chunk)
-                except requests.RequestException:
-                    raise CollectionError('BODY_FAILED', '응답 본문을 읽지 못했습니다.') from None
-                return HTMLResponse(b''.join(chunks), content_type, url)
+                return HTMLResponse(self._read_body(response, limit), content_type, url)
             finally:
                 response.close()
         raise CollectionError('REDIRECT_FAILED', '리다이렉트 제한을 초과했습니다.')
