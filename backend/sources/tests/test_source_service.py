@@ -1,7 +1,7 @@
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
-from threading import Barrier
+from threading import Barrier, Event
 from unittest import skipUnless
 from unittest.mock import patch
 
@@ -171,13 +171,102 @@ class SourceServiceTests(TestCase):
     def test_stale_confirmation_cannot_overwrite_newer_document(self):
         self.collect()
         original = SourceDocument.objects.values().get()
-        result = _store(spec(), parse_html(HTML), 'b' * 64, timezone.now() - timedelta(days=1))
+        result = _store(
+            spec(), parse_html(HTML), 'b' * 64, timezone.now(), timezone.now() - timedelta(days=1),
+        )
         self.assertEqual(result, 'skipped')
         self.assertEqual(SourceDocument.objects.values().get(), original)
+
+    def test_earlier_request_finishing_last_cannot_overwrite_later_success(self):
+        client = collector()
+        changed = HTML.replace('8월 31일'.encode(), '9월 1일'.encode())
+        saved = {}
+
+        def fetch(url):
+            self.assertEqual(collect_source(spec(), collector(changed)).outcome, 'new')
+            saved.update(SourceDocument.objects.values().get())
+            return collector().fetch(url)
+
+        client.fetch.side_effect = fetch
+        self.assertEqual(collect_source(spec(), client).outcome, 'skipped')
+        self.assertEqual(SourceDocument.objects.values().get(), saved)
+        self.assertEqual(CrawlLog.objects.filter(result=CrawlLog.Result.SUCCESS).count(), 2)
+
+    def test_later_request_can_replace_earlier_request_that_finished_after_it_started(self):
+        client = collector()
+        changed = HTML.replace('8월 31일'.encode(), '9월 1일'.encode())
+
+        def fetch(url):
+            earlier = CrawlLog.objects.create(
+                source_url=URL, started_at=timezone.now() - timedelta(days=1),
+                result=CrawlLog.Result.SUCCESS, finished_at=timezone.now(),
+            )
+            _store(spec(), parse_html(HTML), 'b' * 64, timezone.now(), earlier.started_at)
+            return collector(changed).fetch(url)
+
+        client.fetch.side_effect = fetch
+        self.assertEqual(collect_source(spec(), client).outcome, 'updated')
+        self.assertIn('9월 1일', SourceDocument.objects.get().content_text)
+
+    def test_later_failed_or_other_url_success_does_not_block_valid_response(self):
+        self.collect()
+        client = collector(HTML.replace('8월 31일'.encode(), '9월 1일'.encode()))
+
+        def fetch(url):
+            for source_url, result in (
+                (URL, CrawlLog.Result.FAILED), (URL, CrawlLog.Result.RUNNING),
+                (URL + '0', CrawlLog.Result.SUCCESS),
+            ):
+                now = timezone.now()
+                CrawlLog.objects.create(source_url=source_url, result=result, started_at=now, finished_at=now)
+            return client.fetch.return_value
+
+        client.fetch.side_effect = fetch
+        self.assertEqual(collect_source(spec(), client).outcome, 'updated')
+        self.assertIn('9월 1일', SourceDocument.objects.get().content_text)
 
 
 @skipUnless(connection.vendor == 'postgresql', '동시 쓰기 검증은 PostgreSQL CI에서 실행합니다.')
 class ConcurrentCollectionTests(TransactionTestCase):
+    def test_older_request_finishing_last_preserves_later_committed_document(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                SourceDocument.objects.all().delete()
+                CrawlLog.objects.all().delete()
+                if existing:
+                    self.assertEqual(collect_source(spec(), collector()).outcome, 'new')
+                older_started, newer_saved = Event(), Event()
+
+                def run_older():
+                    close_old_connections()
+                    client = collector()
+
+                    def fetch(url):
+                        older_started.set()
+                        if not newer_saved.wait(timeout=10):
+                            raise RuntimeError('동시 수집 테스트 대기 시간 초과')
+                        return collector().fetch(url)
+
+                    client.fetch.side_effect = fetch
+                    try:
+                        return collect_source(spec(), client)
+                    finally:
+                        connections.close_all()
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    older = pool.submit(run_older)
+                    try:
+                        self.assertTrue(older_started.wait(timeout=10))
+                        changed = HTML.replace('8월 31일'.encode(), '9월 1일'.encode())
+                        result = collect_source(spec(), collector(changed))
+                        self.assertEqual(result.outcome, 'updated' if existing else 'new')
+                        saved = SourceDocument.objects.values().get()
+                    finally:
+                        newer_saved.set()
+                    self.assertEqual(older.result(timeout=10).outcome, 'skipped')
+                self.assertEqual(SourceDocument.objects.values().get(), saved)
+                self.assertFalse(CrawlLog.objects.exclude(result=CrawlLog.Result.SUCCESS).exists())
+
     def test_same_url_concurrently_creates_one_document_and_two_finished_logs(self):
         barrier = Barrier(2, timeout=10)
 

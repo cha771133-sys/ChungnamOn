@@ -21,7 +21,7 @@ class CollectionResult:
     characters: int = 0
 
 
-def _store(spec, page, digest, checked_at):
+def _store(spec, page, digest, checked_at, started_at):
     metadata = {
         'title': spec.title, 'agency': spec.agency, 'region': spec.region,
         'category': spec.category, 'published_at': spec.published_at,
@@ -37,8 +37,10 @@ def _store(spec, page, digest, checked_at):
         )
         if created:
             return 'new'
-        # 먼저 시작한 느린 수집이 더 최근 확인 결과를 덮어쓰지 못한다.
-        if document.collected_at and document.collected_at > checked_at:
+        # 행 잠금을 얻은 뒤 요청 시작 순서를 비교한다. 완료 순서로 원문이 역행하지 않게 한다.
+        if CrawlLog.objects.filter(
+            source_url=spec.url, result=CrawlLog.Result.SUCCESS, started_at__gt=started_at,
+        ).exists():
             return 'skipped'
         changed = document.content_hash != digest or document.content_text != page.content_text
         fields = ['collected_at', *metadata]
@@ -80,7 +82,7 @@ def collect_source(spec, collector, *, dry_run=False):
         else:
             # 자료와 SUCCESS 이력을 함께 확정한다. 실패 이력은 이 atomic 밖에서 기록한다.
             with transaction.atomic():
-                outcome = _store(spec, page, digest, checked_at)
+                outcome = _store(spec, page, digest, checked_at, log.started_at)
                 CrawlLog.objects.filter(pk=log.pk).update(
                     result=CrawlLog.Result.SUCCESS, finished_at=timezone.now(),
                 )
