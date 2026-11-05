@@ -18,6 +18,7 @@ class ChatHistoryTests(ChatFixtures, APITestCase):
         self.assertFalse(ChatMessage.objects.exists())
 
     def test_owner_filter_document_isolation_and_stable_tie_order(self):
+        """다른 문서·사용자 이력을 제외하고 동일 시각의 대화를 ID 역순으로 고정하는지 확인한다."""
         another = self.make_document(self.user)
         self.make_message(another, question='다른 문서')
         self.make_message(self.other_document, question='다른 사용자')
@@ -33,6 +34,7 @@ class ChatHistoryTests(ChatFixtures, APITestCase):
             self.assertIn(field, response.data['results'][0])
 
     def test_authentication_and_same_404_for_other_or_missing_documents(self):
+        """이력 조회도 인증을 요구하고 타인 문서 존재 여부를 노출하지 않는지 확인한다."""
         bodies = []
         for pk in (self.other_document.pk, 999999):
             response = self.client.get(f'/api/documents/{pk}/chat/')
@@ -43,6 +45,7 @@ class ChatHistoryTests(ChatFixtures, APITestCase):
         self.assertEqual(self.client.get(self.url).status_code, 401)
 
     def test_history_remains_available_for_every_processing_state_without_result(self):
+        """해석 결과가 없고 저신뢰여도 모든 처리 상태에서 기존 대화를 조회할 수 있는지 확인한다."""
         message = self.make_message(self.document)
         self.result.delete()
         for state in Document.Status.values:
@@ -53,6 +56,7 @@ class ChatHistoryTests(ChatFixtures, APITestCase):
                 self.assertEqual(response.data['results'][0]['chatId'], message.pk)
 
     def test_standard_pagination_default_cap_and_page_boundaries(self):
+        """기본·최대 페이지 크기와 마지막·범위 밖 페이지 및 전체 정렬을 확인한다."""
         messages = [self.make_message(self.document) for _ in range(105)]
         ChatMessage.objects.filter(document=self.document).update(created_at=timezone.now())
         response = self.client.get(self.url)

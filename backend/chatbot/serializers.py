@@ -7,6 +7,7 @@ class QuestionSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=2000, trim_whitespace=True)
 
     def to_internal_value(self, data):
+        """message 이외의 필드와 문자열이 아닌 질문을 DRF 형 변환 전에 거부한다."""
         if isinstance(data, dict):
             unknown = set(data) - {'message'}
             if unknown:

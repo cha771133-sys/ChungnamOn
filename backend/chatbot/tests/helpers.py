@@ -40,4 +40,5 @@ class ChatFixtures:
         return f'/api/documents/{self.document.pk}/chat/'
 
     def authenticate(self, user=None):
+        """지정 사용자 또는 기본 소유자의 실제 JWT로 테스트 클라이언트를 인증한다."""
         self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + str(AccessToken.for_user(user or self.user)))

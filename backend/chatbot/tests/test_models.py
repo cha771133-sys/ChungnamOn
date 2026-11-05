@@ -10,6 +10,7 @@ from .helpers import ChatFixtures
 
 class ChatMessageTests(ChatFixtures, TestCase):
     def test_pair_fields_defaults_relations_and_private_string(self):
+        """대화 쌍의 기본값·역참조·공백 제거와 문자열 표현의 전문 비노출을 확인한다."""
         message = self.make_message(self.document, question='  서류가 없어요?  ')
         message.refresh_from_db()
         self.assertEqual(message.question, '서류가 없어요?')
@@ -42,6 +43,7 @@ class ChatMessageTests(ChatFixtures, TestCase):
         self.assertEqual(list(ChatMessage.objects.all()), [other])
 
     def test_blank_values_and_invalid_json_rejected(self):
+        """빈 전문과 잘못된 출처·추천 질문 타입·중복·길이·개수를 모델이 거부하는지 확인한다."""
         for values in (
             {'question': '   '}, {'answer': ''}, {'sources': {}}, {'suggested_questions': [1]},
             {'suggested_questions': ['a', 'a']}, {'suggested_questions': ['a' * 201]},
@@ -51,6 +53,7 @@ class ChatMessageTests(ChatFixtures, TestCase):
                 self.make_message(self.document, **values)
 
     def test_status_consistency_model_and_database(self):
+        """모델 검증과 이를 우회하는 직접 UPDATE 모두 근거 상태·빈 전문 제약을 지키는지 확인한다."""
         for status, grounded in [('UNVERIFIED', True), ('MISMATCH', True), ('GROUNDED', False)]:
             with self.subTest(status=status), self.assertRaises(ValidationError):
                 self.make_message(self.document, status=status, grounded=grounded)

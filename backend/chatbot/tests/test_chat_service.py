@@ -45,6 +45,7 @@ class ChatServiceTests(ChatFixtures, TestCase):
 
     @patch('chatbot.services.ai_client.generate_answer')
     def test_adapter_context_uses_only_recent_same_document_history_in_chronological_order(self, ai):
+        """같은 문서의 최근 10개만 시간순으로 전달하고 파일 경로·다른 대화를 제외하는지 확인한다."""
         self.make_message(self.other_document, question='다른 사용자')
         self.make_message(self.make_document(self.user), question='다른 문서')
         messages = [self.make_message(self.document, question=f'질문 {i}') for i in range(13)]
@@ -88,6 +89,7 @@ class ChatServiceTests(ChatFixtures, TestCase):
         self.assertEqual(ai.call_args.kwargs['question'], '******-******* [전화번호 가림]')
 
     def test_bad_ai_contract_never_creates_a_success_record(self):
+        """필수 필드 누락·잘못된 타입·근거 상태 모순을 모두 저장 전 서비스 오류로 거부하는지 확인한다."""
         cases = [None, [], {}, self.output(answer=' '), self.output(answer=123),
                  self.output(grounded='false'), self.output(sources={}),
                  self.output(sources=[{'url': 'https://www.asan.go.kr/'}]),
@@ -140,6 +142,7 @@ class ChatServiceTests(ChatFixtures, TestCase):
                 self.submit()
 
     def test_pending_inactive_unchecked_nonofficial_or_unlinked_sources_cannot_ground_answer(self):
+        """상태·수집일·공식 URL·문서 검증 요건을 충족하지 않는 근거 주장을 거부하는지 확인한다."""
         source = self.source()
         payload = self.output(grounded=True, status='GROUNDED', sources=[{'sourceDocumentId': source.pk}])
         for changes in (
@@ -168,6 +171,7 @@ class ChatServiceTests(ChatFixtures, TestCase):
         self.assertEqual(ai.call_args.kwargs['official_sources'], [])
 
     def test_ai_cannot_invent_source_metadata(self):
+        """AI가 서버의 URL·제목·확인일·본문 해시를 바꾸면 근거 계약 오류로 거부하는지 확인한다."""
         source = self.source()
         for key, value in (('url', 'https://www.gov.kr/invented'), ('title', '발명한 제목'),
                            ('checkedAt', '2020-01-01'), ('contentHash', 'fabricated')):
@@ -190,6 +194,7 @@ class ChatServiceTests(ChatFixtures, TestCase):
         self.assertEqual(message.sources[0]['sourceDocumentId'], source.pk)
 
     def test_state_owner_interpretation_and_source_changes_during_ai_call_prevent_saving(self):
+        """AI 호출 중 상태·신뢰도·소유권·해석·출처가 변하면 저장을 거부하는지 각각 확인한다."""
         for change in ('status', 'confidence', 'owner', 'result', 'missing_result', 'source'):
             with self.subTest(change=change):
                 # 각 하위 테스트의 변경은 롤백한다.
@@ -197,6 +202,7 @@ class ChatServiceTests(ChatFixtures, TestCase):
                     source = self.source()
 
                     def mutate(**kwargs):
+                        """AI 호출 도중 한 가지 입력 조건을 바꿔 저장 직전 재검사를 유도한다."""
                         if change == 'status':
                             Document.objects.filter(pk=self.document.pk).update(status='PROCESSING')
                         elif change == 'confidence':

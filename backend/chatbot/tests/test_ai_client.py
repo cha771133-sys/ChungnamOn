@@ -10,6 +10,7 @@ class AIClientTests(SimpleTestCase):
 
     @override_settings(CHATBOT_AI_MODE='dummy')
     def test_dummy_is_explicit_local_unverified_for_all_profile_languages(self):
+        """지원 언어 전체에서 실제 안내문 언어와 미확인 근거 상태가 일치하는지 확인한다."""
         self.assertEqual(ai_client.MODE, 'dummy')
         self.assertEqual(set(ai_client.DUMMY_ANSWERS), set(UserProfile.Language.values))
         for language in UserProfile.Language.values:

@@ -36,6 +36,7 @@ class ChatMessage(models.Model):
         ]
 
     def clean(self):
+        """근거 상태와 출처·추천 질문의 저장 계약을 검사한다."""
         super().clean()
         if self.grounded != (self.status == self.Status.GROUNDED):
             raise ValidationError('근거 상태와 grounded가 일치해야 합니다.')
@@ -50,6 +51,7 @@ class ChatMessage(models.Model):
             raise ValidationError({'suggested_questions': '중복 없는 200자 이하 문자열을 최대 5개 허용합니다.'})
 
     def save(self, *args, **kwargs):
+        """빈 질문·답변을 거부하고 공백과 모델 계약을 검증한 뒤 저장한다."""
         for field in ('question', 'answer'):
             value = getattr(self, field)
             if not isinstance(value, str) or not value.strip():

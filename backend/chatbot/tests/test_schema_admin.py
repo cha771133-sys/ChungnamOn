@@ -13,6 +13,7 @@ from .helpers import ChatFixtures
 
 class SchemaAndAdminTests(ChatFixtures, APITestCase):
     def test_schema_request_responses_jwt_pagination_and_examples(self):
+        """Swagger의 JWT·질문 제약·오류·페이지네이션·출처 필드와 이력 예시의 정합성을 확인한다."""
         schema = SchemaGenerator().get_schema(request=None, public=True)
         operations = schema['paths']['/api/documents/{pk}/chat/']
         for method in ('get', 'post'):

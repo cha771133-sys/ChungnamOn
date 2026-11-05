@@ -104,6 +104,7 @@ class DocumentChatView(generics.GenericAPIView):
         return Response(self.get_serializer(message).data, status=status.HTTP_201_CREATED)
 
     def handle_exception(self, exc):
+        """챗봇 409·503은 고정 오류 형식으로 반환하고 나머지는 공통 예외 처리를 따른다."""
         # 공통 handler는 사용자 정의 409/503의 내용을 의도적으로 마스킹한다.
         # 챗봇의 고정 오류만 같은 공통 JSON 형식으로 반환한다. 임의 예외 내용은 사용하지 않는다.
         if isinstance(exc, DatabaseError):

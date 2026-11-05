@@ -143,6 +143,7 @@ Swagger `/api/docs/`, OpenAPI `/api/schema/`에 요청/응답/오류/빈 이력 
 - [x] 공식 근거 참조 검사 및 생성 당시 스냅샷, 더미 근거 승격 금지
 - [x] Admin 개인정보 최소화 및 Swagger 문서/예시
 - [x] 모델·서비스·API·AI·이력·스키마·Admin 테스트
+- [x] CodeRabbit 관리자 CASCADE·status 누락 검증 수정 확인 및 분기 함수 docstring 보완
 
 검증 명령 (backend에서 프로젝트 환경으로 실행):
 

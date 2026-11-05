@@ -36,6 +36,7 @@ class DocumentNotReady(APIException):
 
 
 def owned_document(user, document_id, *, for_update=False):
+    """인증 사용자의 소유 문서만 조회하며 필요하면 저장 전 행 잠금을 획득한다."""
     if not user or not user.is_authenticated:
         raise NotAuthenticated()
     queryset = Document.objects.filter(owner=user)
@@ -49,11 +50,13 @@ def message_history(document):
 
 
 def _ensure_ready(document):
+    """해석 미완료 또는 저신뢰 문서는 질문할 수 없는 상태로 판단하여 409를 발생시킨다."""
     if document.status != Document.Status.DONE or document.low_confidence:
         raise DocumentNotReady()
 
 
 def _interpretation(document, *, for_update=False):
+    """AI 입력과 변경 감지에 사용할 해석 스냅샷을 읽고 누락 시 503을 발생시킨다."""
     queryset = InterpretationResult.objects.filter(document=document)
     if for_update:
         queryset = queryset.select_for_update()
@@ -64,6 +67,7 @@ def _interpretation(document, *, for_update=False):
 
 
 def _language(user, interpretation):
+    """지원 언어를 프로필·해석·프로젝트 설정 순으로 선택하고 한국어를 최종 기본값으로 쓴다."""
     profile_language = UserProfile.objects.filter(user=user).values_list('language', flat=True).first()
     # Django 기본 언어 ko-kr와 지원 코드 ko를 대응한다.
     for value in (profile_language, interpretation['language'], settings.LANGUAGE_CODE.split('-')[0]):
@@ -73,6 +77,7 @@ def _language(user, interpretation):
 
 
 def _official_sources(interpretation, *, for_update=False):
+    """검증 결과에 실제 ID로 연결된 활성 공식 자료의 수집 메타데이터만 반환한다."""
     verification = interpretation.get('verification')
     if not isinstance(verification, dict) or verification.get('status') not in ('MATCHED', 'MISMATCH'):
         return []
@@ -101,6 +106,7 @@ def _official_sources(interpretation, *, for_update=False):
 
 
 def _validate_answer(payload, language, official_sources, interpretation):
+    """AI 출력 계약을 검사하고 서버 출처로 스냅샷을 구성하며 계약 위반은 AIClientError로 거부한다."""
     if not isinstance(payload, dict):
         raise ai_client.AIClientError()
     required = {'answer', 'sources', 'grounded', 'suggestedQuestions'}
@@ -143,6 +149,7 @@ def _validate_answer(payload, language, official_sources, interpretation):
 
 
 def submit_question(user, document_id, data):
+    """질문을 처리하고 AI·DB·모델 검증 실패를 내부 정보 없는 고정 503으로 변환한다."""
     try:
         return _submit_question(user, document_id, data)
     except (ai_client.AIClientError, DatabaseError, ModelValidationError):
@@ -150,6 +157,7 @@ def submit_question(user, document_id, data):
 
 
 def _submit_question(user, document_id, data):
+    """마스킹된 문맥으로 AI를 호출하고 문서·해석·출처를 잠금 재검사한 뒤 성공 쌍만 저장한다."""
     document = owned_document(user, document_id)
     _ensure_ready(document)
     interpretation = _interpretation(document)
