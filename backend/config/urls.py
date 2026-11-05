@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/documents/', include('documents.urls')),
     path('api/documents/', include('chatbot.urls')),
     path('api/sources/', include('sources.urls')),
+    path('api/notifications/', include('notifications.urls')),
     path('api/', include('core.urls')),
 ]
 
