@@ -1,4 +1,4 @@
-"""LLM 교체 구조: anthropic(배포, Claude Haiku) / ollama(개발) / mock(키 없이 테스트).
+"""LLM 교체 구조: anthropic(배포, Claude Haiku) / ollama(개발) / mock(테스트 전용, AI_LLM_PROVIDER=mock 명시).
 
 모든 provider는 complete_json(system, messages) -> dict 하나만 구현함.
 messages = [{"role": "user"|"assistant", "content": str}, ...]
@@ -109,13 +109,21 @@ class MockLLM:
 
 @lru_cache(maxsize=1)
 def get_llm():
+    """AI_LLM_PROVIDER로 고른 LLM. 설정이 없거나 잘못되면 오류.
+
+    mock은 AI_LLM_PROVIDER=mock으로 명시했을 때만 쓴다. 설정이 빠졌다고 mock으로 넘어가면
+    가짜 MATCHED·GROUNDED가 사용자에게 나가므로, 오류를 내서 pipeline.verify는 UNVERIFIED,
+    챗봇은 503이 되게 한다.
+    """
     s = get_settings()
-    provider = s.llm_provider or ("anthropic" if s.anthropic_api_key else "mock")
+    provider = s.llm_provider
     if provider == "anthropic":
         if not s.anthropic_api_key:
             raise RuntimeError("AI_LLM_PROVIDER=anthropic인데 ANTHROPIC_API_KEY가 비어 있어")
         return AnthropicLLM()
     if provider == "ollama":
         return OllamaLLM()
-    log.warning("AI_LLM_PROVIDER=mock: 가짜 답변으로 동작함 (개발: ollama, 배포: anthropic)")
-    return MockLLM()
+    if provider == "mock":
+        log.warning("AI_LLM_PROVIDER=mock: 가짜 답변으로 동작함 (테스트 전용)")
+        return MockLLM()
+    raise RuntimeError(f"AI_LLM_PROVIDER={provider or '(비어 있음)'}: anthropic | ollama | mock 중 하나로 지정해야 해")

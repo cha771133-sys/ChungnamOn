@@ -63,14 +63,18 @@ class GeminiEmbedder:
     - outputDimensionality=AI_EMBED_DIM으로 요청. 3072가 아닌 차원은 정규화되지 않은 채 오므로 직접 L2 정규화
     - 여러 문장은 한 요청에 묶음 (요청당 최대 100개)
     - 429(무료 등급 한도)·5xx는 잠깐 기다렸다가 재시도. 서버가 알려준 대기 시간(Retry-After, retryDelay)을 우선 사용
+      - 청크 생성(embed_passages): 최대 5회, 한 번에 최대 60초 대기 (오래 걸려도 되는 배치 작업)
+      - 질문 검색(embed_query): 최대 1회, 최대 2초 대기 (챗봇 HTTP 요청 안에서 돌아서 워커를 오래 붙잡으면 안 됨)
     - 연결·읽기 timeout 설정. API 키는 URL이 아니라 헤더(x-goog-api-key)로 보내서 오류 메시지에 안 남게 함
     """
 
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
     BATCH_SIZE = 100
     RETRY_STATUSES = (429, 500, 502, 503, 504)
-    MAX_RETRIES = 5
+    MAX_RETRIES = 5          # 청크 생성
     MAX_WAIT = 60.0
+    QUERY_MAX_RETRIES = 1    # 질문 검색
+    QUERY_MAX_WAIT = 2.0
 
     def __init__(self, model: str, api_key: str, dim: int, timeout: float, *, transport=None, sleep=None):
         import time
@@ -89,9 +93,9 @@ class GeminiEmbedder:
             transport=transport,
         )
 
-    @classmethod
-    def _wait_seconds(cls, response, attempt: int) -> float:
-        """서버가 준 대기 시간 → 없으면 지수 백오프(1, 2, 4, 8 ...초). 최대 MAX_WAIT."""
+    @staticmethod
+    def _wait_seconds(response, attempt: int, max_wait: float) -> float:
+        """서버가 준 대기 시간 → 없으면 지수 백오프(1, 2, 4, 8 ...초). 최대 max_wait."""
         wait = None
         header = response.headers.get("retry-after")
         if header:
@@ -110,14 +114,14 @@ class GeminiEmbedder:
                 wait = None
         if wait is None:
             wait = float(2 ** attempt)
-        return min(max(wait, 0.0), cls.MAX_WAIT)
+        return min(max(wait, 0.0), max_wait)
 
-    def _post(self, body: dict) -> dict:
-        for attempt in range(self.MAX_RETRIES + 1):
+    def _post(self, body: dict, max_retries: int, max_wait: float) -> dict:
+        for attempt in range(max_retries + 1):
             r = self.http.post(self.url, json=body)
-            if r.status_code in self.RETRY_STATUSES and attempt < self.MAX_RETRIES:
-                wait = self._wait_seconds(r, attempt)
-                log.warning("Gemini 임베딩 HTTP %s, %.1f초 뒤 재시도 (%d/%d)", r.status_code, wait, attempt + 1, self.MAX_RETRIES)
+            if r.status_code in self.RETRY_STATUSES and attempt < max_retries:
+                wait = self._wait_seconds(r, attempt, max_wait)
+                log.warning("Gemini 임베딩 HTTP %s, %.1f초 뒤 재시도 (%d/%d)", r.status_code, wait, attempt + 1, max_retries)
                 self.sleep(wait)
                 continue
             if r.status_code >= 400:
@@ -126,7 +130,7 @@ class GeminiEmbedder:
             return r.json()
         raise RuntimeError("Gemini 임베딩 재시도 횟수 초과")  # pragma: no cover (루프 안에서 끝남)
 
-    def _embed(self, texts: list[str], task_type: str) -> list[np.ndarray]:
+    def _embed(self, texts: list[str], task_type: str, max_retries: int, max_wait: float) -> list[np.ndarray]:
         out: list[np.ndarray] = []
         for i in range(0, len(texts), self.BATCH_SIZE):
             batch = texts[i : i + self.BATCH_SIZE]
@@ -140,7 +144,7 @@ class GeminiEmbedder:
                     }
                     for t in batch
                 ]
-            })
+            }, max_retries, max_wait)
             embeddings = data.get("embeddings") if isinstance(data, dict) else None
             if not isinstance(embeddings, list) or len(embeddings) != len(batch):
                 raise RuntimeError("Gemini 임베딩 응답 형식이 예상과 다름 (embeddings 개수 불일치)")
@@ -153,10 +157,12 @@ class GeminiEmbedder:
         return out
 
     def embed_query(self, text: str) -> np.ndarray:
-        return self._embed([text], "RETRIEVAL_QUERY")[0]
+        return self._embed([text], "RETRIEVAL_QUERY", self.QUERY_MAX_RETRIES, self.QUERY_MAX_WAIT)[0]
 
     def embed_passages(self, texts: list[str]) -> list[np.ndarray]:
-        return self._embed(texts, "RETRIEVAL_DOCUMENT") if texts else []
+        if not texts:
+            return []
+        return self._embed(texts, "RETRIEVAL_DOCUMENT", self.MAX_RETRIES, self.MAX_WAIT)
 
 
 class HashEmbedder:

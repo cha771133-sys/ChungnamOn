@@ -231,3 +231,19 @@ class PgVectorSearchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChunkOverlapTests(unittest.TestCase):
+    def test_overlap_not_smaller_than_size_is_error(self):
+        from ai.chatbot.chunker import split_chunks
+
+        long_body = "가" * 3000
+        for size, overlap in ((100, 100), (100, 150)):
+            with self.assertRaises(ValueError):
+                split_chunks(long_body, size=size, overlap=overlap)
+
+    def test_valid_overlap_still_splits(self):
+        from ai.chatbot.chunker import split_chunks
+
+        chunks = split_chunks("가" * 1000, size=300, overlap=100)
+        self.assertTrue(len(chunks) > 1 and all(len(c) <= 300 for c in chunks))

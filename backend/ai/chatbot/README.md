@@ -119,7 +119,7 @@ for i, (text, vec) in enumerate(zip(chunks, vectors)):
 ## 3. 환경변수 (`backend/.env`, `.env.example`에는 값 없이)
 
 ```bash
-# LLM: 개발 ollama / 배포 anthropic / 키 없이 흐름만 mock
+# LLM: 개발 ollama / 배포 anthropic / mock은 테스트 전용 (비어 있으면 오류, mock으로 자동 전환 안 함)
 AI_LLM_PROVIDER=ollama
 AI_OLLAMA_URL=http://localhost:11434
 AI_OLLAMA_MODEL=qwen2.5:7b
@@ -173,7 +173,7 @@ ai/chatbot/
   service.py      generate_answer, 더미, 근거 판정
   prompts.py      프롬프트 (근거 규칙)
   retriever.py    검색: db / memory
-  embedder.py     임베딩: ollama / fastembed / hash
+  embedder.py     임베딩: gemini / ollama / fastembed(선택 설치) / hash
   llm.py          LLM: anthropic / ollama / mock
   chunker.py      청크 분할
   config.py       환경변수

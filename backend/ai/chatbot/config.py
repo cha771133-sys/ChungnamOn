@@ -16,7 +16,7 @@ CHUNGNAM_REGIONS = [
 
 @dataclass(frozen=True)
 class Settings:
-    # LLM: anthropic | ollama | mock  (비우면 ANTHROPIC_API_KEY 있으면 anthropic, 없으면 mock)
+    # LLM: anthropic | ollama | mock(테스트 전용, 명시해야 함). 비어 있으면 get_llm()이 오류
     llm_provider: str
     anthropic_api_key: str
     anthropic_model: str

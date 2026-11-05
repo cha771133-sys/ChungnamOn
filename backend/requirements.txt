@@ -1,3 +1,4 @@
+anthropic==2.4.0
 asgiref==3.13.0
 beautifulsoup4==4.14.3
 charset-normalizer==3.5.2
@@ -8,6 +9,8 @@ djangorestframework==3.18.3
 djangorestframework_simplejwt==5.5.1
 drf-spectacular==0.30.0
 gunicorn==26.2.0
+httpx==0.28.1
+numpy==2.5.4
 psycopg==3.3.6
 psycopg-binary==3.3.6
 PyJWT==2.15.1
@@ -19,7 +22,3 @@ sqlparse==0.6.0
 tzdata==2026.6
 urllib3==2.8.0
 whitenoise==6.12.0
-numpy>=1.26
-httpx>=0.27
-anthropic>=0.40
-fastembed>=0.4

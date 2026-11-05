@@ -101,6 +101,20 @@ class GeminiEmbedderTests(unittest.TestCase):
         self.assertIn("429", str(ctx.exception))
         self.assertNotIn("민감한", str(ctx.exception))
 
+    def test_query_retries_once_and_waits_at_most_2s(self):
+        """챗봇 요청 안에서 도는 질문 임베딩은 워커를 오래 붙잡지 않음."""
+        rec = Recorder(*[(429, {}, {"Retry-After": "999"})] * 10)
+        sleeps = []
+        with self.assertRaises(RuntimeError):
+            make(rec, sleeps).embed_query("q")
+        self.assertEqual(len(rec.requests), 2)  # 처음 1번 + 재시도 1번
+        self.assertEqual(sleeps, [2.0])
+
+        rec = Recorder((503, {}, None))
+        sleeps = []
+        self.assertEqual(make(rec, sleeps).embed_query("q").shape, (DIM,))  # 1번 재시도로 성공
+        self.assertEqual(sleeps, [1.0])  # 서버 지정 없으면 백오프 1초 (상한 2초 이내)
+
     def test_client_error_is_not_retried(self):
         rec = Recorder((400, {"error": {"message": "bad"}}, None))
         with self.assertRaises(RuntimeError):
@@ -162,3 +176,40 @@ class AnthropicLLMTests(unittest.TestCase):
 
     def test_ok(self):
         self.assertEqual(self.make('```json\n{"ok": true}\n```').complete_json("s", []), {"ok": True})
+
+
+class LLMProviderTests(unittest.TestCase):
+    """설정이 빠졌을 때 가짜 LLM으로 조용히 넘어가지 않는지."""
+
+    def provider(self, **env):
+        from ai.chatbot.config import reset_settings
+        from ai.chatbot.llm import get_llm
+
+        base = {"AI_LLM_PROVIDER": "", "ANTHROPIC_API_KEY": ""}
+        with mock.patch.dict(os.environ, {**base, **env}):
+            reset_settings()
+            try:
+                return get_llm()
+            finally:
+                reset_settings()
+
+    def test_missing_provider_is_error_even_without_key(self):
+        with self.assertRaises(RuntimeError):
+            self.provider()
+
+    def test_missing_provider_is_error_even_with_key(self):
+        with self.assertRaises(RuntimeError):
+            self.provider(ANTHROPIC_API_KEY="k")
+
+    def test_unknown_provider_is_error(self):
+        with self.assertRaises(RuntimeError):
+            self.provider(AI_LLM_PROVIDER="gpt")
+
+    def test_anthropic_without_key_is_error(self):
+        with self.assertRaises(RuntimeError):
+            self.provider(AI_LLM_PROVIDER="anthropic")
+
+    def test_mock_only_when_explicit(self):
+        from ai.chatbot.llm import MockLLM
+
+        self.assertIsInstance(self.provider(AI_LLM_PROVIDER="mock"), MockLLM)

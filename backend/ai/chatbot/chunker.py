@@ -16,6 +16,9 @@ def split_chunks(body: str, size: int | None = None, overlap: int | None = None)
     s = get_settings()
     size = size or s.chunk_size
     overlap = s.chunk_overlap if overlap is None else overlap
+    # 다음 조각 시작 위치가 size - overlap만큼 앞으로 가야 함. 0 이하면 긴 섹션에서 무한 루프
+    if overlap >= size:
+        raise ValueError(f"청크 overlap({overlap})은 size({size})보다 작아야 해 (AI_CHUNK_OVERLAP < AI_CHUNK_SIZE)")
     raw = [x.strip() for x in _SPLIT_RE.split(body) if x.strip()]
 
     # 짧은 섹션("# 문의" 한 줄 등)은 다음 섹션과 합침. 짧은 청크는 아무 질문에나 점수가 높게 나와서 검색을 망침.
