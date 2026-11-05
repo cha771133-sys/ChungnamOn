@@ -205,6 +205,28 @@ class OfficialRefreshTests(TestCase):
         with self.assertRaisesMessage(CollectionError, 'REVIEW_CONFLICT'):
             review_revision(candidate.pk, self.admin, approve=True)
 
+    def test_reverted_metadata_candidate_requires_latest_successful_observation(self):
+        self.record = replace(self.record, source_url='https://www.gov.kr/test-fixtures/original')
+        document = self.approve_initial()
+        SourceDocument.objects.filter(pk=document.pk).update(ai_reprocessing_required=False, status='ACTIVE')
+        changed = replace(self.record, source_url='https://www.gov.kr/test-fixtures/temporary', title='일시적인 출처 정보')
+        self.assertEqual(self.refresh(changed).outcome, 'candidate')
+        candidate = SourceRevision.objects.get(review_status='PENDING_REVIEW')
+        self.assertEqual(self.refresh().outcome, 'unchanged')
+        with self.assertRaisesMessage(CollectionError, 'REVIEW_CONFLICT'):
+            review_revision(candidate.pk, self.admin, approve=True)
+        document.refresh_from_db()
+        self.assertEqual(document.source_url, self.record.source_url)
+        self.assertEqual(document.title, self.record.title)
+        self.assertEqual(document.status, 'ACTIVE')
+        # 같은 후보가 실제로 다시 관측되면 확인일도 갱신되어 정상 검토할 수 있다.
+        self.refresh(changed)
+        self.assertEqual(SourceRevision.objects.filter(review_status='PENDING_REVIEW').count(), 1)
+        review_revision(candidate.pk, self.admin, approve=True)
+        document.refresh_from_db()
+        self.assertEqual(document.source_url, changed.source_url)
+        self.assertFalse(document.ai_reprocessing_required)
+
     def test_regular_user_cannot_review_and_double_review_rejected(self):
         self.refresh()
         revision = SourceRevision.objects.get()

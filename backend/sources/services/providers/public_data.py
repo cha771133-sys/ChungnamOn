@@ -90,7 +90,7 @@ class PublicDataClient:
         detail = self.detail(external_id)
         conditions = self.support_conditions(external_id)
         # 수정일은 공식 발행일로 간주하지 않으며 조회수는 변경 감지 대상에서 제외한다.
-        detail_body = {key: value for key, value in detail.items() if key != '수정일시'}
+        detail_body = {key: value for key, value in detail.items() if key not in {'수정일시', '조회수'}}
         body = canonical_text({'상세정보': detail_body, '지원조건': conditions})
         link = optional_official_url(listing.get('상세조회URL'), 'public_data')
         return OfficialRecord(

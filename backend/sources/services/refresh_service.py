@@ -179,7 +179,9 @@ def review_revision(revision_id, user, *, approve):
         if revision.review_status != 'PENDING_REVIEW':
             raise CollectionError('REVIEW_CONFLICT', '이미 검토한 후보입니다.')
         if approve:
-            if document.version != revision.base_version or document.content_hash != revision.previous_hash or document.observed_hash != revision.content_hash:
+            # 본문 해시가 같아도 출처·날짜가 원복된 관측은 이전 메타데이터 후보를 대체한다.
+            # 후보 확인일은 후보를 재확인할 때 함께 갱신하므로 최신 성공 관측과 일치해야 한다.
+            if document.version != revision.base_version or document.content_hash != revision.previous_hash or document.observed_hash != revision.content_hash or document.last_success_at != revision.collected_at:
                 raise CollectionError('REVIEW_CONFLICT', '더 최근 자료 또는 관리자 수정이 있습니다. 최신 후보를 검토하세요.')
             needs_reprocessing = document.ai_reprocessing_required or document.review_status != 'APPROVED' or document.content_hash != revision.content_hash or document.content_text != revision.content_text
             for name, value in revision.metadata.items():

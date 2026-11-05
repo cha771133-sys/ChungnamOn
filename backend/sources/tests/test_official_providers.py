@@ -83,6 +83,20 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertIsNone(record.source_url)
         self.assertFalse(record.metadata['source_link_available'])
 
+    def test_public_view_count_and_modified_time_do_not_change_policy_hash(self):
+        target = SimpleNamespace(external_id=PUBLIC_ROW['서비스ID'], configuration={})
+
+        def fetch(detail):
+            self.transport.get.side_effect = [envelope([PUBLIC_ROW]), envelope([detail]), envelope([])]
+            return self.public.fetch(target)
+
+        initial = fetch({**PUBLIC_ROW, '조회수': 1, '수정일시': '2026-11-01'})
+        recounted = fetch({**PUBLIC_ROW, '조회수': 50, '수정일시': '2026-11-05'})
+        self.assertEqual(initial.content_hash, recounted.content_hash)
+        self.assertEqual(initial.content_text, recounted.content_text)
+        changed = fetch({**PUBLIC_ROW, '선정기준': '실제 지원조건 변경'})
+        self.assertNotEqual(initial.content_hash, changed.content_hash)
+
     def test_public_unusable_link_is_omitted_without_losing_policy_body(self):
         listing = {**PUBLIC_ROW, '상세조회URL': 'https://www.gov.kr/detail?serviceKey=test-public-secret'}
         self.transport.get.side_effect = [envelope([listing]), envelope([PUBLIC_ROW]), envelope([])]
