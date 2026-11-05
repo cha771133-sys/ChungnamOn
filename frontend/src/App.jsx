@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { AUTH_EXPIRED_EVENT } from './lib/api'
+import { hasSession, logout as apiLogout } from './lib/auth'
+import { t } from './i18n.js'
 import { Ctx, CONTENT_LANGS } from './store.js'
-import { INITIAL_DOCS, INITIAL_SCHEDULES } from './data/mock.js'
+import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
 import { WifiOff } from 'lucide-react'
 import SheetHost from './components/Sheets.jsx'
 import { Intro, LanguageSelect, Login, Signup, ProfileSetup, NotifyPermission } from './screens/Onboarding.jsx'
@@ -16,15 +19,25 @@ import Settings from './screens/Settings.jsx'
 
 const KEY = 'chungnamon-demo-v1'
 
+/** 예전 버전에서 한국어 이름(베트남)으로 저장한 국적을 서버 형식 코드(VN)로 바꾼다. */
+function migrate(saved) {
+  const nat = saved.profile?.nationality
+  const found = NATIONALITIES.find((n) => n.ko === nat)
+  if (found) saved.profile.nationality = found.code
+  return saved
+}
+
+/** 브라우저에 저장된 앱 상태를 불러온다. 없거나 깨져 있으면 null. */
 function load() {
   try {
     const raw = localStorage.getItem(KEY)
-    return raw ? JSON.parse(raw) : null
+    return raw ? migrate(JSON.parse(raw)) : null
   } catch {
     return null
   }
 }
 
+/** 처음 설치했을 때의 앱 상태 */
 function fresh() {
   return {
     onboarded: false,
@@ -61,10 +74,13 @@ const SCREENS = {
   scheduleDetail: ScheduleDetail,
 }
 
+/** 앱 전체 상태와 화면 이동(스택)을 관리하는 최상위 컴포넌트 */
 export default function App() {
   const [data, setData] = useState(() => load() || fresh())
   const [stack, setStack] = useState(() => {
     if (!data.onboarded) return [{ name: 'language', params: {} }]
+    // 온보딩은 마쳤지만 토큰이 없으면(로그아웃·만료) 로그인부터
+    if (!hasSession()) return [{ name: 'login', params: {} }]
     // 유저 플로우 n3 → n44 → n39: 마감 알림을 누르면 /?schedule=ID 로 열려 일정 상세로 이동
     const sid = new URLSearchParams(window.location.search).get('schedule')
     if (sid && data.schedules.some((s) => s.id === sid)) {
@@ -80,6 +96,11 @@ export default function App() {
   const [toast, setToast] = useState(null)
   const [online, setOnline] = useState(navigator.onLine)
   const [installEvt, setInstallEvt] = useState(null)
+  // 이벤트 핸들러에서 최신 언어를 읽기 위한 참조
+  const langRef = useRef(data.profile.language)
+  useEffect(() => {
+    langRef.current = data.profile.language
+  }, [data.profile.language])
 
   useEffect(() => {
     try {
@@ -99,7 +120,17 @@ export default function App() {
     window.addEventListener('online', on)
     window.addEventListener('offline', off)
     window.addEventListener('beforeinstallprompt', bip)
+    // 토큰 갱신까지 실패하면 로그인 화면으로 보낸다
+    const expired = () => {
+      setData((d) => ({ ...d, user: null }))
+      setStack([{ name: 'login', params: {} }])
+      setToast(t(langRef.current, 'sessionExpired'))
+      clearTimeout(window.__toastTimer)
+      window.__toastTimer = setTimeout(() => setToast(null), 2400)
+    }
+    window.addEventListener(AUTH_EXPIRED_EVENT, expired)
     return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, expired)
       window.removeEventListener('online', on)
       window.removeEventListener('offline', off)
       window.removeEventListener('beforeinstallprompt', bip)
@@ -155,6 +186,7 @@ export default function App() {
     isIOS,
     openLang: () => setSheet({ type: 'lang' }),
     resetDemo: () => {
+      apiLogout().catch(() => {})
       setData(fresh())
       setStack([{ name: 'language', params: {} }])
       showToast('데모 데이터를 처음 상태로 되돌렸어요')

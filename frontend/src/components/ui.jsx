@@ -35,10 +35,10 @@ export function Badge({ status, children }) {
   )
 }
 
-/* 도장(인장) 모양의 검증 표시 — 이 서비스의 시그니처 요소 */
-export function Stamp({ tone, top, bottom, small }) {
+/** 도장(인장) 모양의 검증 표시. 이 서비스의 시그니처 요소. long이면 긴 번역 문구도 원 안에 들어가게 글자를 줄인다. */
+export function Stamp({ tone, top, bottom, small, long }) {
   return (
-    <div className={`stamp tone-${tone}${small ? ' stamp-sm' : ''}`} role="img" aria-label={`${top} ${bottom}`}>
+    <div className={`stamp tone-${tone}${small ? ' stamp-sm' : ''}${long ? ' stamp-long' : ''}`} role="img" aria-label={`${top} ${bottom}`}>
       <span className="stamp-top">{top}</span>
       <span className="stamp-bottom">{bottom}</span>
     </div>

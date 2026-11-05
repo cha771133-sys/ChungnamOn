@@ -1,9 +1,11 @@
 import { Check, ExternalLink, Share, PlusSquare, Download, Building2 } from 'lucide-react'
 import { useApp, fmtDate, pick } from '../store.js'
 import { LANGS, SOURCES } from '../data/mock.js'
-import { t } from '../i18n.js'
+import { t, uiLang } from '../i18n.js'
+import { updateMe, hasSession } from '../lib/auth'
 import { Sheet, Badge } from './ui.jsx'
 
+/** 공식 근거 자료 카드: 기관, 제목, 확인일, 기준일, 원문 링크 */
 export function SourceCard({ id }) {
   const s = SOURCES[id]
   if (!s) return null
@@ -29,10 +31,13 @@ export function SourceCard({ id }) {
   )
 }
 
+/** 안내 언어 선택 시트. 로그인 상태면 서버 프로필에도 저장한다. */
 function LangSheet() {
   const { data, update, setSheet, showToast } = useApp()
+  const lang = data.profile.language
   const choose = (code) => {
     update((d) => ({ profile: { ...d.profile, language: code } }))
+    if (hasSession() && data.onboarded) updateMe({ language: code }).catch(() => showToast(t(code, 'errUnknown')))
     setSheet(null)
     showToast(t(code, 'langChanged'))
   }
@@ -52,11 +57,12 @@ function LangSheet() {
           </li>
         ))}
       </ul>
-      <p className="hint">{t(data.profile.language, 'langFallback')}</p>
+      {uiLang(lang) !== lang && <p className="hint">{t(lang, 'langFallback')}</p>}
     </Sheet>
   )
 }
 
+/** 행정용어 풀이 시트 */
 function TermSheet({ term }) {
   const { setSheet, contentLang } = useApp()
   return (
@@ -68,6 +74,7 @@ function TermSheet({ term }) {
   )
 }
 
+/** 교차 검증 항목의 문서 내용·공식 자료 비교와 근거를 보여주는 시트 */
 function EvidenceSheet({ docId, itemId }) {
   const { data, setSheet, nav } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
@@ -114,6 +121,7 @@ function EvidenceSheet({ docId, itemId }) {
   )
 }
 
+/** 챗봇 답변 근거 자료 목록 시트 */
 function SourceSheet({ ids }) {
   const { setSheet } = useApp()
   return (
@@ -125,6 +133,7 @@ function SourceSheet({ ids }) {
   )
 }
 
+/** PWA 홈 화면 설치 안내 시트 (안드로이드 설치 버튼, iOS 2단계 안내) */
 function InstallSheet() {
   const { installEvt, setInstallEvt, setSheet, update, isIOS, showToast } = useApp()
   const close = () => {
@@ -166,6 +175,7 @@ function InstallSheet() {
   )
 }
 
+/** 현재 열린 시트 종류에 맞는 바텀시트를 그린다. */
 export default function SheetHost() {
   const { sheet } = useApp()
   switch (sheet.type) {

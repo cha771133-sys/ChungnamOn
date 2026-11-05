@@ -1136,6 +1136,23 @@ ol {
   font-size: 15px;
   max-width: none;
 }
+/* 베트남어·영어처럼 긴 도장 문구는 줄바꿈을 허용하고 글자를 줄인다 */
+.intro-stamp .stamp-long .stamp-top,
+.intro-stamp .stamp-long .stamp-bottom {
+  max-width: 86px;
+  font-size: 12px;
+  line-height: 1.2;
+  overflow-wrap: break-word;
+}
+.intro-stamp .stamp-long .stamp-bottom {
+  margin-top: 3px;
+}
+.plain-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
 .onboard-actions {
   margin-top: auto;
   padding-bottom: calc(20px + var(--safe-bottom));

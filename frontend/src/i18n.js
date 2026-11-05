@@ -5,10 +5,12 @@
 
 const UI_LANGS = ['vi', 'en', 'ko']
 
+/** 번역 데이터가 있는 언어면 그대로, 없으면 영어 코드를 돌려준다. */
 export function uiLang(lang) {
   return UI_LANGS.includes(lang) ? lang : 'en'
 }
 
+/** 선택 언어로 번역된 문구를 돌려준다. 키가 없으면 키 이름을 그대로 보여준다. */
 export function t(lang, key) {
   const entry = T[key]
   if (!entry) return key
@@ -60,6 +62,8 @@ const T = {
   chkCard: { ko: '외국인등록증 준비', vi: 'Chuẩn bị thẻ người nước ngoài', en: 'Prepare residence card' },
   chkPay: { ko: '가상계좌로 납부', vi: 'Nộp qua tài khoản ảo', en: 'Pay by virtual account' },
   push7: { ko: '마감 7일 전이에요', vi: 'Còn 7 ngày đến hạn', en: '7 days left' },
+  stampTop: { ko: '공식 자료', vi: 'Tài liệu chính thức', en: 'Official sources' },
+  stampBottom: { ko: '대조 완료', vi: 'Đã đối chiếu', en: 'Cross-checked' },
 
   // 로그인 / 회원가입
   loginTitle: { ko: '로그인', vi: 'Đăng nhập', en: 'Log in' },
@@ -74,11 +78,28 @@ const T = {
   errPw4: { ko: '비밀번호를 4자 이상 입력하세요.', vi: 'Nhập mật khẩu từ 4 ký tự trở lên.', en: 'Enter at least 4 characters.' },
   newHere: { ko: '처음이신가요?', vi: 'Lần đầu sử dụng?', en: 'New here?' },
   signup: { ko: '회원가입', vi: 'Đăng ký', en: 'Sign up' },
-  demoNote: {
-    ko: '데모: 아무 이메일과 4자 이상 비밀번호로 로그인돼요.',
-    vi: 'Bản demo: đăng nhập bằng email bất kỳ và mật khẩu từ 4 ký tự.',
-    en: 'Demo: log in with any email and a password of 4+ characters.',
+  errPwRequired: { ko: '비밀번호를 입력하세요.', vi: 'Vui lòng nhập mật khẩu.', en: 'Please enter your password.' },
+  errLogin: {
+    ko: '이메일 또는 비밀번호가 맞지 않아요.',
+    vi: 'Email hoặc mật khẩu không đúng.',
+    en: 'Incorrect email or password.',
   },
+  errNetwork: {
+    ko: '서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.',
+    vi: 'Không thể kết nối máy chủ. Vui lòng kiểm tra Internet và thử lại.',
+    en: 'Could not reach the server. Check your connection and try again.',
+  },
+  errUnknown: {
+    ko: '요청을 처리하지 못했어요. 잠시 후 다시 시도하세요.',
+    vi: 'Không thể xử lý yêu cầu. Vui lòng thử lại sau.',
+    en: 'Something went wrong. Please try again later.',
+  },
+  sessionExpired: {
+    ko: '로그인이 만료됐어요. 다시 로그인하세요.',
+    vi: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+    en: 'Your session has expired. Please log in again.',
+  },
+  loading: { ko: '처리 중...', vi: 'Đang xử lý...', en: 'Working...' },
   pw8: { ko: '비밀번호 (8자 이상)', vi: 'Mật khẩu (từ 8 ký tự)', en: 'Password (8+ characters)' },
   pwConfirm: { ko: '비밀번호 확인', vi: 'Xác nhận mật khẩu', en: 'Confirm password' },
   errPw8: { ko: '비밀번호를 8자 이상 입력하세요.', vi: 'Nhập mật khẩu từ 8 ký tự trở lên.', en: 'Enter at least 8 characters.' },
@@ -132,17 +153,18 @@ const T = {
   },
 }
 
+// 국적 코드별 표시 이름 (한국어 이름은 data/mock.js의 NATIONALITIES)
 export const NATION_NAMES = {
-  베트남: { vi: 'Việt Nam', en: 'Vietnam' },
-  중국: { vi: 'Trung Quốc', en: 'China' },
-  우즈베키스탄: { vi: 'Uzbekistan', en: 'Uzbekistan' },
-  네팔: { vi: 'Nepal', en: 'Nepal' },
-  캄보디아: { vi: 'Campuchia', en: 'Cambodia' },
-  필리핀: { vi: 'Philippines', en: 'Philippines' },
-  태국: { vi: 'Thái Lan', en: 'Thailand' },
-  인도네시아: { vi: 'Indonesia', en: 'Indonesia' },
-  몽골: { vi: 'Mông Cổ', en: 'Mongolia' },
-  기타: { vi: 'Khác', en: 'Other' },
+  VN: { vi: 'Việt Nam', en: 'Vietnam' },
+  CN: { vi: 'Trung Quốc', en: 'China' },
+  UZ: { vi: 'Uzbekistan', en: 'Uzbekistan' },
+  NP: { vi: 'Nepal', en: 'Nepal' },
+  KH: { vi: 'Campuchia', en: 'Cambodia' },
+  PH: { vi: 'Philippines', en: 'Philippines' },
+  TH: { vi: 'Thái Lan', en: 'Thailand' },
+  ID: { vi: 'Indonesia', en: 'Indonesia' },
+  MN: { vi: 'Mông Cổ', en: 'Mongolia' },
+  ZZ: { vi: 'Khác', en: 'Other' },
 }
 
 export const VISA_NAMES = {
