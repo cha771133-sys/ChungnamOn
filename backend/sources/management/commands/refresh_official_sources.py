@@ -6,7 +6,7 @@ from sources.models import CrawlLog, SourceDocument, SourceRefreshTarget
 from sources.services.collector import Collector
 from sources.services.errors import CollectionError
 from sources.services.freshness import is_due, next_due_at
-from sources.services.normalization import official_url
+from sources.services.normalization import optional_official_url
 from sources.services.providers.law_api import LawAPIClient
 from sources.services.providers.public_data import PublicDataClient
 from sources.services.refresh_service import refresh_target
@@ -78,7 +78,7 @@ class Command(BaseCommand):
                 continue
             seen.add(external_id)
             raw_link = row.get('상세조회URL') if provider == 'public_data' else row.get('자치법규상세링크')
-            link = official_url(raw_link, provider)
+            link = optional_official_url(raw_link, provider)
             defaults = {'source_url': link, 'configuration': {'collection_region': options['region'], 'history': False}}
             target = SourceRefreshTarget.objects.filter(provider=provider, external_id=external_id).first()
             if target is None:

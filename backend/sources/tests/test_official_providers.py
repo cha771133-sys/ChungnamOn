@@ -83,6 +83,14 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertIsNone(record.source_url)
         self.assertFalse(record.metadata['source_link_available'])
 
+    def test_public_unusable_link_is_omitted_without_losing_policy_body(self):
+        listing = {**PUBLIC_ROW, '상세조회URL': 'https://www.gov.kr/detail?serviceKey=test-public-secret'}
+        self.transport.get.side_effect = [envelope([listing]), envelope([PUBLIC_ROW]), envelope([])]
+        record = self.public.fetch(SimpleNamespace(external_id=PUBLIC_ROW['서비스ID'], configuration={}))
+        self.assertIsNone(record.source_url)
+        self.assertIn(PUBLIC_ROW['선정기준'], record.content_text)
+        self.assertNotIn('test-public-secret', record.content_text)
+
     def test_public_bad_envelope_and_internal_errors(self):
         for payload in ({'code': -4, 'msg': 'test-public-secret'}, {'response': {'header': {'resultCode': '99'}}}, {'data': []}, envelope(['bad']), {**envelope([]), 'page': 2}):
             with self.subTest(payload=payload):
@@ -110,7 +118,8 @@ class OfficialProviderTests(SimpleTestCase):
         for region, sborg in (('충청남도', None), ('천안시', '4490000'), ('아산시', '4520000')):
             for history in (False, True):
                 with self.subTest(region=region, history=history):
-                    self.transport.get.return_value = {'OrdinSearch': {'totalCnt': '1', 'page': '1', 'law': {'자치법규ID': '9999001', '지자체기관명': f'충청남도 {region}'}}}
+                    institution = '충청남도' if region == '충청남도' else f'충청남도 {region}'
+                    self.transport.get.return_value = {'OrdinSearch': {'totalCnt': '1', 'page': '1', 'law': {'자치법규ID': '9999001', '지자체기관명': institution}}}
                     rows = list(self.law.list_ordinances(query='주민', region=region, history=history))
                     self.assertEqual(len(rows), 1)
                     params = self.transport.get.call_args.args[1]
@@ -118,6 +127,21 @@ class OfficialProviderTests(SimpleTestCase):
                     self.assertEqual(params['org'], '6440000')
                     self.assertEqual(params.get('sborg'), sborg)
                     self.assertEqual(params['nw'], 2 if history else 1)
+
+    def test_law_province_scope_excludes_other_city_jurisdictions(self):
+        self.transport.get.return_value = {'OrdinSearch': {'totalCnt': 2, 'law': [
+            {'자치법규ID': '1', '지자체기관명': '충청남도'},
+            {'자치법규ID': '2', '지자체기관명': '충청남도 논산시'},
+        ]}}
+        rows = list(self.law.list_ordinances(query='지방세', region='충청남도'))
+        self.assertEqual([row['자치법규ID'] for row in rows], ['1'])
+
+    def test_law_history_allows_distinct_versions_of_same_stable_id(self):
+        self.transport.get.return_value = {'OrdinSearch': {'totalCnt': 2, 'law': [
+            {'자치법규ID': '1', '자치법규일련번호': '10', '지자체기관명': '아산시'},
+            {'자치법규ID': '1', '자치법규일련번호': '20', '지자체기관명': '아산시'},
+        ]}}
+        self.assertEqual(len(list(self.law.list_ordinances(query='주민', region='아산시', history=True))), 2)
 
     def test_law_body_preserves_articles_dates_and_unknown_effect(self):
         self.transport.get.side_effect = [parse_payload(LAW_BODY), {'OrdinSearch': {'totalCnt': '0'}}]
@@ -141,6 +165,15 @@ class OfficialProviderTests(SimpleTestCase):
         self.transport.get.side_effect = [parse_payload(LAW_BODY), {'OrdinSearch': {'totalCnt': 1, 'law': {**row, '자치법규일련번호': 'newer'}}}]
         with self.assertRaisesMessage(CollectionError, 'VERSION_CONFLICT'):
             self.law.fetch(target)
+
+    def test_law_api_link_is_not_stored_as_public_source_but_body_is_collected(self):
+        row = {'자치법규ID': '9999001', '지자체기관명': '아산시', '자치법규일련번호': '9999002', '자치법규상세링크': '/DRF/lawService.do?OC=test-law-secret&target=ordin&ID=9999001'}
+        self.transport.get.side_effect = [parse_payload(LAW_BODY), {'OrdinSearch': {'totalCnt': 1, 'law': row}}]
+        record = self.law.fetch(SimpleNamespace(external_id='9999001', source_url=None, configuration={'collection_region': '아산시'}))
+        self.assertIsNone(record.source_url)
+        self.assertFalse(record.metadata['source_link_available'])
+        self.assertIn('제1조', record.content_text)
+        self.assertNotIn('test-law-secret', record.content_text)
 
     def test_law_region_mismatch_rejected(self):
         self.transport.get.return_value = parse_payload(LAW_BODY)

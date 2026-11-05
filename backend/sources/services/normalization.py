@@ -15,6 +15,8 @@ from .source_registry import validate_source_url
 def official_url(value, provider):
     if not value:
         return None
+    if not isinstance(value, str):
+        raise CollectionError('SOURCE_URL_INVALID', '공식 상세 페이지 URL은 문자열이어야 합니다.')
     if provider == 'html':
         return validate_source_url(value)
     # 법제처가 제공하는 상대 상세링크만 공식 호스트에 결합한다.
@@ -35,6 +37,16 @@ def official_url(value, provider):
         return normalize_source_url(value)
     except (ValueError, TypeError):
         raise CollectionError('SOURCE_URL_INVALID', '인증정보 없는 공식 상세 페이지를 확인하지 못했습니다.') from None
+
+
+def optional_official_url(value, provider):
+    """API의 링크가 공개 근거로 부적합하면 외부 ID로 수집하고 링크는 비워 둔다."""
+    try:
+        return official_url(value, provider)
+    except CollectionError as error:
+        if error.code != 'SOURCE_URL_INVALID':
+            raise
+        return None
 
 
 def official_date(value):

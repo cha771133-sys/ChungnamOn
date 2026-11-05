@@ -127,6 +127,18 @@ class RefreshCommandTests(TestCase):
         self.assertFalse(SourceDocument.objects.exists())
         self.assertFalse(CrawlLog.objects.exists())
 
+    def test_unusable_discovery_link_does_not_stop_remaining_rows(self):
+        self.public.list_services.return_value = [
+            {'서비스ID': 'service-1', '상세조회URL': 'https://www.gov.kr/detail?serviceKey=private-key'},
+            {'서비스ID': 'service-2', '상세조회URL': 'https://www.gov.kr/test-fixtures/normal'},
+        ]
+        self.public.fetch.side_effect = lambda target: make_record(external_id=target.external_id)
+        self.command('--provider', 'public_data', '--discover', '--query', '주민')
+        self.assertEqual(SourceDocument.objects.count(), 2)
+        self.assertEqual(self.public.fetch.call_count, 2)
+        self.assertNotIn('private-key', self.output.getvalue())
+        self.assertIsNone(SourceRefreshTarget.objects.get(external_id='service-1').source_url)
+
     def test_legacy_registry_disabled_entries_are_not_registered(self):
         with patch('sources.management.commands.refresh_official_sources.load_registry', return_value=[spec(enabled=False)]):
             self.command('--provider', 'html')

@@ -1,12 +1,17 @@
 import os
 
 from ..errors import CollectionError
-from ..normalization import OfficialRecord, canonical_text, official_date, official_url
+from ..normalization import OfficialRecord, canonical_text, official_date, optional_official_url
 from .transport import APITransport
 
 
 BASE_URL = 'https://www.law.go.kr/DRF/'
 REGIONS = {'충청남도': ('6440000', None), '천안시': ('6440000', '4490000'), '아산시': ('6440000', '4520000')}
+
+
+def matches_region(institution, region):
+    # org만 지정하면 도내 다른 시·군도 응답될 수 있다. 도 자체 자료와 시 자료를 구분한다.
+    return institution.strip() == '충청남도' if region == '충청남도' else region in institution
 
 
 def values_for(data, key):
@@ -74,12 +79,13 @@ class LawAPIClient:
                 raise CollectionError('PAGINATION_STALLED', '법제처 목록이 완료 전에 중단되었습니다.')
             for row in rows:
                 external_id = scalar(row, '자치법규ID')
-                if not external_id or external_id in seen:
+                identity = (external_id, scalar(row, '자치법규일련번호')) if history else external_id
+                if not external_id or identity in seen:
                     raise CollectionError('PAGINATION_STALLED', '자치법규 ID가 없거나 페이지가 반복되었습니다.')
-                seen.add(external_id)
+                seen.add(identity)
                 # API 검색 범위와 별개로 실제 관할기관을 검증한다.
                 institution = scalar(row, '지자체기관명')
-                if region not in institution:
+                if not matches_region(institution, region):
                     continue
                 yield {**row, '_history': history, '_collection_region': region}
                 count += 1
@@ -100,7 +106,7 @@ class LawAPIClient:
         data = self.detail(target.external_id)
         institution = scalar(data, '지자체기관명')
         collection_region = target.configuration.get('collection_region', '')
-        if collection_region not in REGIONS or collection_region not in institution:
+        if collection_region not in REGIONS or not matches_region(institution, collection_region):
             raise CollectionError('REGION_MISMATCH', '등록 범위와 자치법규 관할기관이 일치하지 않습니다.')
         # ID는 안정적이지만 상세링크의 일련번호는 개정마다 달라질 수 있다.
         # 현재 목록을 다시 확인해 같은 버전에서 제공한 링크만 근거로 사용한다.
@@ -112,7 +118,7 @@ class LawAPIClient:
         serial = scalar(data, '자치법규일련번호')
         if listing and serial and scalar(listing, '자치법규일련번호') != serial:
             raise CollectionError('VERSION_CONFLICT', '목록과 본문의 개정 버전이 달라 다음 실행에서 다시 확인해야 합니다.')
-        link = official_url(listing.get('자치법규상세링크'), 'law') if listing else None
+        link = optional_official_url(listing.get('자치법규상세링크'), 'law') if listing else None
         return OfficialRecord(
             provider='law', external_id=target.external_id, source_url=link,
             title=scalar(data, '자치법규명'), agency=institution, region='확인 필요',
