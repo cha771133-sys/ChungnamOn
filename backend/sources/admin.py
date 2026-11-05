@@ -45,16 +45,26 @@ class FreshnessFilter(admin.SimpleListFilter):
 
 
 class SourceDocumentAdminForm(forms.ModelForm):
+    expected_version = forms.IntegerField(min_value=0, required=False, widget=forms.HiddenInput)
+
     class Meta:
         model = SourceDocument
         fields = '__all__'
 
+    def __init__(self, *args, **kwargs):
+        """화면을 연 시점의 승인 정보 버전을 숨김 필드로 제출하도록 초기화한다."""
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            self.initial['expected_version'] = self.instance.version
+
     def clean(self):
-        """Admin POST 트랜잭션에서 승인과 직렬화하여 이전 폼의 재활성화를 막는다."""
+        """모든 상태의 저장을 승인과 직렬화하고 이전 화면의 메타데이터·상태 덮어쓰기를 막는다."""
         cleaned_data = super().clean()
-        if self.instance.pk and cleaned_data.get('status') == SourceDocument.Status.ACTIVE:
+        if self.instance.pk:
             current = SourceDocument.objects.select_for_update().get(pk=self.instance.pk)
-            if current.ai_reprocessing_required:
+            if cleaned_data.get('expected_version') != current.version:
+                self.add_error(None, '화면을 연 뒤 자료가 변경되었습니다. 최신 화면을 다시 열어 확인하세요.')
+            if cleaned_data.get('status') == SourceDocument.Status.ACTIVE and current.ai_reprocessing_required:
                 self.add_error('status', 'AI 재처리가 끝날 때까지 자료를 사용 중으로 변경할 수 없습니다.')
         return cleaned_data
 

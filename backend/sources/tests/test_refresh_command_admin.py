@@ -1,4 +1,5 @@
 from datetime import timedelta
+from dataclasses import replace
 from io import StringIO
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
@@ -246,6 +247,7 @@ class RefreshAdminTests(TestCase):
         url = reverse('admin:sources_sourcedocument_change', args=[document.pk])
         data = {field: getattr(document, field) for field in ('title', 'agency', 'region', 'category')}
         page = self.client.get(url)
+        data['expected_version'] = page.context['adminform'].form['expected_version'].value()
         data.update({field.html_name: field.value() for inline in page.context['inline_admin_formsets'] for field in inline.formset.management_form})
         response = self.client.post(url, {**data, 'status': 'ACTIVE', '_save': '저장'})
         self.assertEqual(response.status_code, 200)
@@ -265,9 +267,46 @@ class RefreshAdminTests(TestCase):
         model_admin = admin.site._registry[SourceDocument]
         form_class = model_admin.get_form(SimpleNamespace(user=self.admin), old_document)
         data = {field: getattr(old_document, field) for field in ('title', 'agency', 'region', 'category')}
-        form = form_class({**data, 'status': 'ACTIVE'}, instance=old_document)
+        form = form_class({**data, 'status': 'ACTIVE', 'expected_version': old_document.version}, instance=old_document)
         review_revision(self.revision.pk, self.admin, approve=True)
         self.assertFalse(old_document.ai_reprocessing_required)
         self.assertFalse(form.is_valid())
         self.assertIn('status', form.errors)
         self.assertEqual(SourceDocument.objects.get().status, 'PENDING')
+
+    def test_stale_admin_page_cannot_revert_approved_metadata_in_any_status(self):
+        """승인 전 GET의 버전으로 제출한 PENDING·INACTIVE 폼은 승인 메타데이터를 덮지 못한다."""
+        review_revision(self.revision.pk, self.admin, approve=True)
+        document = SourceDocument.objects.get()
+        self.client.force_login(self.admin)
+        url = reverse('admin:sources_sourcedocument_change', args=[document.pk])
+        page = self.client.get(url)
+        data = {field: getattr(document, field) for field in ('title', 'agency', 'region', 'category')}
+        data['expected_version'] = page.context['adminform'].form['expected_version'].value()
+        self.assertEqual(data['expected_version'], document.version)
+        data.update({field.html_name: field.value() for inline in page.context['inline_admin_formsets'] for field in inline.formset.management_form})
+        target = SourceRefreshTarget.objects.get()
+        refresh_target(target, Mock(fetch=Mock(return_value=replace(make_record(), title='새로 승인한 제목'))))
+        candidate = SourceRevision.objects.get(review_status='PENDING_REVIEW')
+        review_revision(candidate.pk, self.admin, approve=True)
+        approved = SourceDocument.objects.values().get(pk=document.pk)
+        for status in ('PENDING', 'INACTIVE'):
+            with self.subTest(status=status):
+                response = self.client.post(url, {**data, 'category': '분류만 수정', 'status': status, '_save': '저장'})
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('화면을 연 뒤 자료가 변경', str(response.context['adminform'].form.non_field_errors()))
+                self.assertEqual(SourceDocument.objects.values().get(pk=document.pk), approved)
+
+    def test_existing_admin_document_requires_submitted_version(self):
+        """버전 필드를 누락한 기존 자료 저장을 현재 DB 버전으로 간주하여 허용하지 않는다."""
+        self.client.force_login(self.admin)
+        document = SourceDocument.objects.get()
+        url = reverse('admin:sources_sourcedocument_change', args=[document.pk])
+        page = self.client.get(url)
+        data = {field: getattr(document, field) for field in ('title', 'agency', 'region', 'category')}
+        data.update({field.html_name: field.value() for inline in page.context['inline_admin_formsets'] for field in inline.formset.management_form})
+        before = SourceDocument.objects.values().get(pk=document.pk)
+        response = self.client.post(url, {**data, 'title': '버전 없는 수정', 'status': 'INACTIVE', '_save': '저장'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['adminform'].form.non_field_errors())
+        self.assertEqual(SourceDocument.objects.values().get(pk=document.pk), before)
