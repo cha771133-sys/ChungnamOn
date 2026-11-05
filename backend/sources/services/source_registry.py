@@ -23,7 +23,7 @@ OFFICIAL_HOSTS = frozenset({
 REGIONS = frozenset({'충청남도', '천안시', '아산시', '전국'})
 CATEGORIES = frozenset({'지방세', '건강보험', '출입국·체류'})
 DEFAULT_REGISTRY = Path(__file__).resolve().parent.parent / 'data' / 'source_urls.yaml'
-SENSITIVE_KEY = re.compile(r'token|password|passwd|secret|api.?key|session|authorization', re.I)
+SENSITIVE_KEY = re.compile(r'token|password|passwd|secret|api.?key|service.?key|^oc$|session|authorization', re.I)
 
 
 def validate_source_url(value):
