@@ -212,15 +212,15 @@ class DocumentDetailView(generics.RetrieveDestroyAPIView):
         if document.status == Document.Status.PROCESSING:
             return self._processing_response(document)
 
-        # 조회 뒤 처리가 시작됐을 수 있어 PROCESSING이 아닐 때만 지운다.
-        deleted, _ = Document.objects.filter(pk=document.pk).exclude(
-            status=Document.Status.PROCESSING,
-        ).delete()
-        if not deleted:
-            current = Document.objects.filter(pk=document.pk).first()
+        # 조회 뒤 처리가 시작됐을 수 있어 행을 잠근 채 상태를 다시 확인하고 지운다.
+        # 잠금 중에는 process_document의 선점 update가 대기하고, 삭제 후에는 선점에 실패한다.
+        with transaction.atomic():
+            current = Document.objects.select_for_update().filter(pk=document.pk).first()
             if current is None:
                 raise Http404
-            return self._processing_response(current)
+            if current.status == Document.Status.PROCESSING:
+                return self._processing_response(current)
+            current.delete()
 
         try:
             document.file.delete(save=False)
