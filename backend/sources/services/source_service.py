@@ -63,6 +63,16 @@ def collect_source(spec, collector, *, dry_run=False):
         return CollectionResult('skipped', '비활성화된 자료입니다.')
     # 목록 밖 직접 호출에도 동일한 URL 경계를 적용한다. 예외에 URL 원문을 포함하지 않는다.
     validate_source_url(spec.url)
+    # P3-17에 등록한 자료는 이전 명령으로 실행해도 승인 본문을 직접 교체하지 않는다.
+    from sources.models import SourceRefreshTarget
+    from .refresh_service import refresh_target
+    target = SourceRefreshTarget.objects.filter(provider='html', source_url=spec.url).first()
+    if target is not None:
+        result = refresh_target(target, collector, dry_run=dry_run)
+        return CollectionResult(
+            'updated' if result.outcome == 'candidate' else result.outcome,
+            result.message, result.title, result.content_hash, result.characters,
+        )
     log = None
     if not dry_run:
         try:
