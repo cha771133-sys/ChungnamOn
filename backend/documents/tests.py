@@ -8,6 +8,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APITestCase
 
+from accounts.models import UserProfile
+
 from .models import Document, InterpretationResult
 from .serializers import MAX_FILE_SIZE
 from .services import pipeline
@@ -197,6 +199,20 @@ class DocumentProcessingTests(TestCase):
         self.assertNotIn('900101-5123456', result.original_text)
         self.assertEqual(result.verification['status'], 'MATCHED')
         self.assertEqual(result.language, pipeline.DEFAULT_LANGUAGE)
+
+    def test_result_uses_profile_language(self):
+        UserProfile.objects.create(user=self.user, language=UserProfile.Language.ENGLISH)
+
+        process_document(self.document.id)
+
+        self.assertEqual(self.document.result.language, UserProfile.Language.ENGLISH)
+
+    def test_blank_profile_language_uses_default(self):
+        UserProfile.objects.create(user=self.user, language='')
+
+        process_document(self.document.id)
+
+        self.assertEqual(self.document.result.language, pipeline.DEFAULT_LANGUAGE)
 
     def test_steps_advance_in_order(self):
         seen = []

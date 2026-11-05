@@ -16,11 +16,13 @@ import time
 from django.conf import settings
 from django.db import transaction
 
+from accounts.models import UserProfile
+
 from ..models import Document, InterpretationResult
 
 logger = logging.getLogger(__name__)
 
-# accounts 프로필(안내 언어)이 생기기 전까지 쓰는 기본 언어
+# 프로필이 없거나 안내 언어를 고르지 않은 사용자에게 쓰는 기본 언어
 DEFAULT_LANGUAGE = 'vi'
 
 FAIL_MESSAGES = {
@@ -139,7 +141,10 @@ def verify(result):
 
 
 def get_language(document):
-    return getattr(document.owner, 'language', '') or DEFAULT_LANGUAGE
+    language = UserProfile.objects.filter(user_id=document.owner_id).values_list(
+        'language', flat=True,
+    ).first()
+    return language or DEFAULT_LANGUAGE
 
 
 def process_document(document_id):
