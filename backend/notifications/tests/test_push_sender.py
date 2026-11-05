@@ -94,6 +94,17 @@ class PushSenderTests(SimpleTestCase):
     def test_empty_provider_response_is_uncertain(self, send, initialize):
         self.assertEqual(send_deadline_push(**self.fields()).status, PushStatus.UNKNOWN)
 
+    @patch(f'{MODULE}.messaging.send')
+    @patch(f'{MODULE}.get_firebase_app')
+    def test_missing_project_id_is_configuration_error(self, initialize, send):
+        initialize.return_value = Mock(project_id=None)
+
+        result = send_deadline_push(**self.fields())
+
+        self.assertEqual(result.status, PushStatus.CONFIGURATION_ERROR)
+        self.assertEqual(result.error_code, 'FIREBASE_CONFIGURATION')
+        send.assert_not_called()
+
 
 class FirebaseInitializationTests(SimpleTestCase):
     @override_settings(FIREBASE_SERVICE_ACCOUNT_JSON='{"project_id":"test-project"}')

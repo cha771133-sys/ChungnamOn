@@ -84,6 +84,8 @@ def send_deadline_push(**message_fields):
         return PushResult(PushStatus.PERMANENT_ERROR, 'INVALID_PAYLOAD')
     try:
         app = get_firebase_app()
+        if not app.project_id:
+            return PushResult(PushStatus.CONFIGURATION_ERROR, 'FIREBASE_CONFIGURATION')
     except (DefaultCredentialsError, RefreshError, ValueError, TypeError, KeyError, OSError):
         return PushResult(PushStatus.CONFIGURATION_ERROR, 'FIREBASE_CONFIGURATION')
     try:
