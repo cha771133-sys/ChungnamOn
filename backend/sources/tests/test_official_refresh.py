@@ -314,6 +314,16 @@ class OfficialRefreshTests(TestCase):
 
 
 class OfficialFreshnessTests(TestCase):
+    @override_settings(OFFICIAL_SOURCE_INTERVAL_HOURS={'html': 2})
+    def test_unregistered_document_uses_same_configured_period_as_database_filter(self):
+        document = SourceDocument.objects.create(
+            source_url='https://www.asan.go.kr/test-fixtures/without-target', title='기존 안내',
+            agency='아산시', region='아산시', category='지방세', review_status='APPROVED',
+            collected_at=timezone.now() - timedelta(hours=3),
+        )
+        self.assertEqual(freshness(document), 'STALE')
+        self.assertEqual(list(filter_freshness(SourceDocument.objects.all(), 'STALE').values_list('pk', flat=True)), [document.pk])
+
     def test_different_type_periods_and_per_target_override(self):
         checked = timezone.now()
         intervals = []

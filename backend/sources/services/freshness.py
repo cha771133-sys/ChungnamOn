@@ -45,7 +45,8 @@ def freshness(document, now=None):
     if target and target.failures:
         return 'REFRESH_FAILED'
     checked = document.last_success_at or document.collected_at
-    hours = interval_hours(target) if target else DEFAULT_INTERVAL_HOURS[document.provider]
+    configured = getattr(settings, 'OFFICIAL_SOURCE_INTERVAL_HOURS', {})
+    hours = interval_hours(target) if target else configured.get(document.provider, DEFAULT_INTERVAL_HOURS[document.provider])
     if not checked or checked + timedelta(hours=hours) <= now:
         return 'STALE'
     return 'CURRENT'
