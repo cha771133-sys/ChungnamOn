@@ -85,6 +85,7 @@ def interpret(masked_text, language):
         "title": str,
         "original_text": str,               # 마스킹된 원문 그대로
         "translated_text": str,             # language로 번역한 전문
+        "language": str,                    # translated_text의 실제 언어 코드. 결과에 이 값을 저장한다
         "summary": [str],                   # 핵심 요약 문장
         "terms": [{"word": str, "explain": str}],
         "deadlines": [{"label": str, "date": "YYYY-MM-DD"}],
@@ -92,10 +93,12 @@ def interpret(masked_text, language):
         "agency": {"name": str, "phone": str, "source": "document" | "official" | "unknown"},
     }
     """
+    # 더미는 요청 언어와 상관없이 베트남어 번역만 돌려준다.
     return {
         'doc_type': '고지서',
         'title': '주민세 납부 안내',
         'original_text': masked_text,
+        'language': 'vi',
         'translated_text': (
             'Thông báo nộp thuế cư trú (cá nhân) năm 2026\n'
             'Số tiền thuế: 6.250 won\n'
@@ -167,13 +170,12 @@ def process_document(document_id):
         masked = mask_personal_info(ocr['text'])
 
         _advance(document, Document.Step.INTERPRETING)
-        language = get_language(document)
-        result = interpret(masked['masked_text'], language)
+        result = interpret(masked['masked_text'], get_language(document))
 
         _advance(document, Document.Step.VERIFYING)
         verification = verify(result)
 
-        _save_result(document, ocr, masked, result, verification, language)
+        _save_result(document, ocr, masked, result, verification)
     except Exception:
         logger.exception('문서 처리 실패: document_id=%s step=%s', document.id, document.step)
         document.status = Document.Status.FAILED
@@ -190,7 +192,7 @@ def _advance(document, step):
         time.sleep(delay)
 
 
-def _save_result(document, ocr, masked, result, verification, language):
+def _save_result(document, ocr, masked, result, verification):
     threshold = getattr(settings, 'DOCUMENTS_LOW_CONFIDENCE_THRESHOLD', 0.7)
     with transaction.atomic():
         InterpretationResult.objects.update_or_create(
@@ -206,7 +208,7 @@ def _save_result(document, ocr, masked, result, verification, language):
                 'required_docs': result['required_docs'],
                 'agency': result['agency'],
                 'verification': verification,
-                'language': language,
+                'language': result['language'],
             },
         )
         document.doc_type = result['doc_type']

@@ -200,19 +200,42 @@ class DocumentProcessingTests(TestCase):
         self.assertEqual(result.verification['status'], 'MATCHED')
         self.assertEqual(result.language, pipeline.DEFAULT_LANGUAGE)
 
-    def test_result_uses_profile_language(self):
+    def interpret_spy(self):
+        return mock.patch.object(pipeline, 'interpret', wraps=pipeline.interpret)
+
+    def test_interpret_receives_profile_language(self):
         UserProfile.objects.create(user=self.user, language=UserProfile.Language.ENGLISH)
 
-        process_document(self.document.id)
+        with self.interpret_spy() as interpret:
+            process_document(self.document.id)
 
-        self.assertEqual(self.document.result.language, UserProfile.Language.ENGLISH)
+        self.assertEqual(interpret.call_args.args[1], UserProfile.Language.ENGLISH)
 
     def test_blank_profile_language_uses_default(self):
         UserProfile.objects.create(user=self.user, language='')
 
+        with self.interpret_spy() as interpret:
+            process_document(self.document.id)
+
+        self.assertEqual(interpret.call_args.args[1], pipeline.DEFAULT_LANGUAGE)
+
+    def test_saved_language_matches_translation(self):
+        # 더미 번역은 베트남어뿐이라 영어 프로필이어도 결과 언어는 vi로 저장한다.
+        UserProfile.objects.create(user=self.user, language=UserProfile.Language.ENGLISH)
+
         process_document(self.document.id)
 
-        self.assertEqual(self.document.result.language, pipeline.DEFAULT_LANGUAGE)
+        result = self.document.result
+        self.assertEqual(result.language, 'vi')
+        self.assertIn('Thông báo nộp thuế', result.translated_text)
+
+    def test_saved_language_follows_interpret_output(self):
+        translated = {**pipeline.interpret('', 'en'), 'language': 'en', 'translated_text': 'Resident tax notice'}
+
+        with mock.patch.object(pipeline, 'interpret', return_value=translated):
+            process_document(self.document.id)
+
+        self.assertEqual(self.document.result.language, 'en')
 
     def test_steps_advance_in_order(self):
         seen = []
