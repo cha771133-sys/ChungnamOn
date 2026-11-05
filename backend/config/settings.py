@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'documents',
     'sources',
     'chatbot',
+    'notifications',
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -220,3 +221,6 @@ CSRF_TRUSTED_ORIGINS = [
 
 # P2-13: 로컬 더미만 제공한다. 지원하지 않는 실제 모드는 503으로 차단한다.
 CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
+
+# 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
+FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
