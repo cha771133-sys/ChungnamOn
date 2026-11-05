@@ -181,17 +181,18 @@ def review_revision(revision_id, user, *, approve):
         if approve:
             if document.version != revision.base_version or document.content_hash != revision.previous_hash or document.observed_hash != revision.content_hash:
                 raise CollectionError('REVIEW_CONFLICT', '더 최근 자료 또는 관리자 수정이 있습니다. 최신 후보를 검토하세요.')
+            needs_reprocessing = document.ai_reprocessing_required or document.review_status != 'APPROVED' or document.content_hash != revision.content_hash or document.content_text != revision.content_text
             for name, value in revision.metadata.items():
                 setattr(document, name, official_date(value) if name in ('published_at', 'effective_at') else value)
             document.content_text, document.content_hash = revision.content_text, revision.content_hash
             document.collected_at = revision.collected_at
             document.review_status = 'APPROVED'
             document.reviewed_by, document.reviewed_at = user, now
-            document.ai_reprocessing_required = True
+            document.ai_reprocessing_required = needs_reprocessing
             document.version += 1
             # 기존 AI 검색도 ACTIVE를 사용한다. 새 승인 본문과 이전 청크가 섞이지 않도록
             # 재처리 확인 전에는 검색에서 제외하고 관리자의 사용 중지는 그대로 보존한다.
-            if document.status != 'INACTIVE':
+            if document.status != 'INACTIVE' and (needs_reprocessing or not document.source_url):
                 document.status = 'PENDING'
             document.full_clean()
             document.save()

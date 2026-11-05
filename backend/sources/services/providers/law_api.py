@@ -43,7 +43,7 @@ class LawAPIClient:
         error_root = data.get('Response', data.get('response', data))
         if isinstance(error_root, dict) and any(key.lower() in ('error', 'errors', 'openapi_serviceresponse', 'result', 'errorcode') for key in error_root):
             response_message = str(error_root.get('result', ''))
-            if '사용자' in response_message and '검증' in response_message or '인증' in response_message:
+            if ('사용자' in response_message and '검증' in response_message) or '인증' in response_message:
                 raise CollectionError('AUTH_FAILED', '법제처 인증값 및 등록된 호출 서버 권한을 확인하세요.')
             raise CollectionError('API_ERROR', '법제처 API가 내부 오류를 반환했습니다.')
         return data

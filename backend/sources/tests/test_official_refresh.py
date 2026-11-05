@@ -98,6 +98,19 @@ class OfficialRefreshTests(TestCase):
         self.assertEqual(SourceRevision.objects.count(), 1)
         self.assertEqual(CrawlLog.objects.count(), 2)
 
+    def test_same_body_metadata_review_does_not_request_reembedding_again(self):
+        self.record = replace(self.record, source_url='https://www.gov.kr/test-fixtures/old-link')
+        document = self.approve_initial()
+        SourceDocument.objects.filter(pk=document.pk).update(ai_reprocessing_required=False, status='ACTIVE')
+        updated_link = replace(self.record, source_url='https://www.gov.kr/test-fixtures/new-link')
+        self.assertEqual(self.refresh(updated_link).outcome, 'candidate')
+        candidate = SourceRevision.objects.get(review_status='PENDING_REVIEW')
+        review_revision(candidate.pk, self.admin, approve=True)
+        document.refresh_from_db()
+        self.assertFalse(document.ai_reprocessing_required)
+        self.assertEqual(document.status, 'ACTIVE')
+        self.assertEqual(document.source_url, updated_link.source_url)
+
     def test_changed_body_preserves_approved_body_hash_date_and_chunks_until_approval(self):
         document = self.approve_initial()
         old_hash, old_date = document.content_hash, document.collected_at
