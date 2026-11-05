@@ -35,6 +35,11 @@ def _store(spec, page, digest, checked_at, started_at):
                 'collected_at': checked_at, 'status': SourceDocument.Status.ACTIVE,
             },
         )
+        # 요청 전 조회 이후 관리 대상으로 전환될 수 있다. 저장 시점에도 다시 확인해
+        # 이미 실행 중이던 이전 수집기가 승인 본문·검토자 정보를 우회하지 못하게 한다.
+        from sources.models import SourceRefreshTarget
+        if SourceRefreshTarget.objects.filter(provider='html', source_url=spec.url).exists() or document.revisions.exists():
+            raise CollectionError('MANAGED_SOURCE', '관리 대상으로 전환된 자료입니다. 공식자료 재수집 명령으로 다시 실행하세요.')
         if created:
             return 'new'
         # 행 잠금을 얻은 뒤 요청 시작 순서를 비교한다. 완료 순서로 원문이 역행하지 않게 한다.

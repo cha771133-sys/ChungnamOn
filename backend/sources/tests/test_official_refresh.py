@@ -297,6 +297,39 @@ class OfficialRefreshTests(TestCase):
         self.assertEqual(target.document.content_text, '')
         self.assertIn('8월 31일', target.document.revisions.get().content_text)
 
+    def test_legacy_writer_admitted_before_registration_cannot_overwrite_approved_body(self):
+        html_spec = spec()
+        original_create = CrawlLog.objects.create
+        registered = False
+
+        def create_log(**kwargs):
+            nonlocal registered
+            if not registered and 'target' not in kwargs:
+                # 이전 수집기의 사전 조회 직후 등록·수집·승인이 끝나고,
+                # 이전 수집기의 시작 로그는 그보다 나중에 생기는 순서를 재현한다.
+                registered = True
+                target = SourceRefreshTarget.objects.create(provider='html', source_url=html_spec.url, configuration={key: getattr(html_spec, key) for key in ('title', 'agency', 'region', 'category')})
+                approved_client = collector()
+                response = approved_client.fetch.return_value
+                from sources.services.collector import HTMLResponse
+                approved_client.fetch.return_value = HTMLResponse(response.body.replace('8월 31일'.encode(), '9월 30일'.encode()), response.content_type, response.url)
+                self.assertEqual(refresh_target(target, approved_client).outcome, 'new')
+                revision = SourceRevision.objects.get(provider='html')
+                review_revision(revision.pk, self.admin, approve=True)
+            return original_create(**kwargs)
+
+        with patch('sources.services.source_service.CrawlLog.objects.create', side_effect=create_log):
+            result = collect_source(html_spec, collector())
+        self.assertEqual(result.outcome, 'failed')
+        self.assertIn('MANAGED_SOURCE', result.message)
+        document = SourceDocument.objects.get(provider='html')
+        self.assertIn('9월 30일', document.content_text)
+        self.assertEqual(document.reviewed_by_id, self.admin.pk)
+        self.assertEqual(document.review_status, 'APPROVED')
+        self.assertEqual(document.status, 'PENDING')
+        self.assertTrue(document.ai_reprocessing_required)
+        self.assertEqual(SourceRevision.objects.filter(document=document).count(), 1)
+
     def test_old_chunks_require_matching_hash_and_processing_acknowledgment(self):
         document = self.approve_initial()
         chunk = SourceChunk.objects.create(source_document=document, chunk_order=0, chunk_text='원문', embedding=[1])

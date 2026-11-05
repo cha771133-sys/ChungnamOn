@@ -236,6 +236,19 @@ class OfficialProviderTests(SimpleTestCase):
             with self.subTest(url=url), self.assertRaises(CollectionError):
                 validate_api_url(url)
 
+    def test_provider_host_path_pairs_and_credentials_cannot_cross(self):
+        for url in ('https://api.odcloud.kr/DRF/lawSearch.do', 'https://www.law.go.kr/api/gov24/v3/serviceDetail'):
+            with self.subTest(url=url), self.assertRaises(CollectionError):
+                validate_api_url(url)
+        transport = APITransport()
+        self.addCleanup(transport.close)
+        with patch.object(transport, '_request') as request:
+            with self.assertRaises(CollectionError):
+                transport.get('https://www.law.go.kr/DRF/lawSearch.do', {}, authorization='public-key')
+            with self.assertRaises(CollectionError):
+                transport.get('https://api.odcloud.kr/api/gov24/v3/serviceList', {'OC': 'law-secret'})
+            request.assert_not_called()
+
     def test_api_connection_pins_public_ip_and_keeps_original_tls_hostname(self):
         adapter = APIHTTPSAdapter()
         self.addCleanup(adapter.close)

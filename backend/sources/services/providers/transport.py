@@ -12,15 +12,17 @@ from ..collector import Collector, MAX_BYTES, PinnedHTTPSAdapter, resolve_public
 from ..errors import CollectionError
 
 
-API_HOSTS = frozenset({'api.odcloud.kr', 'www.law.go.kr'})
-API_PATHS = frozenset({'/api/gov24/v3/serviceList', '/api/gov24/v3/serviceDetail', '/api/gov24/v3/supportConditions', '/DRF/lawSearch.do', '/DRF/lawService.do'})
+API_ENDPOINTS = {
+    'api.odcloud.kr': frozenset({'/api/gov24/v3/serviceList', '/api/gov24/v3/serviceDetail', '/api/gov24/v3/supportConditions'}),
+    'www.law.go.kr': frozenset({'/DRF/lawSearch.do', '/DRF/lawService.do'}),
+}
 
 
 def validate_api_url(url):
     """고정된 HTTPS API 주소만 허용하고 인증정보는 호출 인자로만 받는다."""
     try:
         parts = urlsplit(url)
-        if parts.scheme != 'https' or parts.hostname not in API_HOSTS or parts.port not in (None, 443) or parts.username or parts.password or parts.fragment or parts.path not in API_PATHS:
+        if parts.scheme != 'https' or parts.port not in (None, 443) or parts.username or parts.password or parts.fragment or parts.path not in API_ENDPOINTS.get(parts.hostname, ()):
             raise ValueError
         return url
     except ValueError:
@@ -98,6 +100,10 @@ class APITransport(Collector):
 
     def get(self, url, params, *, authorization=None):
         validate_api_url(url)
+        if authorization and urlsplit(url).hostname != 'api.odcloud.kr':
+            raise CollectionError('URL_REJECTED', '공공데이터 인증 헤더를 다른 제공자에 전달할 수 없습니다.')
+        if 'OC' in params and urlsplit(url).hostname != 'www.law.go.kr':
+            raise CollectionError('URL_REJECTED', '법제처 인증값을 다른 제공자에 전달할 수 없습니다.')
         prepared_url = Request('GET', url, params=params).prepare().url
         if authorization:
             self.session.headers['Authorization'] = f'Infuser {authorization}'
