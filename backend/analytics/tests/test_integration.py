@@ -57,6 +57,16 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertEqual(self.client.get(f'/api/documents/{document.pk}/result/').status_code, 401)
         self.assertFalse(KPIEvent.objects.filter(event_type=KPIEvent.Type.RESULT_PROVIDED).exists())
 
+    def test_historical_result_response_is_observed_without_inventing_old_completion(self):
+        document = self.document(status='DONE')
+        self.result(document)
+        self.assertEqual(self.client.get(f'/api/documents/{document.pk}/result/').status_code, 200)
+        self.client.get(f'/api/documents/{document.pk}/result/')
+        event = KPIEvent.objects.get()
+        self.assertEqual(event.event_type, KPIEvent.Type.RESULT_PROVIDED)
+        self.assertEqual(event.data_kind, 'UNKNOWN')
+        self.assertEqual(get_kpi_summary()['metrics'][0]['denominator'], 0)
+
     def test_stale_instance_and_repeated_step_saves_do_not_invent_start(self):
         document = self.document()
         document.status, document.step = 'PROCESSING', 'OCR'
