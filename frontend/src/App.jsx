@@ -64,7 +64,7 @@ const SCREENS = {
 export default function App() {
   const [data, setData] = useState(() => load() || fresh())
   const [stack, setStack] = useState(() => {
-    if (!data.onboarded) return [{ name: 'intro', params: {} }]
+    if (!data.onboarded) return [{ name: 'language', params: {} }]
     // 유저 플로우 n3 → n44 → n39: 마감 알림을 누르면 /?schedule=ID 로 열려 일정 상세로 이동
     const sid = new URLSearchParams(window.location.search).get('schedule')
     if (sid && data.schedules.some((s) => s.id === sid)) {
@@ -156,7 +156,7 @@ export default function App() {
     openLang: () => setSheet({ type: 'lang' }),
     resetDemo: () => {
       setData(fresh())
-      setStack([{ name: 'intro', params: {} }])
+      setStack([{ name: 'language', params: {} }])
       showToast('데모 데이터를 처음 상태로 되돌렸어요')
     },
   }

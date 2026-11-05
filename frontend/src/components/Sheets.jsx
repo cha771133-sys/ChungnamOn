@@ -1,6 +1,7 @@
 import { Check, ExternalLink, Share, PlusSquare, Download, Building2 } from 'lucide-react'
 import { useApp, fmtDate, pick } from '../store.js'
 import { LANGS, SOURCES } from '../data/mock.js'
+import { t } from '../i18n.js'
 import { Sheet, Badge } from './ui.jsx'
 
 export function SourceCard({ id }) {
@@ -33,11 +34,10 @@ function LangSheet() {
   const choose = (code) => {
     update((d) => ({ profile: { ...d.profile, language: code } }))
     setSheet(null)
-    const L = LANGS.find((l) => l.code === code)
-    showToast(`안내 언어를 ${L.ko}(으)로 바꿨어요`)
+    showToast(t(code, 'langChanged'))
   }
   return (
-    <Sheet title="안내 언어" onClose={() => setSheet(null)}>
+    <Sheet title={t(data.profile.language, 'langSheetTitle')} onClose={() => setSheet(null)}>
       <ul className="option-list">
         {LANGS.map((l) => (
           <li key={l.code}>
@@ -52,7 +52,7 @@ function LangSheet() {
           </li>
         ))}
       </ul>
-      <p className="hint">데모에는 베트남어, 영어, 한국어 해석 데이터만 들어 있어요. 다른 언어는 영어로 보여드려요.</p>
+      <p className="hint">{t(data.profile.language, 'langFallback')}</p>
     </Sheet>
   )
 }
