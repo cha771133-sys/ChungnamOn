@@ -63,6 +63,7 @@ class PushSenderTests(SimpleTestCase):
             (exceptions.UnauthenticatedError(FID), PushStatus.CONFIGURATION_ERROR, 'FIREBASE_AUTHENTICATION'),
             (RefreshError(FID), PushStatus.CONFIGURATION_ERROR, 'FIREBASE_AUTHENTICATION'),
             (exceptions.InvalidArgumentError(FID), PushStatus.PERMANENT_ERROR, 'INVALID_ARGUMENT'),
+            (ValueError(FID), PushStatus.PERMANENT_ERROR, 'INVALID_ARGUMENT'),
             (messaging.QuotaExceededError(FID), PushStatus.RETRYABLE, 'QUOTA_EXCEEDED'),
             (exceptions.UnavailableError(FID), PushStatus.UNKNOWN, 'SERVICE_UNAVAILABLE'),
             (exceptions.InternalError(FID), PushStatus.UNKNOWN, 'SERVICE_UNAVAILABLE'),

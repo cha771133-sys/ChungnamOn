@@ -99,8 +99,8 @@ def send_deadline_push(**message_fields):
         return PushResult(PushStatus.CONFIGURATION_ERROR, 'FIREBASE_AUTHENTICATION')
     except exceptions.ResourceExhaustedError:
         return PushResult(PushStatus.RETRYABLE, 'QUOTA_EXCEEDED')
-    except exceptions.InvalidArgumentError:
-        # 잘못된 페이로드도 같은 오류를 쓰므로 기기를 임의로 무효화하지 않는다.
+    except (exceptions.InvalidArgumentError, ValueError):
+        # SDK 입력 검증 실패도 확정된 인자 오류다. 기기를 임의로 무효화하지 않는다.
         return PushResult(PushStatus.PERMANENT_ERROR, 'INVALID_ARGUMENT')
     except (exceptions.UnavailableError, exceptions.InternalError):
         return PushResult(PushStatus.UNKNOWN, 'SERVICE_UNAVAILABLE')
