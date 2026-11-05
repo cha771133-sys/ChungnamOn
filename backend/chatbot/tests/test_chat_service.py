@@ -133,6 +133,7 @@ class ChatServiceTests(ChatFixtures, TestCase):
         message.refresh_from_db()
         self.assertEqual(message.sources, original)
         self.assertFalse(self.submit().grounded)
+        SourceDocument.objects.filter(pk=source.pk).update(status=SourceDocument.Status.ACTIVE)
         payload.pop('status')
         with patch('chatbot.services.ai_client.generate_answer', return_value=payload):
             with self.assertRaises(chat_service.ChatServiceUnavailable):

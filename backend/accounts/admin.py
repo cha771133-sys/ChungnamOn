@@ -2,6 +2,8 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.forms import BaseUserCreationForm, UserChangeForm
 
+from chatbot.models import ChatMessage
+
 from .models import User, UserProfile
 
 
@@ -39,6 +41,12 @@ class UserAdmin(BaseUserAdmin):
     add_fieldsets = (
         (None, {'classes': ('wide',), 'fields': ('email', 'password1', 'password2')}),
     )
+
+    def get_deleted_objects(self, objs, request):
+        """부모 삭제 권한은 유지하고 ChatMessage의 CASCADE에만 직접 삭제 금지를 적용하지 않는다."""
+        deleted, counts, permissions, protected = super().get_deleted_objects(objs, request)
+        permissions.discard(ChatMessage._meta.verbose_name)
+        return deleted, counts, permissions, protected
 
 
 @admin.register(UserProfile)
