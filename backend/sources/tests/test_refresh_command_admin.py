@@ -74,6 +74,7 @@ class RefreshCommandTests(TestCase):
         self.public.fetch.assert_called_once()
 
     def test_dry_run_does_not_register_or_update_any_database_rows(self):
+        """미리보기 명령은 실제 조회 후에도 대상·자료·후보·로그를 저장하지 않는다."""
         models = (SourceRefreshTarget, SourceDocument, SourceRevision, CrawlLog)
         before = [list(model.objects.values()) for model in models]
         self.command('--dry-run')
@@ -106,6 +107,7 @@ class RefreshCommandTests(TestCase):
         self.assertNotIn('OC=', log.source_url)
 
     def test_invalid_options_rejected_before_http_and_database_changes(self):
+        """허용되지 않은 상한과 검색 조합은 DB 변경이나 요청 전에 실패한다."""
         for args in (('--limit', '0'), ('--limit', '1001'), ('--discover',), ('--discover', '--provider', 'law', '--query', '주민', '--region', '전국')):
             with self.subTest(args=args), self.assertRaises(CommandError):
                 self.command(*args)
@@ -181,6 +183,7 @@ class RefreshAdminTests(TestCase):
         self.assertEqual(self.revision.document.content_text, '')
 
     def test_regular_user_with_permissions_is_blocked_from_new_admin_models(self):
+        """모델 권한이 있어도 staff가 아닌 사용자는 관리 화면과 검토를 이용하지 못한다."""
         self.user.user_permissions.add(*Permission.objects.filter(content_type__app_label='sources'))
         self.client.force_login(self.user)
         for name in ('sourcerevision', 'sourcerefreshtarget'):
@@ -217,6 +220,7 @@ class RefreshAdminTests(TestCase):
         self.assertEqual(response.context['cl'].queryset.count(), 1)
 
     def test_revisions_are_immutable_even_for_superuser(self):
+        """최고 관리자도 후보를 직접 추가·수정·삭제하여 검토 이력을 우회하지 못한다."""
         self.client.force_login(self.admin)
         for action, data in (('add', {}), ('change', {}), ('delete', {'post': 'yes'})):
             url = reverse(f'admin:sources_sourcerevision_{action}', args=[self.revision.pk] if action != 'add' else None)
@@ -235,6 +239,7 @@ class RefreshAdminTests(TestCase):
         self.assertEqual(target.lease_token, token)
 
     def test_admin_post_cannot_activate_reprocessing_document_but_can_disable_it(self):
+        """실제 Admin 폼에서 재처리 대기 자료의 사용 전환만 막고 사용 중지는 허용한다."""
         review_revision(self.revision.pk, self.admin, approve=True)
         document = SourceDocument.objects.get()
         self.client.force_login(self.admin)
@@ -254,6 +259,7 @@ class RefreshAdminTests(TestCase):
         self.assertTrue(document.ai_reprocessing_required)
 
     def test_old_admin_form_checks_approval_committed_after_instance_was_loaded(self):
+        """이전 폼 객체도 그 뒤 완료된 승인의 최신 재처리 대기 상태를 확인한다."""
         from django.contrib import admin
         old_document = SourceDocument.objects.get()
         model_admin = admin.site._registry[SourceDocument]

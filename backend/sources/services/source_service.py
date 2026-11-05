@@ -22,6 +22,7 @@ class CollectionResult:
 
 
 def _store(spec, page, digest, checked_at, started_at):
+    """기존 HTML을 행 잠금 아래 저장하며 관리 대상 전환과 더 최신 수집을 재검사한다."""
     metadata = {
         'title': spec.title, 'agency': spec.agency, 'region': spec.region,
         'category': spec.category, 'published_at': spec.published_at,
@@ -64,6 +65,7 @@ def _store(spec, page, digest, checked_at, started_at):
 
 
 def collect_source(spec, collector, *, dry_run=False):
+    """기존 HTML 수집 계약을 유지하고 등록된 자료는 승인 후보 저장 흐름에 위임한다."""
     if not spec.enabled:
         return CollectionResult('skipped', '비활성화된 자료입니다.')
     # 목록 밖 직접 호출에도 동일한 URL 경계를 적용한다. 예외에 URL 원문을 포함하지 않는다.

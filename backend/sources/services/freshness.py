@@ -11,6 +11,7 @@ DEFAULT_INTERVAL_HOURS = {'law': 168, 'public_data': 72, 'html': 336}
 
 
 def interval_hours(target):
+    """대상별 주기, 설정 매핑, 유형 기본값 순으로 양의 정수 시간을 선택한다."""
     configured = getattr(settings, 'OFFICIAL_SOURCE_INTERVAL_HOURS', {})
     value = target.interval_hours or configured.get(target.provider, DEFAULT_INTERVAL_HOURS[target.provider])
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
@@ -19,6 +20,7 @@ def interval_hours(target):
 
 
 def next_due_at(target):
+    """실패 재시도를 우선하고, 성공 확인일이 없으면 즉시 수집 대상으로 둔다."""
     if target.failures and target.retry_after:
         return target.retry_after
     checked = target.last_success_at
@@ -28,6 +30,7 @@ def next_due_at(target):
 
 
 def is_due(target, now=None):
+    """비활성·실행 중인 대상을 제외한 뒤 재확인 또는 재시도 시점을 비교한다."""
     now = now or timezone.now()
     if not target.enabled or (target.lease_expires_at and target.lease_expires_at > now):
         return False
@@ -36,6 +39,7 @@ def is_due(target, now=None):
 
 
 def freshness(document, now=None):
+    """검토 필요, 수집 실패, 확인일 만료 순으로 표시하며 법적 효력을 판단하지 않는다."""
     now = now or timezone.now()
     today = timezone.localdate(now)
     date_attention = (document.effective_at and document.effective_at > today) or (document.published_at and document.published_at > today)

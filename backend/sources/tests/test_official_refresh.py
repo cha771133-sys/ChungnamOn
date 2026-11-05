@@ -39,6 +39,7 @@ class OfficialRefreshTests(TestCase):
         self.client_stub = Mock(fetch=Mock(return_value=self.record))
 
     def refresh(self, record=None, **options):
+        """테스트의 최신 대상을 다시 읽고 선택한 응답으로 한 번 재수집한다."""
         self.client_stub.fetch.return_value = record or self.record
         self.target.refresh_from_db()
         return refresh_target(self.target, self.client_stub, **options)
@@ -244,6 +245,7 @@ class OfficialRefreshTests(TestCase):
         self.assertEqual(SourceDocument.objects.get().status, 'INACTIVE')
 
     def test_target_and_document_external_identity_database_constraints(self):
+        """같은 제공자·외부 ID의 수집 대상과 자료 중복을 DB 제약으로 차단한다."""
         self.refresh()
         for model, fields in ((SourceRefreshTarget, {'provider': 'public_data', 'external_id': 'service-1'}), (SourceDocument, {'provider': 'public_data', 'external_id': 'service-1', 'source_url': None})):
             with self.subTest(model=model), self.assertRaises(IntegrityError), transaction.atomic():
@@ -286,6 +288,7 @@ class OfficialRefreshTests(TestCase):
         self.assertEqual(SourceRevision.objects.count(), 1)
 
     def test_dry_run_has_no_database_changes_including_logs_and_ai(self):
+        """외부 조회를 수행해도 모든 자료·후보·청크·로그와 AI 상태는 그대로 둔다."""
         self.approve_initial()
         models = (SourceDocument, SourceRefreshTarget, SourceRevision, CrawlLog, SourceChunk)
         before = [list(model.objects.values()) for model in models]
@@ -311,6 +314,7 @@ class OfficialRefreshTests(TestCase):
         self.assertFalse(SourceDocument.objects.exists())
 
     def test_legacy_html_command_uses_review_workflow_for_managed_targets(self):
+        """관리 대상으로 등록한 HTML은 이전 명령에서도 승인 본문 대신 후보로 저장한다."""
         html_spec = spec()
         target = SourceRefreshTarget.objects.create(provider='html', source_url=html_spec.url, configuration={key: getattr(html_spec, key) for key in ('title', 'agency', 'region', 'category')})
         result = collect_source(html_spec, collector())
@@ -325,6 +329,7 @@ class OfficialRefreshTests(TestCase):
         registered = False
 
         def create_log(**kwargs):
+            """이전 수집기의 로그 생성 직전에 관리 등록·수집·승인이 끝나는 경합을 재현한다."""
             nonlocal registered
             if not registered and 'target' not in kwargs:
                 # 이전 수집기의 사전 조회 직후 등록·수집·승인이 끝나고,
@@ -363,6 +368,7 @@ class OfficialRefreshTests(TestCase):
         self.assertTrue(chunk.is_current)
 
     def test_target_validation_rejects_bad_urls_and_missing_api_ids(self):
+        """내부 URL·인증 링크·외부 ID 누락을 대상 등록 단계에서 거부한다."""
         for target in (SourceRefreshTarget(provider='html', source_url='https://127.0.0.1/a'), SourceRefreshTarget(provider='law'), SourceRefreshTarget(provider='public_data', external_id='x', source_url='https://www.gov.kr/?serviceKey=secret')):
             with self.subTest(target=target), self.assertRaises(ValidationError):
                 target.full_clean()
@@ -380,6 +386,7 @@ class OfficialFreshnessTests(TestCase):
         self.assertEqual(list(filter_freshness(SourceDocument.objects.all(), 'STALE').values_list('pk', flat=True)), [document.pk])
 
     def test_different_type_periods_and_per_target_override(self):
+        """유형별 기본 주기를 구분하며 설정 매핑보다 대상별 주기를 우선한다."""
         checked = timezone.now()
         intervals = []
         for provider in ('law', 'public_data', 'html'):
@@ -407,6 +414,7 @@ class OfficialFreshnessTests(TestCase):
         self.assertTrue(is_due(target, now + timedelta(hours=2)))
 
     def test_freshness_and_database_filter_agree_for_all_states(self):
+        """검토·실패·만료·최근 확인 상태가 Python 계산과 Admin DB 필터에서 일치한다."""
         now = timezone.now()
         documents = {}
         for index, state in enumerate(('CURRENT', 'STALE', 'REFRESH_FAILED', 'REVIEW_REQUIRED')):

@@ -11,6 +11,7 @@ REGION_AGENCIES = {'충청남도': '충청남도', '천안시': '천안시', '�
 
 class PublicDataClient:
     def __init__(self, transport=None):
+        """로컬 환경의 인증키를 읽으며 키가 없으면 외부 요청 전에 실패한다."""
         self.key = os.environ.get('PUBLIC_DATA_SERVICE_KEY', '').strip()
         if not self.key:
             raise CollectionError('AUTH_MISSING', 'PUBLIC_DATA_SERVICE_KEY가 필요합니다.')
@@ -20,6 +21,7 @@ class PublicDataClient:
         self.transport.close()
 
     def _pages(self, endpoint, conditions, *, per_page=100, max_pages=10):
+        """건수·페이지·오류 본문을 검증하며 최대 10페이지 안에서 원본 행을 반환한다."""
         if not 1 <= per_page <= 100 or not 1 <= max_pages <= 10:
             raise CollectionError('PAGE_LIMIT', '페이지 크기는 1~100, 최대 페이지는 1~10이어야 합니다.')
         seen = set()
@@ -70,21 +72,25 @@ class PublicDataClient:
                 return
 
     def _one(self, endpoint, external_id):
+        """ID 조건 조회가 요청한 서비스 한 건만 반환했는지 확인한다."""
         rows = list(self._pages(endpoint, {'cond[서비스ID::EQ]': external_id}))
         if len(rows) != 1 or str(rows[0].get('서비스ID', '')) != external_id:
             raise CollectionError('INVALID_RESPONSE', '요청한 공공서비스 상세 자료가 없거나 ID가 일치하지 않습니다.')
         return rows[0]
 
     def detail(self, external_id):
+        """요청한 공공서비스의 상세 원문을 조회한다."""
         return self._one('serviceDetail', external_id)
 
     def support_conditions(self, external_id):
+        """빈 지원조건은 허용하되 다른 서비스의 조건이 섞인 응답은 거부한다."""
         rows = list(self._pages('supportConditions', {'cond[서비스ID::EQ]': external_id}))
         if any(str(row.get('서비스ID', '')) != external_id for row in rows):
             raise CollectionError('INVALID_RESPONSE', '지원조건의 서비스 ID가 일치하지 않습니다.')
         return rows
 
     def fetch(self, target):
+        """목록·상세·지원조건을 결합하고 통계값을 제외한 정책 원문을 정규화한다."""
         external_id = target.external_id
         listing = self._one('serviceList', external_id)
         detail = self.detail(external_id)

@@ -10,11 +10,13 @@ REGIONS = {'충청남도': ('6440000', None), '천안시': ('6440000', '4490000'
 
 
 def matches_region(institution, region):
+    """수집 관할만 판별하며 도 자체 자료와 도내 다른 시·군 자료를 구분한다."""
     # org만 지정하면 도내 다른 시·군도 응답될 수 있다. 도 자체 자료와 시 자료를 구분한다.
     return institution.strip() == '충청남도' if region == '충청남도' else region in institution
 
 
 def values_for(data, key):
+    """JSON 또는 XML에서 변환한 중첩 객체를 순회하여 같은 이름의 값을 찾는다."""
     if isinstance(data, dict):
         for name, value in data.items():
             if name == key:
@@ -27,6 +29,7 @@ def values_for(data, key):
 
 
 def scalar(data, key, default=''):
+    """중첩 응답에서 문자열·정수인 첫 값을 반환하고 누락은 명시한 기본값으로 둔다."""
     for value in values_for(data, key):
         if isinstance(value, (str, int)):
             return str(value)
@@ -35,6 +38,7 @@ def scalar(data, key, default=''):
 
 class LawAPIClient:
     def __init__(self, transport=None):
+        """환경의 OC 인증값을 사용하며 인증 설정 누락은 요청 오류와 구분한다."""
         self.oc = os.environ.get('LAW_API_OC', '').strip()
         if not self.oc:
             raise CollectionError('AUTH_MISSING', 'LAW_API_OC가 필요합니다.')
@@ -44,6 +48,7 @@ class LawAPIClient:
         self.transport.close()
 
     def _get(self, endpoint, **params):
+        """공식 XML 요청을 보내고 HTTP 200의 인증·내부 오류 본문도 실패로 처리한다."""
         data = self.transport.get(BASE_URL + endpoint, {'OC': self.oc, 'target': 'ordin', 'type': 'XML', **params})
         error_root = data.get('Response', data.get('response', data))
         if isinstance(error_root, dict) and any(key.lower() in ('error', 'errors', 'openapi_serviceresponse', 'result', 'errorcode') for key in error_root):
@@ -54,6 +59,7 @@ class LawAPIClient:
         return data
 
     def list_ordinances(self, *, query, region, limit=100, per_page=100, history=False):
+        """관할을 재검증하며 현행·연혁 목록을 구분하고 반복 페이지와 수집 상한을 검사한다."""
         if not query.strip() or region not in REGIONS or not 1 <= limit <= 1000 or not 1 <= per_page <= 100:
             raise CollectionError('FILTER_REQUIRED', '검색어·충남/천안/아산 범위와 제한된 수집량이 필요합니다.')
         org, sborg = REGIONS[region]
@@ -96,6 +102,7 @@ class LawAPIClient:
         raise CollectionError('PAGE_LIMIT', '법제처 검색 범위를 초과했습니다. 검색어를 좁히세요.')
 
     def detail(self, external_id):
+        """안정적인 자치법규 ID로 본문을 요청하고 응답 ID와 조문 존재를 검증한다."""
         data = self._get('lawService.do', ID=external_id)
         root = data.get('자치법규', data.get('OrdinService', data.get('LawService')))
         if not isinstance(root, dict) or scalar(root, '자치법규ID') != external_id or not scalar(root, '조내용'):
@@ -103,6 +110,7 @@ class LawAPIClient:
         return root
 
     def fetch(self, target):
+        """목록과 본문의 개정 버전을 대조하고 공포일·시행일·관할을 별도로 보존한다."""
         data = self.detail(target.external_id)
         institution = scalar(data, '지자체기관명')
         collection_region = target.configuration.get('collection_region', '')

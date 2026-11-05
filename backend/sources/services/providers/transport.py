@@ -31,6 +31,7 @@ def validate_api_url(url):
 
 class CredentialFilter(logging.Filter):
     def filter(self, record):
+        """HTTP 디버그 메시지에서 인증 쿼리와 설정된 인증값을 출력 전에 가린다."""
         message = record.getMessage()
         message = re.sub(r'(?i)([?&](?:OC|serviceKey)=)[^&\s"\']*', r'\1[숨김]', message)
         for name in ('PUBLIC_DATA_SERVICE_KEY', 'LAW_API_OC'):
@@ -43,6 +44,7 @@ class CredentialFilter(logging.Filter):
 
 class APIHTTPSAdapter(PinnedHTTPSAdapter):
     def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
+        """허용 API의 공인 IP에 연결하되 원래 호스트의 SNI와 TLS 검증을 유지한다."""
         validate_api_url(request.url)
         host_params, pool_kwargs = self.build_connection_pool_key_attributes(request, verify, cert)
         hostname = host_params['host']
@@ -67,6 +69,7 @@ def parse_payload(body):
             root = ElementTree.fromstring(body)
 
             def convert(node):
+                """반복 XML 태그는 목록으로 보존하며 조문 순서와 원문 값을 유지한다."""
                 if not len(node):
                     return node.text or ''
                 values = {}
@@ -92,6 +95,7 @@ def parse_payload(body):
 class APITransport(Collector):
     """P1-7의 DNS 고정·호출 간격·재시도·크기·시간 제한을 재사용한다."""
     def __init__(self):
+        """기존 수집 제한을 상속하고 API 전용 연결 어댑터와 키 마스킹을 설치한다."""
         super().__init__()
         self.session.mount('https://', APIHTTPSAdapter(max_retries=0))
         logger = logging.getLogger('urllib3.connectionpool')
@@ -99,6 +103,7 @@ class APITransport(Collector):
             logger.addFilter(CredentialFilter())
 
     def get(self, url, params, *, authorization=None):
+        """제공자별 인증 경계를 검증하고 제한된 응답을 해석한 뒤 연결을 정리한다."""
         validate_api_url(url)
         if authorization and urlsplit(url).hostname != 'api.odcloud.kr':
             raise CollectionError('URL_REJECTED', '공공데이터 인증 헤더를 다른 제공자에 전달할 수 없습니다.')

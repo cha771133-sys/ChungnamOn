@@ -58,6 +58,7 @@ class RefreshConcurrencyTests(TransactionTestCase):
         started, release = Event(), Event()
 
         def fetch(target):
+            """첫 외부 요청을 멈춰 둔 동안 중복 실행이 요청 없이 건너뛰는지 확인한다."""
             started.set()
             if not release.wait(10):
                 raise RuntimeError('테스트 실행 제한 시간 초과')
@@ -87,6 +88,7 @@ class RefreshConcurrencyTests(TransactionTestCase):
 
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL 실제 동시 쓰기는 PostgreSQL CI에서 검증')
     def test_simultaneous_claims_have_single_owner_in_postgresql(self):
+        """PostgreSQL의 동시 잠금 획득 요청 중 하나만 소유권과 실행 이력을 얻는다."""
         barrier = Barrier(2)
         from sources.services.refresh_service import claim
 
@@ -107,6 +109,7 @@ class RefreshConcurrencyTests(TransactionTestCase):
 
     @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL 실제 동시 승인은 PostgreSQL CI에서 검증')
     def test_simultaneous_approval_cannot_apply_same_revision_twice(self):
+        """PostgreSQL에서 같은 후보의 동시 승인은 한 번만 반영되고 나머지는 충돌한다."""
         from django.contrib.auth import get_user_model
         from sources.services.refresh_service import review_revision
         user = get_user_model().objects.create_superuser(email='concurrent-review@example.com', password='test-password')
@@ -115,6 +118,7 @@ class RefreshConcurrencyTests(TransactionTestCase):
         barrier = Barrier(2)
 
         def run():
+            """독립 연결에서 동시 검토 결과를 모으고 성공·충돌과 관계없이 연결을 정리한다."""
             close_old_connections()
             try:
                 barrier.wait(timeout=10)

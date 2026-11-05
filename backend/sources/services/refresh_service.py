@@ -18,6 +18,7 @@ LEASE_DURATION = timedelta(minutes=30)
 
 
 def document_snapshot(document):
+    """승인된 출처 메타데이터를 후보와 비교할 수 있는 날짜 문자열로 직렬화한다."""
     values = {name: getattr(document, name) for name in ('source_url', 'title', 'agency', 'region', 'category', 'published_at', 'effective_at', 'metadata')}
     for name in ('published_at', 'effective_at'):
         values[name] = values[name].isoformat() if values[name] else None
@@ -25,6 +26,7 @@ def document_snapshot(document):
 
 
 def log_url(target):
+    """공개 상세링크가 없으면 인증정보 없는 고정 API 주소를 실행 이력에 사용한다."""
     return official_url(target.source_url, target.provider) or {
         'public_data': 'https://api.odcloud.kr/api/gov24/v3/serviceDetail',
         'law': 'https://www.law.go.kr/DRF/lawService.do',
@@ -32,6 +34,7 @@ def log_url(target):
 
 
 def fetch_record(target, client):
+    """HTML은 기존 파서를 재사용하고 API는 제공자 정규화 계약을 검증한다."""
     if target.provider != 'html':
         return client.fetch(target).validate()
     response = client.fetch(target.source_url)
@@ -47,6 +50,7 @@ def fetch_record(target, client):
 
 
 def claim(target):
+    """짧은 트랜잭션에서 실행 소유권을 얻고 만료된 작업 이력을 실패로 마감한다."""
     now, token = timezone.now(), uuid.uuid4()
     with transaction.atomic():
         claimed = SourceRefreshTarget.objects.filter(pk=target.pk, enabled=True).filter(
@@ -63,6 +67,7 @@ def claim(target):
 
 
 def _lookup(target):
+    """HTML은 정규화 URL, API는 제공자·외부 ID로 기존 자료를 식별한다."""
     if target.provider == 'html':
         return {'source_url': target.source_url}
     return {'provider': target.provider, 'external_id': target.external_id}
@@ -111,6 +116,10 @@ def _apply_observation(target, record, started_at, checked_at):
 
 
 def refresh_target(target, client, *, dry_run=False):
+    """잠금 없이 외부 요청 후 소유권을 재검증해 후보·성공 이력을 원자적으로 저장한다.
+
+    실패는 승인 본문과 성공 확인일을 보존하며 dry-run은 실행 이력도 쓰지 않는다.
+    """
     if not target.enabled:
         return CollectionResult('skipped')
     token = log = None
@@ -166,6 +175,10 @@ def refresh_target(target, client, *, dry_run=False):
 
 
 def review_revision(revision_id, user, *, approve):
+    """실제 관리자 권한과 최신 관측을 확인하여 후보를 승인하거나 반려한다.
+
+    승인 본문 변경은 기존 청크를 보존한 채 AI 재처리 대기로 전환한다.
+    """
     if not user.is_active or not user.is_staff or not user.has_perm('sources.change_sourcerevision') or not user.has_perm('sources.change_sourcedocument'):
         raise CollectionError('PERMISSION_DENIED', '공식자료와 변경 후보 수정 권한이 있는 운영 관리자만 검토할 수 있습니다.')
     now = timezone.now()

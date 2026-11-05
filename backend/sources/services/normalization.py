@@ -13,6 +13,7 @@ from .source_registry import validate_source_url
 
 
 def official_url(value, provider):
+    """공개 근거 링크만 정규화하고 인증정보·API 주소·허용 범위 밖 출처를 거부한다."""
     if not value:
         return None
     if not isinstance(value, str):
@@ -50,6 +51,7 @@ def optional_official_url(value, provider):
 
 
 def official_date(value):
+    """공식 날짜를 해석하되 미제공 값은 비워 두고 잘못된 날짜는 오류로 구분한다."""
     if value in (None, '', '00000000'):
         return None
     try:
@@ -60,6 +62,7 @@ def official_date(value):
 
 
 def canonical_text(data):
+    """키 순서와 유니코드 표현만 통일하며 신청조건과 조문 값은 변경하지 않는다."""
     # 키 정렬로 API JSON 객체의 필드 순서만 통일한다. 자격·조건·코드값은 그대로 보존한다.
     return unicodedata.normalize('NFC', json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2))
 
@@ -80,9 +83,11 @@ class OfficialRecord:
 
     @property
     def content_hash(self):
+        """정규화된 본문 UTF-8 바이트의 SHA-256을 계산한다."""
         return hashlib.sha256(self.content_text.encode('utf-8')).hexdigest()
 
     def validate(self):
+        """제공자 식별자·공식 링크·필수 메타데이터와 비어 있지 않은 본문을 검증한다."""
         if self.provider not in ('html', 'public_data', 'law'):
             raise CollectionError('RECORD_INVALID', '수집 제공자가 올바르지 않습니다.')
         if self.provider != 'html' and (not self.external_id or len(self.external_id) > 100):
@@ -98,6 +103,7 @@ class OfficialRecord:
         return self
 
     def snapshot(self):
+        """승인 시 반영할 메타데이터를 날짜 문자열을 포함한 JSON 형태로 보존한다."""
         return {
             'source_url': official_url(self.source_url, self.provider), 'title': self.title,
             'agency': self.agency, 'region': self.region, 'category': self.category,

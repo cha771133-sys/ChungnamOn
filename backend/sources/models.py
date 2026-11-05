@@ -74,6 +74,7 @@ class SourceDocument(models.Model):
         return f'{self.title} ({self.agency})'
 
     def clean(self):
+        """HTML 출처와 API 외부 ID의 필수 조건을 각각 검증한다."""
         super().clean()
         if self.provider == self.Provider.HTML and not self.source_url:
             raise ValidationError({'source_url': 'HTML 자료의 출처 URL은 필수입니다.'})
@@ -82,6 +83,7 @@ class SourceDocument(models.Model):
 
     @property
     def ai_eligible(self):
+        """공식 링크·승인·사용 상태가 갖춰지고 AI 재처리가 끝난 자료만 허용한다."""
         return bool(self.source_url) and self.status == self.Status.ACTIVE and self.review_status == self.ReviewStatus.APPROVED and not self.ai_reprocessing_required
 
 
@@ -97,6 +99,7 @@ class SourceChunk(models.Model):
 
     @property
     def is_current(self):
+        """사용 가능한 문서의 승인 본문 해시와 일치하는 청크만 최신으로 본다."""
         document = self.source_document
         return bool(self.source_content_hash) and self.source_content_hash == document.content_hash and document.ai_eligible
 
@@ -198,6 +201,7 @@ class SourceRefreshTarget(models.Model):
         ]
 
     def clean(self):
+        """제공자별 식별·법제처 수집 관할·공개 링크를 검증하여 안전한 대상만 등록한다."""
         from .services.normalization import official_url
         super().clean()
         if not isinstance(self.configuration, dict):
@@ -217,6 +221,7 @@ class SourceRefreshTarget(models.Model):
                 raise ValidationError({'source_url': '인증정보 없는 허용된 공식 HTTPS URL이 필요합니다.'}) from None
 
     def __str__(self):
+        """API는 외부 ID, HTML은 공식 URL로 수집 대상을 구분한다."""
         return f'{self.provider}: {self.external_id or self.source_url}'
 
 

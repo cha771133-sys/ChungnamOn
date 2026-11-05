@@ -22,6 +22,7 @@ LAW_BODY = (FIXTURES / 'ordinance.xml').read_bytes()
 
 
 def envelope(rows, page=1, total=None):
+    """공식 목록의 페이지·일치 건수 구조를 갖춘 가상 응답을 만든다."""
     return {'page': page, 'perPage': 100, 'totalCount': len(rows) if total is None else total, 'matchCount': len(rows) if total is None else total, 'currentCount': len(rows), 'data': rows}
 
 
@@ -35,6 +36,7 @@ class OfficialProviderTests(SimpleTestCase):
         self.law = LawAPIClient(self.transport)
 
     def test_credentials_required_without_network(self):
+        """인증 설정 누락은 두 제공자 모두 네트워크 호출 전에 거부한다."""
         for client, key in ((PublicDataClient, 'PUBLIC_DATA_SERVICE_KEY'), (LawAPIClient, 'LAW_API_OC')):
             with self.subTest(key=key), patch.dict(os.environ, {key: ''}):
                 with self.assertRaisesMessage(CollectionError, 'AUTH_MISSING'):
@@ -57,6 +59,7 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertEqual(list(self.public.list_services(query='주민', region='전국')), [national])
 
     def test_public_more_than_100_paginated_and_bounded(self):
+        """100건을 넘는 검색 결과가 다음 페이지에서도 누락 없이 수집되는지 확인한다."""
         rows = [{**PUBLIC_ROW, '서비스ID': str(index)} for index in range(120)]
         self.transport.get.side_effect = [envelope(rows[:100], total=120), envelope(rows[100:], page=2, total=120)]
         self.assertEqual(len(list(self.public.list_services(query='주민', region='아산시', limit=120))), 120)
@@ -67,6 +70,7 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertEqual(list(self.public.list_services(query='주민', region='아산시')), [])
 
     def test_public_details_and_conditions_preserved(self):
+        """선정기준·지원조건 코드를 원문대로 보존하고 발행일을 추정하지 않는다."""
         self.transport.get.side_effect = [envelope([PUBLIC_ROW]), envelope([PUBLIC_ROW]), envelope([{'서비스ID': PUBLIC_ROW['서비스ID'], 'JA0101': 'Y', 'JA0329': None}])]
         record = self.public.fetch(SimpleNamespace(external_id=PUBLIC_ROW['서비스ID'], configuration={'collection_region': '아산시'}))
         self.assertIn(PUBLIC_ROW['선정기준'], record.content_text)
@@ -77,6 +81,7 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertEqual([call.args[0].rsplit('/', 1)[1] for call in self.transport.get.call_args_list], ['serviceList', 'serviceDetail', 'supportConditions'])
 
     def test_public_missing_link_not_invented(self):
+        """공식 상세링크가 없는 자료도 ID로 수집하며 가짜 근거 링크를 만들지 않는다."""
         row = {key: value for key, value in PUBLIC_ROW.items() if key != '상세조회URL'}
         self.transport.get.side_effect = [envelope([row]), envelope([row]), envelope([])]
         record = self.public.fetch(SimpleNamespace(external_id=PUBLIC_ROW['서비스ID'], configuration={}))
@@ -106,6 +111,7 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertNotIn('test-public-secret', record.content_text)
 
     def test_public_bad_envelope_and_internal_errors(self):
+        """HTTP 성공과 별개인 내부 오류·잘못된 페이지를 거부하고 키를 노출하지 않는다."""
         for payload in ({'code': -4, 'msg': 'test-public-secret'}, {'response': {'header': {'resultCode': '99'}}}, {'data': []}, envelope(['bad']), {**envelope([]), 'page': 2}):
             with self.subTest(payload=payload):
                 self.transport.get.return_value = payload
@@ -114,6 +120,7 @@ class OfficialProviderTests(SimpleTestCase):
                 self.assertNotIn('test-public-secret', str(caught.exception))
 
     def test_public_mismatched_detail_id_and_conditions_rejected(self):
+        """다른 서비스의 상세정보나 지원조건을 요청 자료에 합치지 않는다."""
         self.transport.get.return_value = envelope([{**PUBLIC_ROW, '서비스ID': 'other'}])
         for method in (self.public.detail, self.public.support_conditions):
             with self.subTest(method=method), self.assertRaises(CollectionError):
@@ -129,6 +136,7 @@ class OfficialProviderTests(SimpleTestCase):
             list(self.public._pages('serviceList', {}, per_page=1, max_pages=1))
 
     def test_law_region_parameters_and_current_history(self):
+        """충남·천안·아산의 관할 파라미터와 현행·연혁 구분을 함께 검증한다."""
         for region, sborg in (('충청남도', None), ('천안시', '4490000'), ('아산시', '4520000')):
             for history in (False, True):
                 with self.subTest(region=region, history=history):
@@ -143,6 +151,7 @@ class OfficialProviderTests(SimpleTestCase):
                     self.assertEqual(params['nw'], 2 if history else 1)
 
     def test_law_province_scope_excludes_other_city_jurisdictions(self):
+        """도 전체 검색 응답에서도 도 자체 자료만 선택하고 타 시·군을 제외한다."""
         self.transport.get.return_value = {'OrdinSearch': {'totalCnt': 2, 'law': [
             {'자치법규ID': '1', '지자체기관명': '충청남도'},
             {'자치법규ID': '2', '지자체기관명': '충청남도 논산시'},
@@ -158,6 +167,7 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertEqual(len(list(self.law.list_ordinances(query='주민', region='아산시', history=True))), 2)
 
     def test_law_body_preserves_articles_dates_and_unknown_effect(self):
+        """조문 구조와 공포일·시행일을 보존하며 법적 효력을 임의로 확정하지 않는다."""
         self.transport.get.side_effect = [parse_payload(LAW_BODY), {'OrdinSearch': {'totalCnt': '0'}}]
         target = SimpleNamespace(external_id='9999001', source_url=None, configuration={'collection_region': '아산시'})
         record = self.law.fetch(target)
@@ -195,6 +205,7 @@ class OfficialProviderTests(SimpleTestCase):
             self.law.fetch(SimpleNamespace(external_id='9999001', source_url=None, configuration={'collection_region': '천안시'}))
 
     def test_law_empty_list_and_invalid_body(self):
+        """빈 목록과 잘못된 본문을 구분하고 오류 메시지의 인증값 노출을 막는다."""
         self.transport.get.return_value = {'OrdinSearch': {'totalCnt': '0'}}
         self.assertEqual(list(self.law.list_ordinances(query='주민', region='아산시')), [])
         for payload in ({'result': 'API 오류: test-law-secret'}, {'자치법규': {'자치법규ID': 'different'}}, {}):
@@ -223,6 +234,7 @@ class OfficialProviderTests(SimpleTestCase):
             list(self.law.list_ordinances(query='주민', region='아산시'))
 
     def test_transport_http_auth_redirect_size_and_resource_cleanup(self):
+        """인증·리다이렉트·크기 오류를 구분하고 모든 실패 응답을 닫는다."""
         transport = APITransport()
         self.addCleanup(transport.close)
         for status, headers, expected in ((401, {}, 'AUTH_FAILED'), (403, {}, 'AUTH_FAILED'), (302, {'Location': 'http://127.0.0.1'}, 'REDIRECT_REJECTED'), (500, {}, 'HTTP_STATUS'), (429, {}, 'HTTP_STATUS'), (200, {'Content-Length': '999999999'}, 'RESPONSE_TOO_LARGE')):
@@ -233,6 +245,7 @@ class OfficialProviderTests(SimpleTestCase):
                 response.close.assert_called_once()
 
     def test_transport_json_and_xml_safe_parsing(self):
+        """정상 JSON/XML은 해석하고 잘못된 형식이나 엔티티 선언은 거부한다."""
         self.assertIn('자치법규', parse_payload(LAW_BODY))
         self.assertEqual(parse_payload(b'{"data": []}'), {'data': []})
         for body in (b'broken', b'[]', b'<broken', b'<!DOCTYPE foo [<!ENTITY x SYSTEM "file:///secret">]><foo>&x;</foo>', b'<!DOCTYPE foo><foo/>'):
@@ -246,11 +259,13 @@ class OfficialProviderTests(SimpleTestCase):
         self.assertNotIn('test-public-secret', record.getMessage())
 
     def test_request_allowlist_blocks_internal_and_unknown_addresses(self):
+        """내부 주소·비공식 호스트·다른 프로토콜은 요청 대상에서 제외한다."""
         for url in ('http://www.law.go.kr/DRF/lawSearch.do', 'https://127.0.0.1/DRF/lawSearch.do', 'https://localhost/DRF/lawSearch.do', 'https://www.law.go.kr.evil.test/DRF/lawSearch.do', 'https://www.law.go.kr:444/DRF/lawSearch.do', 'https://user:pass@www.law.go.kr/DRF/lawSearch.do'):
             with self.subTest(url=url), self.assertRaises(CollectionError):
                 validate_api_url(url)
 
     def test_provider_host_path_pairs_and_credentials_cannot_cross(self):
+        """호스트와 경로를 섞거나 인증값을 다른 제공자로 전달하면 요청 전에 거부한다."""
         for url in ('https://api.odcloud.kr/DRF/lawSearch.do', 'https://www.law.go.kr/api/gov24/v3/serviceDetail'):
             with self.subTest(url=url), self.assertRaises(CollectionError):
                 validate_api_url(url)
@@ -276,6 +291,7 @@ class OfficialProviderTests(SimpleTestCase):
             adapter.get_connection_with_tls_context(request, verify=True)
 
     def test_source_links_exclude_keys_api_and_fake_hosts(self):
+        """인증·API·위장 호스트 링크를 제외하며 공식 법제처 상대 주소만 보완한다."""
         for url in ('https://www.gov.kr/detail?serviceKey=secret', 'https://www.gov.kr/detail?service%4Bey=secret', 'https://www.gov.kr/detail?OC=secret', 'https://www.gov.kr.evil.test/detail', 'https://api.odcloud.kr/api/gov24/v3/serviceDetail'):
             with self.subTest(url=url), self.assertRaises(CollectionError):
                 official_url(url, 'public_data')
@@ -285,6 +301,7 @@ class OfficialProviderTests(SimpleTestCase):
             official_url('https://www.gov.kr/detail?serviceKey=secret', 'html')
 
     def test_retry_429_and_5xx_is_bounded_and_honors_delay(self):
+        """429 지연 요청을 지키고 일시적 서버 오류의 재시도 횟수를 제한한다."""
         transport = APITransport()
         self.addCleanup(transport.close)
         first = Mock(status_code=429, headers={'Retry-After': '2'})
@@ -299,6 +316,7 @@ class OfficialProviderTests(SimpleTestCase):
             self.assertEqual(get.call_count, 3)
 
     def test_normalization_hash_is_stable_and_body_validated(self):
+        """같은 본문 해시는 안정적이며 빈 본문·식별자와 메타데이터 초과는 거부한다."""
         base = dict(provider='public_data', external_id='same', source_url=None, title='제목', agency='기관', region='확인 필요', category='지원', content_text='원문 조건')
         self.assertEqual(OfficialRecord(**base).content_hash, OfficialRecord(**base).content_hash)
         for change in ({'external_id': ''}, {'title': ''}, {'content_text': ''}, {'agency': 'a' * 256}):

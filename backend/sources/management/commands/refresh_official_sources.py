@@ -68,6 +68,7 @@ class Command(BaseCommand):
         parser.add_argument('--agency', default='', help='공공데이터 목록의 소관기관명 필터')
 
     def discover(self, provider, client, options):
+        """제한된 검색 결과를 외부 ID로 중복 제거하여 등록하며 공개 불가 링크는 비워 둔다."""
         rows = client.list_services(query=options['query'], region=options['region'], agency=options['agency'], limit=options['limit']) if provider == 'public_data' else client.list_ordinances(query=options['query'], region=options['region'], limit=options['limit'])
         seen = set()
         for row in rows:
@@ -90,6 +91,7 @@ class Command(BaseCommand):
             yield target
 
     def handle(self, *args, **options):
+        """등록·기한·실행 상한을 적용하고 제공자별 실패를 격리한 뒤 결과와 종료 코드를 반환한다."""
         limit = options['limit']
         provider = options['provider']
         if not 1 <= limit <= 1000:

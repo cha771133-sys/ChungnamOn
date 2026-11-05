@@ -40,6 +40,7 @@ class FreshnessFilter(admin.SimpleListFilter):
         return [('CURRENT', '최근 확인'), ('STALE', '오래된 자료'), ('REFRESH_FAILED', '재수집 실패'), ('REVIEW_REQUIRED', '검토 필요')]
 
     def queryset(self, request, queryset):
+        """자료 전체를 메모리에 올리지 않고 선택한 최신성 상태를 DB에서 필터링한다."""
         return filter_freshness(queryset, self.value()) if self.value() else queryset
 
 
@@ -70,6 +71,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
     inlines = (SourceChunkInline,)
 
     def get_readonly_fields(self, request, obj=None):
+        """기존 자료의 출처 식별자는 폼에서 바꾸지 못하게 하여 수집 대상과 일치시킨다."""
         if obj is not None:
             return (*self.readonly_fields, 'source_url')
         return self.readonly_fields
@@ -79,9 +81,11 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 
     @admin.display(description='갱신 상태')
     def freshness_state(self, obj):
+        """검토·실패·유형별 확인 주기를 종합한 계산 상태를 목록에 표시한다."""
         return freshness(obj)
 
     def save_model(self, request, obj, form, change):
+        """변경한 관리 필드만 저장하고 버전을 올려 동시 수집·승인 결과를 보존한다."""
         if not change:
             return super().save_model(request, obj, form, change)
         with transaction.atomic():
@@ -112,6 +116,7 @@ class CrawlLogAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
 
     @admin.display(description='기존 정상 자료', boolean=True)
     def has_normal_document(self, obj):
+        """수집 실패와 별개로 대상에 기존 정상 본문이 남아 있는지 표시한다."""
         return bool(obj.target_id and obj.target.document_id and obj.target.document.content_hash)
 
 
@@ -124,12 +129,14 @@ class SourceRefreshTargetAdmin(admin.ModelAdmin):
     list_select_related = ('document',)
 
     def get_readonly_fields(self, request, obj=None):
+        """등록 후 식별자는 고정하고 수집 설정·주기·활성 여부만 수정한다."""
         return (*self.readonly_fields, 'provider', 'external_id', 'source_url') if obj else self.readonly_fields
 
     def has_delete_permission(self, request, obj=None):
         return False
 
     def save_model(self, request, obj, form, change):
+        """설정 변경만 저장하여 이전 폼이 현재 실행 소유권이나 성공일을 덮어쓰지 않게 한다."""
         if not change:
             return super().save_model(request, obj, form, change)
         fields = [field for field in form.changed_data if field in ('configuration', 'enabled', 'interval_hours')]
@@ -139,6 +146,7 @@ class SourceRefreshTargetAdmin(admin.ModelAdmin):
 
     @admin.display(description='다음 확인 예정')
     def next_check(self, obj):
+        """대상 주기 또는 실패 재시도를 반영한 다음 확인 시각을 표시한다."""
         return next_due_at(obj)
 
 
@@ -152,10 +160,12 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
     actions = ('approve_candidates', 'reject_candidates')
 
     def has_review_permission(self, request):
+        """활성 staff와 자료·후보 양쪽의 수정 권한이 있는 사용자만 검토하게 한다."""
         user = request.user
         return user.is_active and user.is_staff and user.has_perm('sources.change_sourcerevision') and user.has_perm('sources.change_sourcedocument')
 
     def _review(self, request, queryset, *, approve):
+        """후보별 충돌을 격리하며 실제 검토자·시각과 Admin 변경 이력을 남긴다."""
         for pk in queryset.values_list('pk', flat=True):
             try:
                 revision = review_revision(pk, request.user, approve=approve)
@@ -168,10 +178,12 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
 
     @admin.action(description='선택한 변경 후보 승인', permissions=['review'])
     def approve_candidates(self, request, queryset):
+        """선택한 후보를 서비스의 최신 버전·관측 검사 후 승인한다."""
         self._review(request, queryset, approve=True)
 
     @admin.action(description='선택한 변경 후보 반려', permissions=['review'])
     def reject_candidates(self, request, queryset):
+        """기존 승인 자료를 유지하면서 선택한 후보의 반려 이력을 기록한다."""
         self._review(request, queryset, approve=False)
 
 
