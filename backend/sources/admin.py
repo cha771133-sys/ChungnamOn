@@ -112,6 +112,14 @@ class SourceRefreshTargetAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+    def save_model(self, request, obj, form, change):
+        if not change:
+            return super().save_model(request, obj, form, change)
+        fields = [field for field in form.changed_data if field in ('configuration', 'enabled', 'interval_hours')]
+        if fields:
+            SourceRefreshTarget.objects.filter(pk=obj.pk).update(**{field: getattr(obj, field) for field in fields})
+        obj.refresh_from_db()
+
     @admin.display(description='다음 확인 예정')
     def next_check(self, obj):
         return next_due_at(obj)

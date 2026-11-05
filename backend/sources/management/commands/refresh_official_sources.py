@@ -83,7 +83,8 @@ class Command(BaseCommand):
             target = SourceRefreshTarget.objects.filter(provider=provider, external_id=external_id).first()
             if target is None:
                 target = SourceRefreshTarget(provider=provider, external_id=external_id, **defaults)
-                target.full_clean()
+                # 중복 검증과 INSERT 사이의 경쟁은 get_or_create와 DB 고유 제약에 맡긴다.
+                target.full_clean(validate_unique=False, validate_constraints=False)
                 if not options['dry_run']:
                     target, _ = SourceRefreshTarget.objects.get_or_create(provider=provider, external_id=external_id, defaults=defaults)
             yield target
@@ -155,4 +156,8 @@ class Command(BaseCommand):
                 successes = counts['new'] + counts['candidate'] + counts['unchanged']
                 raise CommandError('부분 수집 실패' if successes else '전체 수집 실패')
         finally:
-            connections.close_all()
+            # call_command()를 감싼 호출자의 트랜잭션은 그 호출자가 정리한다.
+            # PostgreSQL에서 atomic 안의 연결을 닫으면 이후 쿼리·롤백까지 깨진다.
+            for connection in connections.all():
+                if not connection.in_atomic_block:
+                    connection.close()

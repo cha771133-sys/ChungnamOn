@@ -1,11 +1,14 @@
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
+import uuid
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connections
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -44,6 +47,12 @@ class RefreshCommandTests(TestCase):
         self.law.close.assert_called_once()
         self.assertIn('new=2', self.output.getvalue())
         self.assertIn('연결하지 않음', self.output.getvalue())
+
+    def test_call_command_preserves_callers_existing_database_transaction(self):
+        with patch.object(connections['default'], 'close') as close:
+            self.command('--provider', 'public_data')
+            close.assert_not_called()
+        self.assertEqual(SourceDocument.objects.count(), 1)
 
     def test_provider_filter_and_limit_bound_requests(self):
         self.command('--provider', 'all', '--limit', '1')
@@ -200,3 +209,15 @@ class RefreshAdminTests(TestCase):
         for action, data in (('add', {}), ('change', {}), ('delete', {'post': 'yes'})):
             url = reverse(f'admin:sources_sourcerevision_{action}', args=[self.revision.pk] if action != 'add' else None)
             self.assertEqual(self.client.post(url, data).status_code, 403)
+
+    def test_editing_target_interval_cannot_overwrite_concurrent_running_lease(self):
+        from django.contrib import admin
+        target = SourceRefreshTarget.objects.get()
+        target.interval_hours = 2
+        token = uuid.uuid4()
+        SourceRefreshTarget.objects.filter(pk=target.pk).update(lease_token=token, lease_expires_at=timezone.now() + timedelta(minutes=30))
+        model_admin = admin.site._registry[SourceRefreshTarget]
+        model_admin.save_model(SimpleNamespace(user=self.admin), target, SimpleNamespace(changed_data=['interval_hours']), True)
+        target.refresh_from_db()
+        self.assertEqual(target.interval_hours, 2)
+        self.assertEqual(target.lease_token, token)
