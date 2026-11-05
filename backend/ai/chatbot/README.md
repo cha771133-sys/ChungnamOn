@@ -14,7 +14,37 @@ FE Chat.jsx ──POST /api/chat/──▶ chatbot 앱
                             └─ ChatMessage 저장 → 응답
 ```
 
-## 1. chatbot 앱이 쓰는 법 (chatbot/services.py)
+## 0. Django 교체 자리 연결 (현재 쓰는 방식)
+
+팀원 코드는 그대로 두고, 팀원이 비워 둔 AI 교체 자리 두 곳에서만 이 모듈을 부른다. 둘 다 기본값은 `dummy`.
+
+| 교체 자리 | 설정 | 호출 | 하는 일 |
+|---|---|---|---|
+| `documents.services.pipeline.verify` | `DOCUMENTS_VERIFY_MODE=rag` | `integration.verify_interpretation` | 해석 결과로 관련 공식 자료 검색 (자료당 1개, 관련도 순 최대 10개) → LLM 대조로 `MATCHED/MISMATCH/UNVERIFIED`. 기존 출력 형식 + 각 출처에 `sourceDocumentId` |
+| `chatbot.services.ai_client.generate_answer` | `CHATBOT_AI_MODE=rag` | `integration.chat_answer` | RAG 답변을 `backend/chatbot/README.md` 계약 형식으로 변환 |
+
+챗봇 출처 규칙 (chatbot 앱 계약):
+- 출처로 내는 건 `official_sources`(= verify가 연결한 자료) 안의 `sourceDocumentId`뿐
+- LLM이 실제로 쓴 자료가 그 밖에만 있으면 `UNVERIFIED`, `sources=[]`
+- `CONFLICT`는 문서 검증도 `MISMATCH`일 때만 `MISMATCH`, 아니면 `UNVERIFIED`
+- 그래서 **챗봇이 GROUNDED를 내려면 verify도 rag여야 함** (dummy verify에는 ID가 없음)
+- 오류(검색·LLM·timeout)는 `AIClientError` → 503. 오류 원문은 버림
+
+청크·임베딩 생성 (수집기는 안 건드림, 수집 후 실행):
+```bash
+python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks())"
+python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks([3, 5], rebuild=True))"  # 본문·임베딩 모델 바뀐 자료
+```
+INACTIVE·본문 없는 자료는 빼고, 이미 청크가 있으면 건너뜀. 검색은 ACTIVE만.
+
+실제 Ollama로 끝까지 확인 (샘플 자료를 테스트 DB에만 넣음, CPU면 몇 분 걸림):
+```bash
+AI_LIVE_OLLAMA=1 python manage.py test ai.tests.test_ollama_live -v 2
+```
+
+지역: sources 앱은 도 단위를 `충청남도`로 저장하므로 검색 범위는 `[발신 시군, 충청남도, 충남, 전국]`.
+
+## 1. 모듈 직접 호출 (참고용)
 
 ```python
 from ai.chatbot import generate_answer, generate_answer_dummy
@@ -90,6 +120,8 @@ for i, (text, vec) in enumerate(zip(chunks, vectors)):
 AI_LLM_PROVIDER=ollama
 AI_OLLAMA_URL=http://localhost:11434
 AI_OLLAMA_MODEL=qwen2.5:7b
+AI_OLLAMA_NUM_CTX=8192        # Ollama 기본 4096이면 긴 프롬프트가 잘림
+AI_REQUEST_TIMEOUT=120        # LLM·임베딩 연결/읽기 timeout(초). CPU Ollama는 부족할 수 있음
 ANTHROPIC_API_KEY=
 AI_ANTHROPIC_MODEL=claude-haiku-5-5
 
@@ -121,9 +153,11 @@ python -m ai.chatbot --search "주민세 납부 기간"              # 검색 �
 python -m unittest discover -s ai/tests -t .                 # 테스트 (Ollama·키 없이 돌아감)
 ```
 
-## 5. 다른 파트에 맞춰야 할 것
-- **명세서 ⑥**: `grounded: true/false` → `groundingStatus` (불일치를 표현해야 해서)
-- **프론트 Chat.jsx**: `m.grounded` → `m.groundingStatus` 배지 3종, 출처는 받은 객체의 `title`·`checkedAt`을 바로 사용, 담당기관은 `agency_contact`, 챗봇 요청만 timeout 60초 이상
+## 5. 남은 것
+- 챗봇 API 응답은 chatbot 앱 계약(`grounded` + `status`)을 그대로 따름. `agency_contact`는 계약에 없어서 어댑터에서 버림
+- **프론트 Chat.jsx**: 챗봇 요청만 timeout 60초 이상
+- **개인정보**: Ollama(로컬)는 외부 전송이 없음. `AI_LLM_PROVIDER=anthropic`으로 배포하기 전에 chatbot README의 개인정보 처리 정책 검토 필요
+- `AI_MIN_SCORE`는 실제 수집 자료로 다시 조정
 
 ## 파일
 ```

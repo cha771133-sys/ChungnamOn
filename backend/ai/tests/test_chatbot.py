@@ -74,9 +74,10 @@ class InputTests(unittest.TestCase):
         self.assertEqual(normalize_document({"agency": "아산시청"})["agency"], {"name": "아산시청"})
 
     def test_regions(self):
-        self.assertEqual(regions_for(normalize_document(DOC)), ["아산시", "충남", "전국"])
+        self.assertEqual(regions_for(normalize_document(DOC)), ["아산시", "충청남도", "충남", "전국"])
         self.assertEqual(regions_for({"agency": {"name": "천안 서북구청"}})[0], "천안시")
-        self.assertEqual(regions_for({"agency": {"name": "국민건강보험공단"}}), ["충남", "전국"])
+        self.assertEqual(regions_for({"agency": {"name": "국민건강보험공단"}}), ["충청남도", "충남", "전국"])
+        self.assertEqual(regions_for({"region": "충청남도"}), ["충청남도", "충남", "전국"])
 
     def test_history_cleanup(self):
         h = [

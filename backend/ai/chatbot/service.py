@@ -47,15 +47,19 @@ def normalize_document(document: dict) -> dict:
 
 
 def regions_for(doc: dict) -> list[str]:
-    """검색 범위: [발신기관 시군, 충남, 전국]. 시군을 못 찾으면 [충남, 전국]."""
+    """검색 범위: [발신기관 시군, 충청남도, 충남, 전국]. 시군을 못 찾으면 시군만 빠짐.
+
+    sources 앱은 도 단위 지역을 '충청남도'로 저장하고, 예전 샘플 자료는 '충남'을 써서 둘 다 넣는다.
+    """
     region = doc.get("region")
     name = (doc.get("agency") or {}).get("name") or ""
     if not region and name:
         region = next((r for r in CHUNGNAM_REGIONS if r in name), None) or next(
             (r for r in CHUNGNAM_REGIONS if r[:-1] in name), None  # "아산 세무과"처럼 시·군이 빠진 경우
         )
-    out = [region] if region and region not in ("충남", "전국") else []
-    return out + ["충남", "전국"]
+    province = ["충청남도", "충남", "전국"]
+    out = [region] if region and region not in province else []
+    return out + province
 
 
 def _history_messages(history: list[dict] | None) -> list[dict]:
@@ -179,6 +183,21 @@ def generate_answer(
     LLM 호출이 실패하면 RuntimeError를 던진다 (호출하는 쪽에서 503 등으로 처리).
     """
     doc = normalize_document(document)
+    answer, status, used, suggested, lang = answer_with_results(doc, message, history=history, language=language)
+    return _result(answer, status, [_source_dict(r) for r in used], doc, suggested, lang)
+
+
+def answer_with_results(
+    doc: dict,
+    message: str,
+    *,
+    history: list[dict] | None = None,
+    language: str | None = None,
+) -> tuple[str, GroundingStatus, list[SearchResult], list[str], str]:
+    """generate_answer의 본체. 출처를 SearchResult 그대로 돌려줘서 어댑터가 DB ID를 쓸 수 있게 함.
+
+    doc은 normalize_document()를 거친 dict. 반환: (answer, status, used_results, suggested, lang)
+    """
     message = (message or "").strip()
     if not message:
         raise ValueError("message가 비어 있어")
@@ -209,7 +228,7 @@ def generate_answer(
     status, used = decide_status(raw, results)
     answer = str(raw.get("answer", "")).strip() or "답변을 만들지 못했어요. 담당기관에 문의해 주세요."
     suggested = [str(q) for q in (raw.get("suggested_questions") or [])]
-    return _result(answer, status, [_source_dict(r) for r in used], doc, suggested, lang)
+    return answer, status, used, suggested, lang
 
 
 def generate_answer_dummy(

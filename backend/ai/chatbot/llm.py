@@ -56,6 +56,7 @@ class OllamaLLM:
         self.url = f"{s.ollama_url}/api/chat"
         self.model = s.ollama_model
         self.timeout = s.request_timeout
+        self.num_ctx = s.ollama_num_ctx
 
     def complete_json(self, system: str, messages: list[dict], **_) -> dict:
         r = httpx.post(
@@ -65,7 +66,8 @@ class OllamaLLM:
                 "messages": [{"role": "system", "content": system}, *messages],
                 "format": "json",
                 "stream": False,
-                "options": {"temperature": 0.2},
+                # 기본 컨텍스트(4096)를 넘는 프롬프트는 앞부분이 조용히 잘려서 늘려 둠
+                "options": {"temperature": 0.2, "num_ctx": self.num_ctx},
             },
             timeout=self.timeout,
         )
@@ -82,6 +84,8 @@ class MockLLM:
         if hint.get("task") == "rewrite":
             return {"query": hint.get("fallback_query", messages[-1]["content"])}
         source_ids = hint.get("source_ids", [])
+        if hint.get("task") == "verify":
+            return {"status": "MATCHED" if source_ids else "UNVERIFIED", "reason": "[MOCK]"}
         if source_ids:
             first = hint.get("first_source_text", "")[:160].replace("\n", " ")
             return {

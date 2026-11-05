@@ -22,6 +22,7 @@ class Settings:
     anthropic_model: str
     ollama_url: str
     ollama_model: str
+    ollama_num_ctx: int
     # 임베딩: ollama | fastembed | hash(테스트용)
     embedder: str
     ollama_embed_model: str
@@ -54,6 +55,7 @@ def get_settings() -> Settings:
         anthropic_model=_env("AI_ANTHROPIC_MODEL", "claude-haiku-5-5"),
         ollama_url=_env("AI_OLLAMA_URL", "http://localhost:11434").rstrip("/"),
         ollama_model=_env("AI_OLLAMA_MODEL", "qwen2.5:7b"),
+        ollama_num_ctx=int(_env("AI_OLLAMA_NUM_CTX", "8192")),
         embedder=_env("AI_EMBEDDER", "ollama"),
         ollama_embed_model=_env("AI_OLLAMA_EMBED_MODEL", "bge-m3"),
         fastembed_model=_env("AI_FASTEMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),

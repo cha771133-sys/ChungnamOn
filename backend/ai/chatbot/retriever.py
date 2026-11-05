@@ -31,6 +31,7 @@ class SearchResult:
     region: str | None
     published_at: date | None  # 자료 기준일
     checked_at: date           # 서비스 확인일 (collected_at)
+    source_document_id: int | None = None  # DB 검색일 때 SourceDocument.pk (memory 검색은 None)
 
 
 def _as_date(v) -> date | None:
@@ -103,7 +104,7 @@ class DbRetriever:
       sources_sourcechunk   : id, source_document_id, chunk_text, chunk_order, embedding(JSON 숫자 배열, null이면 제외)
     """
 
-    COLS = "c.id, c.chunk_text, {score}, d.source_url, d.title, d.agency, d.region, d.published_at, d.collected_at"
+    COLS = "c.id, c.chunk_text, {score}, d.source_url, d.title, d.agency, d.region, d.published_at, d.collected_at, d.id"
 
     def __init__(self):
         s = get_settings()
@@ -144,7 +145,9 @@ class DbRetriever:
 
     @staticmethod
     def _row(r, score) -> SearchResult:
-        return SearchResult(r[0], r[1], float(score), r[3], r[4], r[5], r[6], _as_date(r[7]), _as_date(r[8]) or date.today())
+        return SearchResult(
+            r[0], r[1], float(score), r[3], r[4], r[5], r[6], _as_date(r[7]), _as_date(r[8]) or date.today(), r[9],
+        )
 
     def search(self, query: str, *, regions: list[str] | None, top_k: int, min_score: float) -> list[SearchResult]:
         q = np.asarray(get_embedder().embed_query(query), dtype=np.float32)
