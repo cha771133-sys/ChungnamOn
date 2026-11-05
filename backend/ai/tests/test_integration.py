@@ -65,27 +65,55 @@ class AIEnvMixin:
 
 @unittest.skipUnless(DJANGO, "manage.py test로 실행")
 class BuildSourceChunksTests(AIEnvMixin, TestCase):
-    def test_creates_skips_and_rebuilds(self):
+    def test_only_active_documents_with_body(self):
         from ai.chatbot import build_source_chunks
         from sources.models import SourceChunk
 
         doc = self.source("a", index=False)
-        inactive = self.source("b", status="INACTIVE", index=False)
-        empty = self.source("c", text="", index=False)
+        others = [self.source("b", status="INACTIVE", index=False), self.source("p", status="PENDING", index=False),
+                  self.source("c", text="", index=False)]
 
         self.assertEqual(build_source_chunks(), {"documents": 1, "chunks": 1, "skipped": 0})
         chunk = SourceChunk.objects.get(source_document=doc)
         self.assertEqual(len(chunk.embedding), 1024)
         self.assertIn("[자료 a]", chunk.chunk_text)
-        self.assertFalse(SourceChunk.objects.filter(source_document__in=[inactive, empty]).exists())
+        self.assertFalse(SourceChunk.objects.filter(source_document__in=others).exists())
 
-        self.assertEqual(build_source_chunks(), {"documents": 0, "chunks": 0, "skipped": 1})
-        doc.content_text = "새 본문 " * 300
+    def test_unchanged_skipped_changed_rebuilt(self):
+        from ai.chatbot import build_source_chunks
+        from sources.models import SourceChunk
+
+        doc = self.source("a")
+        first_id = SourceChunk.objects.get(source_document=doc).pk
+        with mock.patch("ai.chatbot.indexing.embed_passages") as embed:
+            self.assertEqual(build_source_chunks(), {"documents": 0, "chunks": 0, "skipped": 1})
+        embed.assert_not_called()  # 본문이 그대로면 임베딩 API도 안 부름
+        self.assertEqual(SourceChunk.objects.get(source_document=doc).pk, first_id)
+
+        doc.content_text = "# 새 본문\n" + "바뀐 납부 안내 " * 200
         doc.save(update_fields=["content_text"])
-        stats = build_source_chunks([doc.pk], rebuild=True)
+        stats = build_source_chunks()
         self.assertEqual(stats["documents"], 1)
-        self.assertEqual(SourceChunk.objects.filter(source_document=doc).count(), stats["chunks"])
         self.assertGreater(stats["chunks"], 1)
+        texts = list(SourceChunk.objects.filter(source_document=doc).values_list("chunk_text", flat=True))
+        self.assertEqual(len(texts), stats["chunks"])
+        self.assertTrue(all("바뀐 납부 안내" in t for t in texts))
+
+    def test_wrong_dimension_or_missing_embedding_is_rebuilt(self):
+        from ai.chatbot import build_source_chunks
+        from sources.models import SourceChunk
+
+        doc = self.source("a")
+        for bad in ([0.1] * 768, None):
+            SourceChunk.objects.filter(source_document=doc).update(embedding=bad)
+            self.assertEqual(build_source_chunks()["documents"], 1)
+            self.assertEqual(len(SourceChunk.objects.get(source_document=doc).embedding), 1024)
+
+    def test_rebuild_forces(self):
+        from ai.chatbot import build_source_chunks
+
+        self.source("a")
+        self.assertEqual(build_source_chunks(rebuild=True)["documents"], 1)
 
 
 @unittest.skipUnless(DJANGO, "manage.py test로 실행")
@@ -149,6 +177,29 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         out = pipeline.verify(RESULT)
         self.assertEqual(out["sources"][0]["sourceDocumentId"], doc.pk)
 
+    @override_settings(DOCUMENTS_VERIFY_MODE="rag", DOCUMENTS_STEP_DELAY=0)
+    def test_pipeline_errors_become_unverified_and_document_still_done(self):
+        from django.contrib.auth import get_user_model
+
+        from documents.models import Document, InterpretationResult
+        from documents.services import pipeline
+
+        self.source("a")
+        for target in ("ai.chatbot.integration.search", "ai.chatbot.llm.MockLLM.complete_json"):
+            with mock.patch(target, side_effect=RuntimeError("문서 내용 포함 오류")), \
+                    self.assertLogs("documents.services.pipeline", "WARNING") as logs:
+                self.assertEqual(pipeline.verify(RESULT), {"status": "UNVERIFIED", "sources": []})
+            self.assertNotIn("문서 내용", "\n".join(logs.output))
+
+        user = get_user_model().objects.create_user("verify-fail@example.com")
+        document = Document.objects.create(owner=user, file="documents/t.pdf", file_name="t.pdf", file_type="PDF")
+        with mock.patch("ai.chatbot.integration.search", side_effect=TimeoutError):
+            self.assertTrue(pipeline.process_document(document.pk))
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.Status.DONE)
+        self.assertEqual(InterpretationResult.objects.get(document=document).verification,
+                         {"status": "UNVERIFIED", "sources": []})
+
     def test_pipeline_slot_default_is_dummy(self):
         from documents.services import pipeline
 
@@ -181,6 +232,8 @@ class ChatAnswerTests(AIEnvMixin, TestCase):
     def test_grounded_only_with_linked_official_source(self):
         doc = self.source("a")
         out = self.ask(self.interpretation(ids=[doc.pk]), self.official(doc))
+        # 계약 키만 (agency_contact·grounding_status·snake_case 키는 버림)
+        self.assertEqual(set(out), {"answer", "language", "sources", "grounded", "status", "suggestedQuestions"})
         self.assertEqual(out["status"], "GROUNDED")
         self.assertIs(out["grounded"], True)
         self.assertEqual(out["sources"], [{"sourceDocumentId": doc.pk}])
@@ -216,6 +269,38 @@ class ChatAnswerTests(AIEnvMixin, TestCase):
         self.assertEqual(run.call_args.kwargs["history"], [
             {"role": "user", "content": "이전 질문"}, {"role": "assistant", "content": "이전 답"},
         ])
+
+
+@unittest.skipUnless(DJANGO, "manage.py test로 실행")
+class AIClientSlotTests(AIEnvMixin, TestCase):
+    ARGS = dict(question="q", interpretation={}, history=[], language="ko", official_sources=[])
+
+    @override_settings(CHATBOT_AI_MODE="rag")
+    def test_every_exception_becomes_ai_client_error(self):
+        from chatbot.services import ai_client
+
+        for exc in (RuntimeError("secret"), ValueError(), KeyError("k"), ImportError(), TimeoutError()):
+            with mock.patch("ai.chatbot.integration.chat_answer", side_effect=exc):
+                with self.assertRaises(ai_client.AIClientError) as ctx:
+                    ai_client.generate_answer(**self.ARGS)
+            self.assertIsNone(ctx.exception.__cause__)
+            self.assertTrue(ctx.exception.__suppress_context__)  # 원문 예외를 연결하지 않음
+
+    @override_settings(CHATBOT_AI_MODE="rag")
+    def test_rag_mode_delegates(self):
+        from chatbot.services import ai_client
+
+        with mock.patch("ai.chatbot.integration.chat_answer", return_value={"ok": 1}) as run:
+            self.assertEqual(ai_client.generate_answer(**self.ARGS), {"ok": 1})
+        run.assert_called_once_with("q", {}, [], "ko", [])
+
+    def test_default_dummy_does_not_touch_rag(self):
+        from chatbot.services import ai_client
+
+        with mock.patch("ai.chatbot.integration.chat_answer") as run:
+            out = ai_client.generate_answer(**self.ARGS)
+        run.assert_not_called()
+        self.assertEqual(out["status"], "UNVERIFIED")
 
 
 @unittest.skipUnless(DJANGO, "manage.py test로 실행")

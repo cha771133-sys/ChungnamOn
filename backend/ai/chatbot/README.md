@@ -35,7 +35,10 @@ FE Chat.jsx ──POST /api/chat/──▶ chatbot 앱
 python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks())"
 python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks([3, 5], rebuild=True))"  # 본문·임베딩 모델 바뀐 자료
 ```
-INACTIVE·본문 없는 자료는 빼고, 이미 청크가 있으면 건너뜀. 검색은 ACTIVE만.
+ACTIVE이고 본문이 있는 자료만. 본문이 그대로이고 임베딩 차원이 `AI_EMBED_DIM`과 같으면 건너뜀(임베딩 API도 안 부름).
+본문이 바뀌었거나 차원이 다른(임베딩 모델을 바꾼) 청크는 다시 만듦.
+
+verify(rag)는 검색·임베딩·LLM 오류가 나면 문서 처리를 실패시키지 않고 `UNVERIFIED`, `sources=[]`를 돌려줌.
 
 실제 Ollama로 끝까지 확인 (샘플 자료를 테스트 DB에만 넣음, CPU면 몇 분 걸림):
 ```bash
@@ -125,10 +128,13 @@ AI_REQUEST_TIMEOUT=120        # LLM·임베딩 연결/읽기 timeout(초). CPU O
 ANTHROPIC_API_KEY=
 AI_ANTHROPIC_MODEL=claude-haiku-5-5
 
-# 임베딩: ollama(bge-m3, 1024) / fastembed / hash(테스트)
-AI_EMBEDDER=ollama
+# 임베딩: gemini(gemini-embedding-001, 768) / ollama(bge-m3, 1024) / fastembed / hash(테스트)
+AI_EMBEDDER=gemini
+GEMINI_API_KEY=                          # Google AI Studio 키. 헤더(x-goog-api-key)로만 보냄
+AI_GEMINI_EMBED_MODEL=gemini-embedding-001
+AI_EMBED_DIM=768                         # gemini 기본 768 (권장 768/1536/3072)
+# Ollama로 개발할 때: AI_EMBEDDER=ollama, AI_EMBED_DIM=1024
 AI_OLLAMA_EMBED_MODEL=bge-m3
-AI_EMBED_DIM=1024
 
 # 검색: db(공식 자료 테이블) / memory(.md 폴더, Django 없이)
 AI_RETRIEVER=db
@@ -136,9 +142,10 @@ AI_KB_DIR=
 AI_TOP_K=5
 AI_MIN_SCORE=0.35
 ```
-- 배포(Railway)엔 Ollama가 없어서 `AI_LLM_PROVIDER=anthropic`. 임베딩도 `fastembed`나 임베딩 API로 바꿔야 함 (Railway 메모리 보고 결정)
-- `AI_MIN_SCORE=0.35`는 임시값. 실제 모델로 `--search`를 돌려 보고 조정
-- 임베딩 모델을 바꾸면 차원이 바뀌니 저장된 임베딩을 다시 만들어야 함
+- 배포(Railway)엔 Ollama가 없어서 `AI_LLM_PROVIDER=anthropic`, 임베딩은 `gemini`
+- gemini 무료 등급은 429(한도 초과)가 날 수 있음: 서버가 준 대기 시간(최대 60초)만큼 기다렸다가 최대 5번 재시도, 문장은 100개씩 묶어서 전송
+- `AI_MIN_SCORE=0.35`는 임시값. 실제 모델로 `--search`를 돌려 보고 조정 (임베딩 모델마다 점수 분포가 다름)
+- 임베딩 모델·차원을 바꾸면 `build_source_chunks()`를 다시 실행 (차원이 다른 청크는 자동으로 다시 만듦)
 
 ## 4. 개발할 때
 

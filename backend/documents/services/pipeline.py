@@ -128,12 +128,18 @@ def verify(result):
 
     DOCUMENTS_VERIFY_MODE=rag: backend/ai/chatbot RAG로 관련 공식 자료(최대 10개, 관련도 순)를 찾고
     LLM이 대조해 status를 정한다. 각 sources 항목에 "sourceDocumentId": int (SourceDocument.pk)가 추가된다.
+    검색·임베딩·LLM 오류가 나면 문서 처리를 실패시키지 않고 {"status": "UNVERIFIED", "sources": []}를 반환한다.
     기본값 dummy는 아래 고정 결과를 반환한다.
     """
     if getattr(settings, 'DOCUMENTS_VERIFY_MODE', 'dummy') == 'rag':
-        from ai.chatbot.integration import verify_interpretation
+        try:
+            from ai.chatbot.integration import verify_interpretation
 
-        return verify_interpretation(result)
+            return verify_interpretation(result)
+        except Exception as exc:
+            # 오류 원문에는 문서 내용이 섞일 수 있어서 종류만 남긴다.
+            logger.warning('공식 자료 대조 실패, UNVERIFIED로 처리: %s', type(exc).__name__)
+            return {'status': 'UNVERIFIED', 'sources': []}
     return {
         'status': 'MATCHED',
         'sources': [

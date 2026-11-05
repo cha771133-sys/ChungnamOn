@@ -23,8 +23,10 @@ class Settings:
     ollama_url: str
     ollama_model: str
     ollama_num_ctx: int
-    # 임베딩: ollama | fastembed | hash(테스트용)
+    # 임베딩: gemini | ollama | fastembed | hash(테스트용)
     embedder: str
+    gemini_api_key: str
+    gemini_embed_model: str
     ollama_embed_model: str
     fastembed_model: str
     embed_dim: int
@@ -49,6 +51,7 @@ def _env(name: str, default: str) -> str:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    embedder = _env("AI_EMBEDDER", "ollama")
     return Settings(
         llm_provider=_env("AI_LLM_PROVIDER", ""),
         anthropic_api_key=_env("ANTHROPIC_API_KEY", ""),
@@ -56,10 +59,13 @@ def get_settings() -> Settings:
         ollama_url=_env("AI_OLLAMA_URL", "http://localhost:11434").rstrip("/"),
         ollama_model=_env("AI_OLLAMA_MODEL", "qwen2.5:7b"),
         ollama_num_ctx=int(_env("AI_OLLAMA_NUM_CTX", "8192")),
-        embedder=_env("AI_EMBEDDER", "ollama"),
+        embedder=embedder,
+        gemini_api_key=_env("GEMINI_API_KEY", ""),
+        gemini_embed_model=_env("AI_GEMINI_EMBED_MODEL", "gemini-embedding-001"),
         ollama_embed_model=_env("AI_OLLAMA_EMBED_MODEL", "bge-m3"),
         fastembed_model=_env("AI_FASTEMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
-        embed_dim=int(_env("AI_EMBED_DIM", "1024")),
+        # gemini는 요청으로 차원을 고름 (권장 768/1536/3072). bge-m3는 1024 고정
+        embed_dim=int(_env("AI_EMBED_DIM", "768" if embedder == "gemini" else "1024")),
         retriever=_env("AI_RETRIEVER", "db"),
         kb_dir=Path(_env("AI_KB_DIR", str(BACKEND / "sources" / "data" / "pages"))),
         source_document_table=_env("AI_SOURCE_DOCUMENT_TABLE", "sources_sourcedocument"),

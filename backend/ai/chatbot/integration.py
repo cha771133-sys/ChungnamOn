@@ -131,7 +131,8 @@ def verify_interpretation(result: dict, limit: int = VERIFY_LIMIT) -> dict:
 
     {"status": "MATCHED"|"MISMATCH"|"UNVERIFIED",
      "sources": [{"title", "url", "checkedAt": "YYYY-MM-DD", "sourceDocumentId": int}]}  # 최대 limit개, 관련도 순
-    발신기관·지역을 모르면 검색하지 않고 UNVERIFIED. 검색·LLM 오류는 그대로 던진다 (파이프라인이 FAILED 처리).
+    발신기관·지역을 모르면 검색하지 않고 UNVERIFIED. 검색·LLM 오류는 그대로 던지고,
+    pipeline.verify가 받아서 UNVERIFIED로 바꾼다 (문서 처리는 실패시키지 않음).
     """
     from django.utils import timezone
 
