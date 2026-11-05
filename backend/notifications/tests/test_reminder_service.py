@@ -7,6 +7,7 @@ from notifications.services.reminder_service import KOREA, is_due_today, reminde
 
 class ReminderTimeTests(SimpleTestCase):
     def test_d7_and_d1_are_korean_calendar_dates_at_nine(self):
+        """두 사전 알림이 한국시간 오전 9시·UTC 자정에 대응하는지 확인한다."""
         for days, day in ((7, 13), (1, 19)):
             with self.subTest(days=days):
                 result = reminder_time(date(2026, 11, 20), days)
@@ -49,6 +50,7 @@ class ReminderTimeTests(SimpleTestCase):
         self.assertFalse(self.due(now=current, created_at=created))
 
     def test_invalid_or_naive_times_are_rejected(self):
+        """시간대 누락·마감일 누락·미지원 일수·Boolean 일수 입력을 거부한다."""
         with self.assertRaises(ValueError):
             self.due(now=datetime(2026, 11, 13))
         for deadline, days in ((None, 1), (date(2026, 11, 20), 2), (date(2026, 11, 20), True)):

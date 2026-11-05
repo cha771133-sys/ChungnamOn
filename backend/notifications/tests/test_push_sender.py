@@ -37,6 +37,7 @@ class PushSenderTests(SimpleTestCase):
         self.assertEqual(message.data['url'], '/?schedule=id%26next%3Dhttps%3A%2F%2Fexample.com')
 
     def test_invalid_payload_never_initializes_firebase(self):
+        """잘못된 내부 입력과 원문 업무명 전달이 외부 인증·전송 전에 거부되는지 확인한다."""
         for fields in (self.fields(days_before=3), self.fields(days_before=True),
                        self.fields(deadline_date=None), self.fields(task_name='개인정보')):
             with self.subTest(fields=list(fields)), patch(f'{MODULE}.get_firebase_app') as initialize:
@@ -54,6 +55,7 @@ class PushSenderTests(SimpleTestCase):
         self.assertIs(send.call_args.kwargs['app'], initialize.return_value)
 
     def test_error_classification_no_raw_error_text_or_application_retry(self):
+        """공급자 오류별 안전한 분류와 원문 비노출·추가 재시도 없음을 검증한다."""
         cases = [
             (messaging.UnregisteredError(FID), PushStatus.INVALID_DEVICE, 'UNREGISTERED'),
             (messaging.SenderIdMismatchError(FID), PushStatus.CONFIGURATION_ERROR, 'FIREBASE_AUTHENTICATION'),

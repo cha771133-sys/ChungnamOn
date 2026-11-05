@@ -41,6 +41,7 @@ class PreferenceTests(NotificationAPITestCase):
         self.assertEqual(preference.updated_at, later)
 
     def test_only_boolean_is_allowed(self):
+        """느슨한 Boolean 변환이나 빈 PATCH가 수신 동의를 생성하지 못하게 한다."""
         for value in ('true', 'false', 1, 0, None, [], {}):
             with self.subTest(value=value):
                 response = self.client.patch(self.path, {'enabled': value}, format='json')

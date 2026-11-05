@@ -6,10 +6,12 @@ class Command(BaseCommand):
     help = '마감 알림 발송 (P2-11 Schedule 미구현으로 현재 실행 차단)'
 
     def add_arguments(self, parser):
+        """예약한 운영 옵션을 선언하되 선행 연동 전 실제 발송 기능은 열지 않는다."""
         parser.add_argument('--dry-run', action='store_true', help='실제 발송·DB 변경 없이 확인')
         parser.add_argument('--limit', type=int, help='최대 이벤트 수 (양의 정수)')
 
     def handle(self, *args, **options):
+        """잘못된 제한값과 미구현 일정 연동을 명시적으로 실패시키고 연결을 닫는다."""
         try:
             if options['limit'] is not None and options['limit'] <= 0:
                 raise CommandError('--limit는 양의 정수여야 합니다.')

@@ -26,6 +26,7 @@ class NotificationPreference(models.Model):
         )]
 
     def __str__(self):
+        """개인정보 대신 설정 및 사용자 식별자만 표시한다."""
         return f'알림 설정 {self.pk} (사용자 {self.user_id})'
 
 
@@ -60,10 +61,12 @@ class PushDevice(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+        """등록 원문 변경 시 비교 해시도 같은 저장 작업에 포함한다."""
         self.registration_hash = registration_digest(self.registration_id)
         if kwargs.get('update_fields') is not None and 'registration_id' in kwargs['update_fields']:
             kwargs['update_fields'] = set(kwargs['update_fields']) | {'registration_hash'}
         super().save(*args, **kwargs)
 
     def __str__(self):
+        """로그·관리자 관계 표시에서 FID 원문과 해시가 노출되지 않게 한다."""
         return f'푸시 기기 {self.pk} (사용자 {self.user_id})'

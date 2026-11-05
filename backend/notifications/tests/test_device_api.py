@@ -47,6 +47,7 @@ class DeviceAPITests(NotificationAPITestCase):
         self.assertEqual(self.client.get('/api/notifications/preferences/').data['registeredDeviceCount'], 0)
 
     def test_deactivate_repeat_is_safe(self):
+        """기기 해제 재요청이 행 삭제나 오류 없이 같은 결과를 내는지 검증한다."""
         device_id = self.register().data['id']
         for _ in range(2):
             self.assertEqual(self.client.delete(f'/api/notifications/devices/{device_id}/').status_code, 204)
@@ -73,6 +74,7 @@ class DeviceAPITests(NotificationAPITestCase):
         self.assertEqual(PushDevice.objects.count(), 1)
 
     def test_invalid_contract_and_unknown_owner_fields_are_rejected(self):
+        """지원하지 않는 등록 방식·입력 형식·사용자 조작 필드를 공통 400으로 차단한다."""
         for data in (
             {'registrationType': 'TOKEN'}, {'registrationType': 'OTHER'}, {'platform': 'DESKTOP'},
             {'user': self.other.pk}, {'userId': self.other.pk}, {'isActive': True},
@@ -86,10 +88,14 @@ class DeviceAPITests(NotificationAPITestCase):
         self.assertFalse(PushDevice.objects.exists())
 
     def test_storage_failure_does_not_leak_identifier(self):
-        with patch('notifications.views.register_device', side_effect=OperationalError(FID)):
+        with patch('notifications.views.register_device', side_effect=OperationalError(FID)), \
+                self.assertLogs('notifications.views', level='ERROR') as logs:
             response = self.register()
         self.assertEqual(response.status_code, 503)
         self.assertNotIn(FID, response.content.decode())
+        self.assertEqual(logs.output, ['ERROR:notifications.views:알림 저장소 오류: OperationalError'])
+        self.assertIsNone(logs.records[0].exc_info)
+        self.assertNotIn(FID, str(logs.output))
 
     def test_no_arbitrary_push_or_device_list_api(self):
         self.assertEqual(self.client.get('/api/notifications/devices/').status_code, 405)

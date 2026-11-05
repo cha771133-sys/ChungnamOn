@@ -31,6 +31,7 @@ class DeviceSerializer(serializers.ModelSerializer):
 
 class StrictBooleanField(serializers.BooleanField):
     def to_internal_value(self, data):
+        """문자열과 숫자 변환 없이 JSON Boolean만 수신 동의로 인정한다."""
         if type(data) is not bool:
             self.fail('invalid', input=data)
         return data

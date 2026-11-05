@@ -10,6 +10,7 @@ from notifications.models import NotificationPreference, PushDevice, registratio
 @sensitive_variables('registration_id')
 @transaction.atomic
 def register_device(*, user, registration_id, registration_type, platform, replaces_device_id=None):
+    """FID의 유일 소유자를 갱신하고 선택한 이전 본인 등록을 원자적으로 해제한다."""
     digest = registration_digest(registration_id)
     # 갱신 대상들을 PK 순으로 잠가 계정 전환/식별자 교체의 락 순서를 통일한다.
     locked = list(PushDevice.objects.select_for_update().filter(
@@ -41,6 +42,7 @@ def register_device(*, user, registration_id, registration_type, platform, repla
 
 @transaction.atomic
 def set_preference(user, enabled):
+    """설정을 직렬화해 갱신하고 비활성에서 활성으로 전환될 때만 동의 시각을 기록한다."""
     preference, _ = NotificationPreference.objects.select_for_update().get_or_create(user=user)
     if enabled and not preference.enabled:
         preference.enabled_since = timezone.now()

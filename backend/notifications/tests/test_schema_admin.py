@@ -9,6 +9,7 @@ from notifications.models import NotificationPreference, PushDevice
 
 class NotificationSchemaTests(SimpleTestCase):
     def test_schema_documents_real_protected_apis_without_identifiers_in_response(self):
+        """실제 JWT 경로만 문서화하고 응답 스키마에서 비밀 등록 식별자를 제외한다."""
         schema = SchemaGenerator().get_schema(request=None, public=True)
         validate_schema(schema)
         for path, method in (
@@ -25,6 +26,7 @@ class NotificationSchemaTests(SimpleTestCase):
         self.assertNotIn('registrationId', schema['components']['schemas'][name]['properties'])
 
     def test_admin_is_superuser_read_only_and_never_shows_raw_fid_or_hash(self):
+        """두 관리 화면이 최고 관리자 조회 전용이며 FID·비교 해시를 표시하지 않는지 검증한다."""
         for model in (PushDevice, NotificationPreference):
             model_admin = admin.site._registry[model]
             request = RequestFactory().get('/admin/')

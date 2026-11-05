@@ -1,3 +1,5 @@
+import logging
+
 from django.db import DatabaseError
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -15,6 +17,8 @@ from .serializers import (
 )
 from .services.devices import register_device, set_preference
 
+logger = logging.getLogger(__name__)
+
 ERRORS = {
     400: error_response('VALIDATION_ERROR: 입력 필드 또는 값이 잘못되었습니다.'),
     401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer JWT 필요'),
@@ -27,7 +31,9 @@ class NotificationAPIView(generics.GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def handle_exception(self, exc):
+        """DB 장애는 예외 유형만 기록하고 고정 공통 형식의 503으로 변환한다."""
         if isinstance(exc, DatabaseError):
+            logger.error('알림 저장소 오류: %s', type(exc).__name__)
             return Response({
                 'code': 'NOTIFICATION_STORAGE_UNAVAILABLE',
                 'message': '알림 설정을 처리할 수 없습니다. 잠시 후 다시 시도해 주세요.', 'details': {},
@@ -50,6 +56,7 @@ class DeviceRegistrationView(NotificationAPIView):
         request=DeviceRegistrationSerializer, responses={200: DeviceSerializer, **ERRORS},
     )
     def post(self, request):
+        """JWT 사용자에게 FID를 등록하고 비밀 식별자를 제외한 메타데이터를 반환한다."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -71,6 +78,7 @@ class DeviceDeactivateView(NotificationAPIView):
         request=None, responses={204: None, **ERRORS},
     )
     def delete(self, request, pk):
+        """본인 기기만 해제하며 이미 해제한 등록의 반복 요청도 허용한다."""
         device = get_object_or_404(PushDevice.objects.filter(user=request.user), pk=pk)
         # 조회 직후 계정이 바뀌어도 새 소유자의 등록을 해제하지 않는다.
         PushDevice.objects.filter(pk=device.pk, user=request.user, is_active=True).update(
@@ -98,13 +106,16 @@ class PreferenceView(NotificationAPIView):
     serializer_class = PreferenceSerializer
 
     def preference_data(self, user):
+        """미설정은 비활성으로 취급하고 본인의 활성 기기 수만 집계한다."""
         enabled = NotificationPreference.objects.filter(user=user, enabled=True).exists()
         return {'enabled': enabled, 'registeredDeviceCount': PushDevice.objects.filter(user=user, is_active=True).count()}
 
     def get(self, request):
+        """설정 행을 새로 만들지 않고 현재 사용자의 수신 설정을 반환한다."""
         return Response(self.get_serializer(self.preference_data(request.user)).data)
 
     def patch(self, request):
+        """엄격한 Boolean 입력으로 현재 사용자의 동의와 시작 시각을 갱신한다."""
         serializer = PreferenceUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         set_preference(request.user, serializer.validated_data['enabled'])

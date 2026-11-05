@@ -7,6 +7,7 @@ KOREA = ZoneInfo('Asia/Seoul')
 
 
 def reminder_time(deadline_date, days_before):
+    """마감 날짜에서 7일 또는 1일을 뺀 한국시간 오전 9시를 계산한다."""
     if type(deadline_date) is not date or type(days_before) is not int or days_before not in (7, 1):
         raise ValueError('마감일과 7 또는 1일 사전 알림을 지정하세요.')
     return datetime.combine(deadline_date - timedelta(days=days_before), time(9), tzinfo=KOREA)

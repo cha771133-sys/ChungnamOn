@@ -47,6 +47,7 @@ class ModelTests(TestCase):
         self.assertEqual(self.device.updated_at, old_updated_at)
 
     def test_configuration_or_uncertain_failures_do_not_disable_devices(self):
+        """기기 무효화가 아닌 발송 오류는 활성 등록을 유지하는지 확인한다."""
         for status in (PushStatus.CONFIGURATION_ERROR, PushStatus.UNKNOWN, PushStatus.RETRYABLE, PushStatus.PERMANENT_ERROR):
             self.assertEqual(record_device_result(self.device, PushResult(status)), 0)
             self.device.refresh_from_db()
@@ -71,10 +72,12 @@ class ModelTests(TestCase):
 class ConcurrentRegistrationTests(TransactionTestCase):
     @skipUnlessDBFeature('has_select_for_update')
     def test_concurrent_accounts_share_one_registration(self):
+        """PostgreSQL의 동시 신규 등록 경쟁에서도 FID 행과 활성 소유자가 하나인지 확인한다."""
         user_ids = [get_user_model().objects.create_user(email=f'race{i}@example.com').pk for i in range(2)]
         barrier = Barrier(2)
 
         def register(user_id):
+            """독립 DB 연결의 두 작업을 동시에 시작하고 연결을 정리한다."""
             close_old_connections()
             try:
                 user = get_user_model().objects.get(pk=user_id)
