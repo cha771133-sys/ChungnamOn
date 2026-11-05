@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'core',
     'documents',
     'sources',
+    'chatbot',
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -79,6 +80,10 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'DESCRIPTION': 'ChungnamOn backend REST API',
     'COMPONENT_SPLIT_REQUEST': True,
+    'ENUM_NAME_OVERRIDES': {
+        'StatusEnum': 'documents.models.Document.Status',
+        'ChatMessageStatusEnum': 'chatbot.models.ChatMessage.Status',
+    },
     'SERVE_INCLUDE_SCHEMA': False,
     'SERVE_AUTHENTICATION': [],
     'SERVE_PERMISSIONS': ['rest_framework.permissions.AllowAny'],
@@ -211,3 +216,7 @@ CSRF_TRUSTED_ORIGINS = [
         if host not in ('localhost', '127.0.0.1', '*')
     ),
 ]
+
+
+# P2-13: 로컬 더미만 제공한다. 지원하지 않는 실제 모드는 503으로 차단한다.
+CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
