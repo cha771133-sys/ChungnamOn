@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import requests
 from django.test import SimpleTestCase, override_settings
 from firebase_admin import exceptions, messaging
-from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
 
 from notifications.services.push_sender import (
     APP_NAME, PushStatus, build_deadline_message, get_firebase_app, send_deadline_push,
@@ -103,6 +103,22 @@ class PushSenderTests(SimpleTestCase):
 
         self.assertEqual(result.status, PushStatus.CONFIGURATION_ERROR)
         self.assertEqual(result.error_code, 'FIREBASE_CONFIGURATION')
+        send.assert_not_called()
+
+    @patch(f'{MODULE}.messaging.send')
+    @patch(f'{MODULE}.get_firebase_app')
+    def test_project_id_network_error_is_unknown(self, initialize, send):
+        class NetworkUnavailableApp:
+            @property
+            def project_id(self):
+                raise TransportError('network unavailable')
+
+        initialize.return_value = NetworkUnavailableApp()
+
+        result = send_deadline_push(**self.fields())
+
+        self.assertEqual(result.status, PushStatus.UNKNOWN)
+        self.assertEqual(result.error_code, 'NETWORK_RESULT_UNKNOWN')
         send.assert_not_called()
 
 

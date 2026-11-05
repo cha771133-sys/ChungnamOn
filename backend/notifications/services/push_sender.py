@@ -86,6 +86,8 @@ def send_deadline_push(**message_fields):
         app = get_firebase_app()
         if not app.project_id:
             return PushResult(PushStatus.CONFIGURATION_ERROR, 'FIREBASE_CONFIGURATION')
+    except TransportError:
+        return PushResult(PushStatus.UNKNOWN, 'NETWORK_RESULT_UNKNOWN')
     except (DefaultCredentialsError, RefreshError, ValueError, TypeError, KeyError, OSError):
         return PushResult(PushStatus.CONFIGURATION_ERROR, 'FIREBASE_CONFIGURATION')
     try:
