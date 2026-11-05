@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# ChungnamOn — CodeRabbit 기본 설정
+
+language: ko-KR
+tone_instructions: "한국어로 간결하게 리뷰한다. 사소한 스타일 지적보다 버그, 충돌, 보안 문제를 우선한다."
+
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "^dev$"
+      - "^main$"
+
+  path_filters:
+    - "!**/package-lock.json"
+    - "!**/dist/**"
+    - "!**/node_modules/**"
+    - "!**/media/**"
+    - "!**/*.sqlite3"
+
+  path_instructions:
+    - path: "**"
+      instructions: |
+        다음 항목을 우선 확인한다.
+        - 버그, 예외 처리 누락, 보안 문제
+        - .env, 비밀키, API 키, 실제 개인정보가 커밋되지 않았는지
+        - 공통 파일(config/settings.py, config/urls.py)을 수정했다면 변경 범위가 최소인지 지적한다
+
+    - path: "backend/**/models.py"
+      instructions: |
+        - User를 참조할 때 auth.User 대신 settings.AUTH_USER_MODEL을 쓰는지
+
+    - path: "backend/**/migrations/*.py"
+      instructions: |
+        - 같은 앱 안에서 번호가 중복된 마이그레이션이 생길 가능성이 있는지
+        - 다른 앱 마이그레이션에 대한 dependencies가 올바른지
+
+  tools:
+    gitleaks:
+      enabled: true
+
+chat:
+  auto_reply: true

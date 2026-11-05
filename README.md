@@ -11,6 +11,8 @@ React(Vite + TypeScript) 프론트엔드와 Django(DRF) 백엔드로 구성된 �
 
 Windows PowerShell 기준입니다.
 
+기존 DB가 있다면 `migrate` 전에 [인증 사용자 모델 전환 주의사항](backend/accounts/README.md#기존-db-전환-차단-사항)을 확인하세요. 기본 User로 `admin` 마이그레이션을 적용한 DB는 별도 전환이 필요합니다.
+
 ```powershell
 cd backend
 python -m venv .venv
@@ -34,6 +36,9 @@ npm run dev
 브라우저에서 http://localhost:5173 을 열면 됩니다. 개발 서버는 `/api` 요청을 `http://127.0.0.1:8000`으로 프록시합니다.
 
 ## 테스트
+
+Swagger UI는 `/api/docs/`, OpenAPI 명세는 `/api/schema/`에서 확인할 수 있습니다.
+공통 권한·오류 응답·페이지네이션과 인증 통합 주의사항은 [공통 API 안내](backend/core/README.md)를 참고하세요.
 
 ```powershell
 cd backend

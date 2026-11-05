@@ -1,0 +1,65 @@
+name: Frontend CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+    # edited: 대상 브랜치를 바꾼 PR에도 필수 체크가 생기게 한다.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+# 같은 PR에 새 커밋이 올라오면 이전 실행은 취소한다.
+concurrency:
+  group: frontend-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # 필수 체크 이름. 바꾸면 ruleset의 required status check도 같이 바꾼다.
+    name: frontend-build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # 필수 체크라 항상 결과를 남겨야 한다. 관련 변경이 없으면 검사 단계만 건너뛴다.
+      - name: 변경 확인
+        id: changes
+        working-directory: .
+        # pathspec으로 비교해 한글 경로 인용·파일 이동도 놓치지 않는다. 종료 코드 1은 변경 있음, 그 외는 실패.
+        run: |
+          set +e
+          git diff --no-renames --quiet HEAD^1 HEAD -- frontend .github/workflows/frontend-ci.yml
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "frontend 변경 없음, 검사 생략"; echo "run=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::변경 확인 실패 (git diff 종료 코드 $code)"; exit "$code" ;;
+          esac
+
+      - name: Node 24
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 의존성 설치
+        if: steps.changes.outputs.run == 'true'
+        run: npm ci
+
+      - name: Lint
+        if: steps.changes.outputs.run == 'true'
+        run: npm run lint
+
+      - name: 빌드
+        if: steps.changes.outputs.run == 'true'
+        run: npm run build

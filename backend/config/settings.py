@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -48,9 +49,54 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'drf_spectacular',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'accounts',
     'core',
+    'documents',
+    'sources',
+    'chatbot',
+    'notifications',
 ]
+
+AUTH_USER_MODEL = 'accounts.User'
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'SCHEMA_COERCE_PATH_PK': False,
+    'EXCEPTION_HANDLER': 'core.exceptions.api_exception_handler',
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.StandardPagination',
+    'PAGE_SIZE': 20,
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'ChungnamOn API',
+    'VERSION': '1.0.0',
+    'DESCRIPTION': 'ChungnamOn backend REST API',
+    'COMPONENT_SPLIT_REQUEST': True,
+    'ENUM_NAME_OVERRIDES': {
+        'StatusEnum': 'documents.models.Document.Status',
+        'ChatMessageStatusEnum': 'chatbot.models.ChatMessage.Status',
+    },
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SERVE_AUTHENTICATION': [],
+    'SERVE_PERMISSIONS': ['rest_framework.permissions.AllowAny'],
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -138,6 +184,12 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
+# Media files (uploads)
+
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
@@ -165,3 +217,10 @@ CSRF_TRUSTED_ORIGINS = [
         if host not in ('localhost', '127.0.0.1', '*')
     ),
 ]
+
+
+# P2-13: 로컬 더미만 제공한다. 지원하지 않는 실제 모드는 503으로 차단한다.
+CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
+
+# 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
+FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')

@@ -1,0 +1,28 @@
+name: Main Source Check
+
+# main에는 dev에서 올린 PR만 들어오게 한다. main ruleset의 필수 체크로 등록되어 있다.
+# pull_request 이벤트는 PR 쪽 워크플로 정의로 실행되므로, PR에서 이 파일을 고치면 검사를 우회할 수 있다.
+# main PR 리뷰 때 .github/workflows/ 변경을 확인한다. pull_request_target 전환은 해커톤 이후 검토.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions: {}
+
+jobs:
+  check:
+    # 필수 체크 이름. 바꾸면 ruleset의 required status check도 같이 바꾼다.
+    name: main-source-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: 출발 브랜치 확인
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] || [ "$HEAD_REF" != "dev" ]; then
+            echo "::error::main에는 dev에서 올린 PR만 머지할 수 있습니다. (현재: $HEAD_REPO:$HEAD_REF)"
+            exit 1
+          fi
+          echo "dev → main PR 확인"
