@@ -65,6 +65,45 @@ class DocumentStatusResponseSerializer(DocumentStatusSerializer):
         fields = [*DocumentStatusSerializer.Meta.fields, 'failReason']
 
 
+class DocumentListSerializer(serializers.ModelSerializer):
+    """내 문서함 목록 항목."""
+
+    documentId = serializers.IntegerField(source='id', read_only=True)
+    docType = serializers.CharField(source='doc_type', read_only=True)
+    fileName = serializers.CharField(source='file_name', read_only=True)
+    fileType = serializers.ChoiceField(source='file_type', choices=Document.FileType.choices, read_only=True)
+    lowConfidence = serializers.BooleanField(source='low_confidence', read_only=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    expiresAt = serializers.DateTimeField(
+        source='expires_at', read_only=True, help_text='원본 파일 자동 삭제 기준 시각 (업로드 후 30일)',
+    )
+
+    class Meta:
+        model = Document
+        fields = [
+            'documentId', 'title', 'docType', 'fileName', 'fileType', 'status', 'step',
+            'lowConfidence', 'createdAt', 'expiresAt',
+        ]
+        read_only_fields = fields
+
+
+class DocumentDetailSerializer(DocumentListSerializer):
+    """내 문서함 상세. 해석 결과 본문은 결과 조회 API에서 받는다."""
+
+    failReason = serializers.CharField(
+        source='fail_reason', read_only=True, help_text='FAILED 상태의 실패 사유. 그 외에는 빈 문자열',
+    )
+    maskedCount = serializers.IntegerField(source='masked_count', read_only=True)
+    hasResult = serializers.SerializerMethodField(help_text='해석 결과가 저장되어 결과 조회 API를 쓸 수 있는지')
+
+    class Meta(DocumentListSerializer.Meta):
+        fields = [*DocumentListSerializer.Meta.fields, 'failReason', 'maskedCount', 'hasResult']
+        read_only_fields = fields
+
+    def get_hasResult(self, instance) -> bool:
+        return hasattr(instance, 'result')
+
+
 class DocumentNotReadySerializer(serializers.Serializer):
     """기존 처리 중·실패 409 응답의 명세."""
 

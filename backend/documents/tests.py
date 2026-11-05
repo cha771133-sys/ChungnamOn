@@ -5,16 +5,19 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db.models.fields.files import FieldFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APITestCase
 
 from accounts.models import UserProfile
+from chatbot.models import ChatMessage
 
 from .models import Document, InterpretationResult
 from .serializers import MAX_FILE_SIZE
 from .services import pipeline
 from .services.pipeline import process_document
 from .services.runner import start_processing
+from .views import DocumentDetailView
 
 TEMP_MEDIA_ROOT = tempfile.mkdtemp()
 UPLOAD_URL = '/api/documents/'
@@ -388,3 +391,250 @@ class DocumentResultTests(APITestCase):
         response = self.client.get(result_url(self.document.id))
 
         self.assertEqual(response.status_code, 401)
+
+
+def detail_url(document_id):
+    return f'/api/documents/{document_id}/'
+
+
+LIST_KEYS = {
+    'documentId', 'title', 'docType', 'fileName', 'fileType', 'status', 'step',
+    'lowConfidence', 'createdAt', 'expiresAt',
+}
+
+
+@test_settings
+class DocumentListTests(APITestCase):
+    def setUp(self):
+        self.user = create_user('owner@example.com')
+        self.client.force_authenticate(self.user)
+
+    def test_lists_only_my_documents_newest_first(self):
+        mine = [create_document(self.user) for _ in range(3)]
+        create_document(create_user('other@example.com'))
+
+        response = self.client.get(UPLOAD_URL)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['count'], 3)
+        self.assertEqual([item['documentId'] for item in data['results']], [d.id for d in reversed(mine)])
+        self.assertEqual(set(data['results'][0]), LIST_KEYS)
+
+    def test_list_item_fields(self):
+        document = create_document(self.user)
+        process_document(document.id)
+
+        item = self.client.get(UPLOAD_URL).json()['results'][0]
+
+        self.assertEqual(item['title'], '주민세 납부 안내')
+        self.assertEqual(item['docType'], '고지서')
+        self.assertEqual(item['fileName'], 'notice.jpg')
+        self.assertEqual(item['fileType'], 'IMAGE')
+        self.assertEqual(item['status'], 'DONE')
+        self.assertEqual(item['step'], 'DONE')
+        self.assertFalse(item['lowConfidence'])
+        self.assertIsNotNone(item['expiresAt'])
+
+    def test_paginates(self):
+        for _ in range(21):
+            create_document(self.user)
+
+        first = self.client.get(UPLOAD_URL).json()
+        second = self.client.get(UPLOAD_URL, {'page': 2}).json()
+        small = self.client.get(UPLOAD_URL, {'page_size': 5}).json()
+
+        self.assertEqual(first['count'], 21)
+        self.assertEqual(len(first['results']), 20)
+        self.assertIsNotNone(first['next'])
+        self.assertEqual(len(second['results']), 1)
+        self.assertEqual(len(small['results']), 5)
+
+    def test_missing_page_gets_404(self):
+        create_document(self.user)
+
+        response = self.client.get(UPLOAD_URL, {'page': 2})
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_filters_by_status(self):
+        pending = create_document(self.user)
+        failed = create_document(self.user, status=Document.Status.FAILED)
+
+        for value, expected in (('PENDING', [pending.id]), ('FAILED', [failed.id]), ('DONE', [])):
+            with self.subTest(status=value):
+                response = self.client.get(UPLOAD_URL, {'status': value})
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual([item['documentId'] for item in response.json()['results']], expected)
+
+    def test_rejects_unknown_status(self):
+        response = self.client.get(UPLOAD_URL, {'status': 'done'})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['code'], 'VALIDATION_ERROR')
+        self.assertIn('status', response.json()['details'])
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        response = self.client.get(UPLOAD_URL)
+
+        self.assertEqual(response.status_code, 401)
+
+
+@test_settings
+class DocumentDetailTests(APITestCase):
+    def setUp(self):
+        self.user = create_user('owner@example.com')
+        self.document = create_document(self.user)
+        self.client.force_authenticate(self.user)
+
+    def test_done_document_detail(self):
+        process_document(self.document.id)
+
+        response = self.client.get(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(set(data), LIST_KEYS | {'failReason', 'maskedCount', 'hasResult'})
+        self.assertEqual(data['documentId'], self.document.id)
+        self.assertEqual(data['status'], 'DONE')
+        self.assertEqual(data['failReason'], '')
+        self.assertEqual(data['maskedCount'], 2)
+        self.assertTrue(data['hasResult'])
+
+    def test_pending_document_has_no_result(self):
+        data = self.client.get(detail_url(self.document.id)).json()
+
+        self.assertEqual(data['status'], 'PENDING')
+        self.assertFalse(data['hasResult'])
+
+    def test_failed_document_includes_fail_reason(self):
+        with (
+            mock.patch.object(pipeline, 'run_ocr', side_effect=RuntimeError('ocr down')),
+            self.assertLogs(pipeline.logger, 'ERROR'),
+        ):
+            process_document(self.document.id)
+
+        data = self.client.get(detail_url(self.document.id)).json()
+
+        self.assertEqual(data['status'], 'FAILED')
+        self.assertEqual(data['failReason'], pipeline.FAIL_MESSAGES[Document.Step.OCR])
+        self.assertFalse(data['hasResult'])
+
+    def test_other_user_and_missing_document_get_404(self):
+        self.client.force_authenticate(create_user('other@example.com'))
+        other = self.client.get(detail_url(self.document.id))
+        missing = self.client.get(detail_url(self.document.id + 1))
+
+        self.assertEqual(other.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(other.json(), missing.json())
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        response = self.client.get(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 401)
+
+
+@test_settings
+class DocumentDeleteTests(APITestCase):
+    def setUp(self):
+        self.user = create_user('owner@example.com')
+        self.client.force_authenticate(self.user)
+        self.document = Document.objects.create(
+            owner=self.user,
+            file=SimpleUploadedFile('notice.jpg', b'test', content_type='image/jpeg'),
+            file_name='notice.jpg',
+            file_type=Document.FileType.IMAGE,
+            step=Document.Step.QUEUED,
+        )
+        self.storage = self.document.file.storage
+        self.file_name = self.document.file.name
+
+    def test_deletes_document_result_chat_and_file(self):
+        process_document(self.document.id)
+        ChatMessage.objects.create(document=self.document, question='질문', answer='답변', language='ko')
+        self.assertTrue(self.storage.exists(self.file_name))
+
+        response = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Document.objects.filter(id=self.document.id).exists())
+        self.assertFalse(InterpretationResult.objects.filter(document_id=self.document.id).exists())
+        self.assertFalse(ChatMessage.objects.filter(document_id=self.document.id).exists())
+        self.assertFalse(self.storage.exists(self.file_name))
+
+    def test_deletes_pending_and_failed_documents(self):
+        for current in (Document.Status.PENDING, Document.Status.FAILED):
+            with self.subTest(status=current):
+                document = create_document(self.user, status=current)
+
+                response = self.client.delete(detail_url(document.id))
+
+                self.assertEqual(response.status_code, 204)
+                self.assertFalse(Document.objects.filter(id=document.id).exists())
+
+    def test_processing_document_returns_409(self):
+        Document.objects.filter(id=self.document.id).update(
+            status=Document.Status.PROCESSING, step=Document.Step.OCR,
+        )
+
+        response = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json(), {
+            'detail': '처리 중인 문서는 삭제할 수 없습니다.', 'status': 'PROCESSING', 'step': 'OCR',
+        })
+        self.assertTrue(Document.objects.filter(id=self.document.id).exists())
+        self.assertTrue(self.storage.exists(self.file_name))
+
+    def test_processing_started_after_lookup_returns_409(self):
+        get_object = DocumentDetailView.get_object
+
+        def get_then_start(view):
+            # 조회와 삭제 사이에 백그라운드 처리가 문서를 선점한 상황
+            document = get_object(view)
+            Document.objects.filter(id=document.id).update(
+                status=Document.Status.PROCESSING, step=Document.Step.OCR,
+            )
+            return document
+
+        with mock.patch.object(DocumentDetailView, 'get_object', get_then_start):
+            response = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['status'], 'PROCESSING')
+        self.assertTrue(Document.objects.filter(id=self.document.id).exists())
+        self.assertTrue(self.storage.exists(self.file_name))
+
+    def test_file_delete_failure_still_returns_204(self):
+        with (
+            mock.patch.object(FieldFile, 'delete', side_effect=OSError('disk')),
+            self.assertLogs('documents.views', 'ERROR'),
+        ):
+            response = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Document.objects.filter(id=self.document.id).exists())
+
+    def test_other_user_and_missing_document_get_404(self):
+        self.client.force_authenticate(create_user('other@example.com'))
+        other = self.client.delete(detail_url(self.document.id))
+        missing = self.client.delete(detail_url(self.document.id + 1))
+
+        self.assertEqual(other.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(other.json(), missing.json())
+        self.assertTrue(Document.objects.filter(id=self.document.id).exists())
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        response = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 401)
+        self.assertTrue(Document.objects.filter(id=self.document.id).exists())
