@@ -21,8 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 @receiver(pre_save, sender=Document)
-def remember_document_state(sender, instance, raw=False, using='default', **kwargs):
-    if raw or using != 'default':
+def remember_document_state(sender, instance, raw=False, using='default', update_fields=None, **kwargs):
+    instance._kpi_previous = None
+    if raw or using != 'default' or (update_fields is not None and not {'status', 'step'}.intersection(update_fields)):
         return
     instance._kpi_previous = (sender.objects.filter(pk=instance.pk).values('status', 'step').first()
                               if instance.pk else None)
@@ -35,7 +36,9 @@ def observe_document_state(sender, instance, raw=False, using='default', **kwarg
         return
     try:
         with transaction.atomic():
-            _observe_transition(instance, previous)
+            # update_fields에 포함되지 않은 낡은 인스턴스 상태를 업무 사실로 기록하지 않는다.
+            current = sender.objects.get(pk=instance.pk)
+            _observe_transition(current, previous)
     except (DatabaseError, ValidationError):
         logger.warning('KPI_EVENT_NOT_RECORDED')
 
@@ -50,7 +53,8 @@ def _observe_transition(document, previous):
         return
     if previous['status'] == document.status:
         return
-    started = document.kpi_events.filter(event_type=KPIEvent.Type.ANALYSIS_STARTED).first()
+    started = document.kpi_events.filter(event_type=KPIEvent.Type.ANALYSIS_STARTED,
+                                         data_kind=KPIEvent.DataKind.DUMMY).first()
     if not started:
         return  # 과거/누락 시도 이력을 추측해서 생성하지 않는다.
     base = dict(document=document, entity_id=document.pk, occurrence_key=str(started.pk), data_kind=started.data_kind)

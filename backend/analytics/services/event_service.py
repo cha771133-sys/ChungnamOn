@@ -25,13 +25,21 @@ def record_event(event_type, *, document, entity_id, occurrence_key, language=''
         raise ValidationError('저장된 문서와 양의 정수 업무 ID가 필요합니다.')
     entity_type = (KPIEvent.Entity.CHAT_MESSAGE if event_type == KPIEvent.Type.CHAT_ANSWER_CREATED
                    else KPIEvent.Entity.DOCUMENT)
-    key = hashlib.sha256(f'{event_type}:{document.pk}:{entity_id}:{occurrence_key}'.encode()).hexdigest()
+    # 생성된 답변의 성공 사실은 답변 ID당 하나다. 호출 측 재시도 식별자가 달라도 증가하지 않는다.
+    transition = str(entity_id) if event_type == KPIEvent.Type.CHAT_ANSWER_CREATED else occurrence_key
+    key = hashlib.sha256(f'{event_type}:{document.pk}:{entity_id}:{transition}'.encode()).hexdigest()
     values = dict(event_type=event_type, document=document, entity_type=entity_type,
                   entity_id=entity_id, language=language, properties=properties if properties is not None else {},
                   data_kind=data_kind)
     candidate = KPIEvent(**values, idempotency_key=key, occurred_at=occurred_at or timezone.now())
     candidate.full_clean(validate_unique=False, validate_constraints=False)
     with transaction.atomic():
+        if event_type == KPIEvent.Type.CHAT_ANSWER_CREATED:
+            from chatbot.models import ChatMessage
+            from .chat_events import chat_properties
+            message = ChatMessage.objects.filter(pk=entity_id, document=document).first()
+            if not message or properties != chat_properties(message):
+                raise ValidationError('실제 저장 답변과 공식자료 연결에 일치하는 이벤트만 기록할 수 있습니다.')
         event, _ = KPIEvent.objects.get_or_create(idempotency_key=key, defaults={
             **values, 'occurred_at': candidate.occurred_at,
         })

@@ -30,18 +30,22 @@ def _official_source_count(message):
     return count
 
 
+def chat_properties(message):
+    """실제 업무 모델과 유효한 공식 출처에서만 저장 속성을 구성한다."""
+    count = _official_source_count(message)
+    status = message.status if count or message.status == 'UNVERIFIED' else 'UNVERIFIED'
+    return {'status': status, 'grounded': status == 'GROUNDED', 'official_source_count': count}
+
+
 def observe_chat_answer(message):
     """현재 dummy 외 모드는 실제 어댑터 계약이 없어 UNKNOWN으로 제외한다."""
     try:
         with transaction.atomic():
-            count = _official_source_count(message)
-            # 잘못 연결된 GROUNDED도 정상 근거 기반으로 수집하지 않는다.
-            status = message.status if count or not message.grounded else 'UNVERIFIED'
             return observe_event(
                 KPIEvent.Type.CHAT_ANSWER_CREATED, document=message.document, entity_id=message.pk,
                 occurrence_key=str(message.pk), language=message.language,
                 data_kind=KPIEvent.DataKind.DUMMY if settings.CHATBOT_AI_MODE == 'dummy' else KPIEvent.DataKind.UNKNOWN,
-                properties={'status': status, 'grounded': status == 'GROUNDED', 'official_source_count': count},
+                properties=chat_properties(message),
             )
     except DatabaseError:
         logger.warning('KPI_EVENT_NOT_RECORDED')
