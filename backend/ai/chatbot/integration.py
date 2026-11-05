@@ -51,11 +51,12 @@ def chat_answer(question, interpretation, history, language, official_sources) -
     """
     interpretation = interpretation or {}
     doc = normalize_document(interpretation)
+    allowed = {s["sourceDocumentId"] for s in official_sources or []}
+    # official_sources 밖의 검색 결과는 프롬프트에서 [참고 자료]로 분리 (출처 표시·'공식' 표현 금지)
     answer, status, used, suggested, _ = answer_with_results(
-        doc, question, history=_history_to_messages(history), language=language,
+        doc, question, history=_history_to_messages(history), language=language, official_ids=allowed,
     )
 
-    allowed = {s["sourceDocumentId"] for s in official_sources or []}
     ids = list(dict.fromkeys(r.source_document_id for r in used if r.source_document_id in allowed))
     verification = interpretation.get("verification")
     verification_status = verification.get("status") if isinstance(verification, dict) else None

@@ -111,7 +111,7 @@ class ConfigTests(unittest.TestCase):
             finally:
                 reset_settings()
         self.assertEqual((s.llm_provider, s.embedder, s.embed_dim, s.retriever), ("", "ollama", 1024, "db"))
-        self.assertEqual((s.top_k, s.min_score, s.ollama_url), (5, 0.35, "http://localhost:11434"))
+        self.assertEqual((s.top_k, s.min_score, s.ollama_url), (5, 0.65, "http://localhost:11434"))
         self.assertEqual(s.kb_dir.parts[-3:], ("sources", "data", "pages"))
 
 

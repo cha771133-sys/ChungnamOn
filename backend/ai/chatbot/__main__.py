@@ -5,9 +5,10 @@
     python -m ai.chatbot --lang vi "Tôi trả ở đâu?"
     python -m ai.chatbot --search "주민세 납부 기간"     # 검색 점수만 보기 (AI_MIN_SCORE 튜닝용)
     python -m ai.chatbot --kb ai/tests/fixtures "..."    # 테스트 샘플로 해 보기
+    python -m ai.chatbot --search --db "주민세 납부 기간"  # 수집된 공식 자료(DB)에서 점수 보기
 
-Django DB 대신 .md 폴더를 메모리에서 검색한다 (기본: sources/data/pages, 없으면 --kb로 지정).
-Ollama(bge-m3, qwen2.5:7b)를 쓰고 backend/.env 값을 읽는다.
+기본은 Django DB 대신 .md 폴더를 메모리에서 검색한다 (기본: sources/data/pages, 없으면 --kb로 지정).
+--db면 manage.py와 같은 설정으로 sources 앱 테이블을 검색한다. backend/.env 값(LLM·임베딩)을 읽는다.
 """
 import argparse
 import json
@@ -27,21 +28,31 @@ def main():
     except ImportError:
         pass
 
-    os.environ["AI_RETRIEVER"] = "memory"  # Django 없이 도는 도구라 DB 대신 .md 폴더를 검색
-
-    from . import generate_answer
-    from .retriever import search
-    from .service import regions_for
-
     ap = argparse.ArgumentParser(prog="python -m ai.chatbot")
     ap.add_argument("question")
     ap.add_argument("--lang", default="ko")
     ap.add_argument("--doc", help="해석 결과 JSON 파일 (없으면 아산시 주민세 고지서 샘플)")
     ap.add_argument("--search", action="store_true", help="답변 없이 검색 결과·점수만 출력")
     ap.add_argument("--kb", help="검색할 .md 폴더 (예: ai/tests/fixtures)")
+    ap.add_argument("--db", action="store_true", help="수집된 공식 자료(Django DB)를 검색. 청크·임베딩이 있어야 함")
     args = ap.parse_args()
+
+    if args.db:
+        # manage.py와 같은 설정으로 Django를 켜고 sources 앱 테이블을 검색
+        sys.path.insert(0, str(BACKEND))
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+        import django
+
+        django.setup()
+        os.environ["AI_RETRIEVER"] = "db"
+    else:
+        os.environ["AI_RETRIEVER"] = "memory"  # 기본은 Django 없이 .md 폴더를 검색
     if args.kb:
         os.environ["AI_KB_DIR"] = str(Path(args.kb).resolve())
+
+    from . import generate_answer
+    from .retriever import search
+    from .service import regions_for
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     doc = (
@@ -60,7 +71,8 @@ def main():
 
     if args.search:
         for r in search(args.question, regions=regions_for(doc), min_score=-1.0, top_k=10):
-            print(f"{r.score:.4f}  [{r.region}] {r.title}  | {r.text[:80]!r}")
+            doc_id = f"#{r.source_document_id} " if r.source_document_id is not None else ""
+            print(f"{r.score:.4f}  {doc_id}[{r.region}] {r.title}  | {r.text[:80]!r}")
         return
 
     out = generate_answer(doc, args.question, language=args.lang)

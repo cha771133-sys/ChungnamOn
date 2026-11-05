@@ -33,22 +33,29 @@ REWRITE_SYSTEM = """너는 한국 행정자료 검색어를 만드는 도우미�
 ANSWER_SYSTEM = """너는 충청남도에 사는 외국인 주민이 받은 한국어 행정문서에 대해 질문에 답하는 도우미야.
 
 [근거 규칙 — 가장 중요]
-1. 답은 아래 [업로드 문서]와 [공식 자료]에 있는 내용만으로 해. 네 일반 지식이나 추측으로 채우지 마.
-2. [공식 자료]는 충청남도·충남 시군·중앙정부 공식 자료야. 이것만 '공식 근거'로 쳐.
+1. 답은 아래 [업로드 문서], [공식 자료], [참고 자료]에 있는 내용만으로 해. 네 일반 지식이나 추측으로 채우지 마.
+2. '공식 근거'는 [공식 자료](S1, S2 ...)뿐이야.
+   [참고 자료](R1, R2 ...)는 이 문서의 공식 출처로 표시할 수 없는 자료이고, [업로드 문서]도 공식 근거가 아니야.
 3. status를 이렇게 정해:
    - GROUNDED: [공식 자료] 중 하나 이상이 질문에 대한 답을 직접 뒷받침함
-   - UNVERIFIED: [공식 자료]에 답이 없음. [업로드 문서]에 적힌 내용만으로 답했어도 UNVERIFIED야
+   - UNVERIFIED: [공식 자료]에 답이 없음. [업로드 문서]나 [참고 자료]만으로 답했어도 UNVERIFIED야
    - CONFLICT: [업로드 문서]와 [공식 자료]의 내용이 다르거나, [공식 자료]끼리 서로 다름
-4. UNVERIFIED면 확정적으로 말하지 말고, 문서에 적힌 내용이 있으면 "문서에는 ~라고 적혀 있지만 공식 자료로는 확인되지 않았다"는 식으로 말하고 담당기관 확인을 안내해.
+4. 표현 규칙 (어떤 언어로 답하든 똑같이 지켜):
+   - "공식 자료에 따르면", "공식적으로", "공식 안내에 따르면", "정부 자료에 따르면"처럼 공식 근거라는 표현은
+     [공식 자료](S번호) 내용을 말할 때만 써. UNVERIFIED 답변에서는 아예 쓰지 마.
+   - [업로드 문서] 내용은 "문서에는 ~라고 적혀 있어요"라고 말해.
+   - [참고 자료] 내용은 "참고 자료에는 ~라고 나와 있지만, 이 문서의 공식 출처로 확인된 내용은 아니에요"라고 말해.
+   - UNVERIFIED면 확정적으로 말하지 말고 담당기관 확인을 안내해.
 5. CONFLICT면 어느 쪽이 맞다고 단정하지 말고, 두 내용을 모두 보여준 뒤 담당기관 확인을 안내해.
-6. used_sources에는 답에 실제로 쓴 공식 자료 번호(S1, S2 ...)만 넣어. 안 쓴 자료는 넣지 마.
+6. used_sources에는 답에 실제로 쓴 [공식 자료] 번호(S1, S2 ...)만 넣어. R 번호는 절대 넣지 마.
 7. 개인별 자격(감면 대상인지 등)은 확정하지 말고, 조건이 있으면 "~한 경우에 해당할 수 있다"로 말해.
+9. 자료에 없는 준비물·절차·기한·금액을 "보통 ~한다"처럼 덧붙이지 마. 모르면 모른다고 하고 담당기관을 안내해.
 8. 업로드 문서의 마스킹(***)된 개인정보를 추측하거나 다시 만들어내지 마.
 
 [답변 형식]
 - answer와 suggested_questions는 반드시 {lang}로 써.
 - 짧고 쉬운 문장으로. 어려운 행정용어는 풀어서 설명해.
-- 출처 URL은 answer 본문에 쓰지 마. (화면에서 따로 보여줌)
+- 출처 URL과 S1·R1 같은 자료 번호는 answer 본문에 쓰지 마. (출처는 화면에서 따로 보여줌)
 - suggested_questions: 이 문서에 대해 사용자가 이어서 물어볼 만한 질문 2~3개.
 
 반드시 JSON 하나만 출력:
@@ -91,21 +98,21 @@ def document_block(doc: dict) -> str:
     return text
 
 
-def sources_block(results) -> str:
+def sources_block(results, prefix: str = "S", empty: str = "(검색된 공식 자료 없음)") -> str:
     if not results:
-        return "(검색된 공식 자료 없음)"
+        return empty
     parts = []
     for i, r in enumerate(results, 1):
-        meta = f"S{i} | {r.title or ''} | {r.agency or ''} | 지역: {r.region or ''} | 확인일: {r.checked_at}"
+        meta = f"{prefix}{i} | {r.title or ''} | {r.agency or ''} | 지역: {r.region or ''} | 확인일: {r.checked_at}"
         if r.published_at:
             meta += f" | 기준일: {r.published_at}"
-        parts.append(f"<{meta}>\n{r.text}\n</S{i}>")
+        parts.append(f"<{meta}>\n{r.text}\n</{prefix}{i}>")
     return "\n\n".join(parts)
 
 
-def answer_user_message(doc: dict, results, question: str) -> str:
-    return (
-        f"[업로드 문서]\n{document_block(doc)}\n\n"
-        f"[공식 자료]\n{sources_block(results)}\n\n"
-        f"[질문]\n{question}"
-    )
+def answer_user_message(doc: dict, results, question: str, reference=None) -> str:
+    """results는 [공식 자료](S번호), reference는 출처로 표시할 수 없는 [참고 자료](R번호). 참고 자료가 없으면 구역을 빼."""
+    text = f"[업로드 문서]\n{document_block(doc)}\n\n[공식 자료]\n{sources_block(results)}\n\n"
+    if reference:
+        text += f"[참고 자료 — 공식 출처로 표시 불가]\n{sources_block(reference, prefix='R')}\n\n"
+    return text + f"[질문]\n{question}"

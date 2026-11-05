@@ -193,10 +193,15 @@ def answer_with_results(
     *,
     history: list[dict] | None = None,
     language: str | None = None,
+    official_ids: set[int] | None = None,
 ) -> tuple[str, GroundingStatus, list[SearchResult], list[str], str]:
     """generate_answer의 본체. 출처를 SearchResult 그대로 돌려줘서 어댑터가 DB ID를 쓸 수 있게 함.
 
     doc은 normalize_document()를 거친 dict. 반환: (answer, status, used_results, suggested, lang)
+    official_ids: 출처로 낼 수 있는 SourceDocument ID. 주면 검색 결과를 둘로 나눔
+      - ID가 여기 있는 자료 → 프롬프트 [공식 자료](S번호), 출처·GROUNDED 판단에 쓸 수 있음
+      - 나머지 → [참고 자료 — 공식 출처로 표시 불가](R번호), 출처로 못 내고 '공식' 표현도 금지
+      None이면 검색 결과 전부를 공식 자료로 봄 (모듈 단독 사용·memory 검색)
     """
     message = (message or "").strip()
     if not message:
@@ -207,25 +212,32 @@ def answer_with_results(
     regions = regions_for(doc)
     query = _search_query(doc, message, lang, history_msgs)
     results = search(query, regions=regions)
-    log.info("챗봇 검색어=%r 지역=%s 결과=%d", query, regions, len(results))
+    if official_ids is None:
+        official, reference = results, []
+    else:
+        official = [r for r in results if r.source_document_id in official_ids]
+        reference = [r for r in results if r.source_document_id not in official_ids]
+    # 검색어에는 질문 내용이 들어 있어서 로그에 남기지 않음
+    log.info("챗봇 검색: 지역=%s 공식=%d 참고=%d", regions, len(official), len(reference))
 
     system = prompts.ANSWER_SYSTEM.format(lang=prompts.lang_name(lang))
-    user_msg = prompts.answer_user_message(doc, results, message)
+    user_msg = prompts.answer_user_message(doc, official, message, reference=reference)
     try:
         raw = get_llm().complete_json(
             system,
             [*history_msgs, {"role": "user", "content": user_msg}],
             mock_hint={
                 "task": "answer",
-                "source_ids": [f"S{i}" for i in range(1, len(results) + 1)],
-                "first_source_text": results[0].text if results else "",
+                "source_ids": [f"S{i}" for i in range(1, len(official) + 1)],
+                "first_source_text": official[0].text if official else "",
             },
         )
     except Exception as e:
         log.exception("챗봇 LLM 호출 실패")
         raise RuntimeError("답변을 만들지 못했어요. 잠시 후 다시 시도해 주세요.") from e
 
-    status, used = decide_status(raw, results)
+    # S번호는 공식 자료 목록 기준. R번호는 decide_status가 무시함 (S?숫자만 인식)
+    status, used = decide_status(raw, official)
     answer = str(raw.get("answer", "")).strip() or "답변을 만들지 못했어요. 담당기관에 문의해 주세요."
     suggested = [str(q) for q in (raw.get("suggested_questions") or [])]
     return answer, status, used, suggested, lang

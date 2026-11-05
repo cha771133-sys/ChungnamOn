@@ -72,7 +72,8 @@ def get_settings() -> Settings:
         source_document_table=_env("AI_SOURCE_DOCUMENT_TABLE", "sources_sourcedocument"),
         source_chunk_table=_env("AI_SOURCE_CHUNK_TABLE", "sources_sourcechunk"),
         top_k=int(_env("AI_TOP_K", "5")),
-        min_score=float(_env("AI_MIN_SCORE", "0.35")),
+        # Gemini 임베딩은 관련 없는 문장도 0.5~0.6이 나와서 0.65부터 관련 자료로 봄
+        min_score=float(_env("AI_MIN_SCORE", "0.65")),
         chunk_size=int(_env("AI_CHUNK_SIZE", "800")),
         chunk_overlap=int(_env("AI_CHUNK_OVERLAP", "100")),
         min_chunk_chars=int(_env("AI_MIN_CHUNK_CHARS", "150")),

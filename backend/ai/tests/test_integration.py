@@ -253,6 +253,56 @@ class ChatAnswerTests(AIEnvMixin, TestCase):
         out = self.ask(self.interpretation("MATCHED", [doc.pk]), self.official(doc), **raw)
         self.assertEqual((out["status"], out["sources"]), ("UNVERIFIED", []))
 
+    def _prompt(self, official, raw=None):
+        """chat_answer가 LLM에 보낸 마지막 user 메시지와 결과."""
+        from ai.chatbot import chat_answer
+
+        raw = raw or {"answer": "답", "status": "UNVERIFIED", "used_sources": [], "suggested_questions": []}
+        with mock.patch("ai.chatbot.llm.MockLLM.complete_json", return_value=raw) as llm:
+            out = chat_answer("주민세 납부 기간이 언제예요?", self.interpretation(), [], "ko", official)
+        return llm.call_args.args[1][-1]["content"], llm.call_args.kwargs["mock_hint"], out
+
+    def test_unlinked_sources_go_to_reference_section_only(self):
+        linked = self.source("linked", title="연결된 자료")
+        self.source("other", title="연결 안 된 자료")
+        prompt, hint, _ = self._prompt(self.official(linked))
+        official_part, reference_part = prompt.split("[참고 자료 — 공식 출처로 표시 불가]")
+        self.assertIn("S1 | 연결된 자료", official_part)
+        self.assertNotIn("연결 안 된 자료", official_part)
+        self.assertIn("R1 | 연결 안 된 자료", reference_part)
+        self.assertNotIn("S2", prompt)
+        self.assertEqual(hint["source_ids"], ["S1"])
+
+    def test_no_official_sources_means_empty_official_section(self):
+        self.source("other", title="연결 안 된 자료")
+        prompt, hint, _ = self._prompt([])
+        self.assertIn("[공식 자료]\n(검색된 공식 자료 없음)", prompt)
+        self.assertIn("R1 | 연결 안 된 자료", prompt)
+        self.assertEqual(hint["source_ids"], [])
+
+    def test_reference_numbers_are_never_sources(self):
+        linked = self.source("linked", title="연결된 자료")
+        self.source("other", title="연결 안 된 자료")
+        raw = {"answer": "답", "status": "GROUNDED", "used_sources": ["R1"], "suggested_questions": []}
+        _, _, out = self._prompt(self.official(linked), raw)
+        self.assertEqual((out["status"], out["sources"]), ("UNVERIFIED", []))
+        raw["used_sources"] = ["R1", "S1"]
+        _, _, out = self._prompt(self.official(linked), raw)
+        self.assertEqual((out["status"], out["sources"]), ("GROUNDED", [{"sourceDocumentId": linked.pk}]))
+
+    def test_rules_forbid_official_wording_without_official_sources(self):
+        from ai.chatbot import prompts
+
+        for phrase in ("공식 자료에 따르면", "UNVERIFIED 답변에서는 아예 쓰지 마", "R 번호는 절대 넣지 마",
+                       "이 문서의 공식 출처로 확인된 내용은 아니에요"):
+            self.assertIn(phrase, prompts.ANSWER_SYSTEM)
+
+    def test_question_is_not_logged(self):
+        self.source("a")
+        with self.assertLogs("ai.chatbot.service", "INFO") as logs:
+            self._prompt([])
+        self.assertNotIn("주민세 납부 기간", "\n".join(logs.output))
+
     def test_suggestions_are_cleaned(self):
         raw = {"answer": "답", "status": "UNVERIFIED", "used_sources": [],
                "suggested_questions": [" a ", "a", "", "x" * 201, "b", "c", "d", "e", "f"]}

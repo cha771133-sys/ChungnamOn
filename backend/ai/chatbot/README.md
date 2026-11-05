@@ -140,11 +140,11 @@ AI_OLLAMA_EMBED_MODEL=bge-m3
 AI_RETRIEVER=db
 AI_KB_DIR=
 AI_TOP_K=5
-AI_MIN_SCORE=0.35
+AI_MIN_SCORE=0.65
 ```
 - 배포(Railway)엔 Ollama가 없어서 `AI_LLM_PROVIDER=anthropic`, 임베딩은 `gemini`
 - gemini 무료 등급은 429(한도 초과)가 날 수 있음: 서버가 준 대기 시간(최대 60초)만큼 기다렸다가 최대 5번 재시도, 문장은 100개씩 묶어서 전송
-- `AI_MIN_SCORE=0.35`는 임시값. 실제 모델로 `--search`를 돌려 보고 조정 (임베딩 모델마다 점수 분포가 다름)
+- `AI_MIN_SCORE=0.65`: Gemini 기준 (관련 없는 자료도 0.5~0.6이 나옴). 임베딩 모델을 바꾸면 `--search --db`로 다시 조정
 - 임베딩 모델·차원을 바꾸면 `build_source_chunks()`를 다시 실행 (차원이 다른 청크는 자동으로 다시 만듦)
 
 ## 4. 개발할 때
