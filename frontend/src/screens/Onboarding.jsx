@@ -1,14 +1,96 @@
-import { useState } from 'react'
-import { Check, Bell, Camera, Languages, CalendarCheck } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Check, Bell, Camera, Languages, Globe } from 'lucide-react'
 import { useApp } from '../store.js'
 import { LANGS, NATIONALITIES, VISAS } from '../data/mock.js'
+import { t, uiLang, NATION_NAMES, VISA_NAMES } from '../i18n.js'
 import { TopBar, Stamp } from '../components/ui.jsx'
 
-export function Intro() {
-  const { nav } = useApp()
+/* 로그인 여부에 따라 다음 단계 결정 (유저 플로우 n8) */
+function useAfterIntro() {
+  const { data, nav, replace } = useApp()
+  return () => {
+    if (!data.user) nav('login')
+    else if (!data.profile.nationality || !data.profile.visa) replace('profile')
+    else replace('notify')
+  }
+}
+
+/* ① 첫 화면: 언어 선택 — 외국인 사용자가 처음부터 자기 언어로 볼 수 있게 맨 앞에 둠 */
+export function LanguageSelect() {
+  const { data, update, nav } = useApp()
+  const [sel, setSel] = useState(data.profile.language)
+  const fallback = uiLang(sel) !== sel
+  const next = () => {
+    update((d) => ({ profile: { ...d.profile, language: sel } }))
+    nav('intro')
+  }
   return (
-    <main className="screen onboard intro">
-      <div className="intro-visual" aria-hidden="true">
+    <main className="screen onboard lang-first">
+      <div className="intro-top">
+        <span className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          ChungnamOn
+        </span>
+      </div>
+      <div className="lang-hero" aria-hidden="true">
+        <Globe size={30} />
+      </div>
+      <h1 className="h1" lang={uiLang(sel)}>
+        {t(sel, 'langTitle')}
+      </h1>
+      <p className="lead multi">Chọn ngôn ngữ / Choose language / 选择语言 / 언어 선택</p>
+      <ul className="option-list">
+        {LANGS.map((l) => (
+          <li key={l.code}>
+            <button className={`option${sel === l.code ? ' is-selected' : ''}`} onClick={() => setSel(l.code)} aria-pressed={sel === l.code} lang={l.code}>
+              <span className="flag" aria-hidden="true">
+                {l.flag}
+              </span>
+              <span className="option-text">
+                <strong>{l.label}</strong>
+                <small>{l.ko}</small>
+              </span>
+              {sel === l.code && <Check size={20} />}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {fallback && <p className="hint">{t(sel, 'langFallback')}</p>}
+      <div className="sticky-actions">
+        <button className="btn btn-primary btn-block btn-lg" onClick={next}>
+          {t(sel, 'continue')}
+        </button>
+      </div>
+    </main>
+  )
+}
+
+const SLIDES = [
+  {
+    key: 's1',
+    visual: () => (
+      <div className="v-camera">
+        <div className="paper">
+          <span className="paper-title">안내문</span>
+          <span className="paper-line w80" />
+          <span className="paper-line w60" />
+          <span className="paper-line w70" />
+          <span className="paper-line w40" />
+        </div>
+        <span className="corner tl" />
+        <span className="corner tr" />
+        <span className="corner bl" />
+        <span className="corner br" />
+        <span className="shutter">
+          <Camera size={28} />
+        </span>
+      </div>
+    ),
+  },
+  {
+    key: 's2',
+    visual: (lang, active) => (
+      <div className="v-verify">
         <div className="paper">
           <span className="paper-title">납세고지서</span>
           <span className="paper-line w80" />
@@ -16,68 +98,111 @@ export function Intro() {
           <span className="paper-line w70" />
           <span className="paper-line w40" />
         </div>
-        <div className="intro-stamp">
-          <Stamp tone="seal" top="공식 자료" bottom="대조 완료" />
+        <span className="translate-chip">
+          <Languages size={16} /> {t(lang, 'chip')}
+        </span>
+        {active && (
+          <div className="intro-stamp">
+            <Stamp tone="seal" top="공식 자료" bottom="대조 완료" />
+          </div>
+        )}
+      </div>
+    ),
+  },
+  {
+    key: 's3',
+    visual: (lang) => (
+      <div className="v-plan">
+        <div className="mini-deadline">
+          <span>{t(lang, 'upcoming')}</span>
+          <b>D-7</b>
+          <strong>{t(lang, 'taskTax')}</strong>
+        </div>
+        <ul className="mini-checks">
+          <li className="is-done">
+            <i>
+              <Check size={13} strokeWidth={3} />
+            </i>
+            {t(lang, 'chkCard')}
+          </li>
+          <li>
+            <i />
+            {t(lang, 'chkPay')}
+          </li>
+        </ul>
+        <div className="mini-push">
+          <Bell size={15} /> {t(lang, 'push7')}
         </div>
       </div>
-      <h1 className="display">받은 행정문서, 내 언어로 이해하고 기한까지 챙겨요</h1>
-      <ol className="intro-steps">
-        <li>
-          <Camera size={20} /> 문서를 사진이나 PDF로 올려요
-        </li>
-        <li>
-          <Languages size={20} /> 모국어로 풀어 설명하고 공식 자료와 대조해요
-        </li>
-        <li>
-          <CalendarCheck size={20} /> 할 일과 마감일을 알려드려요
-        </li>
-      </ol>
+    ),
+  },
+]
+
+/* ② 서비스 소개 3장 — 선택한 언어로 표시, 위에서 언어 다시 바꾸기 가능 */
+export function Intro() {
+  const { lang, openLang, back } = useApp()
+  const goNext = useAfterIntro()
+  const [i, setI] = useState(0)
+  const startX = useRef(null)
+  const last = i === SLIDES.length - 1
+  const L = LANGS.find((l) => l.code === lang)
+  const next = () => (last ? goNext() : setI(i + 1))
+  const onTouchStart = (e) => {
+    startX.current = e.touches[0].clientX
+  }
+  const onTouchEnd = (e) => {
+    if (startX.current === null) return
+    const dx = e.changedTouches[0].clientX - startX.current
+    if (dx < -50 && !last) setI(i + 1)
+    if (dx > 50 && i > 0) setI(i - 1)
+    startX.current = null
+  }
+
+  return (
+    <main className="screen intro" lang={uiLang(lang)}>
+      <div className="intro-top">
+        <button className="icon-btn" onClick={back} aria-label={t(lang, 'back')}>
+          <span className="back-chev" aria-hidden="true" />
+        </button>
+        <div className="topbar-right">
+          <button className="lang-btn" onClick={openLang}>
+            <Globe size={15} />
+            <span>{L?.label}</span>
+          </button>
+          {!last && (
+            <button className="text-btn skip-btn" onClick={goNext}>
+              {t(lang, 'skip')}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="slides" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} aria-roledescription="carousel">
+        <div className="slide-track" style={{ transform: `translateX(-${i * 100}%)` }}>
+          {SLIDES.map((s, idx) => (
+            <section key={s.key} className="slide" aria-hidden={idx !== i} aria-roledescription="slide" aria-label={`${idx + 1} / ${SLIDES.length}`}>
+              <div className="slide-visual" aria-hidden="true">
+                {s.visual(lang, idx === i)}
+              </div>
+              <h1 className="display">{t(lang, `${s.key}Title`)}</h1>
+              <p className="lead">{t(lang, `${s.key}Desc`)}</p>
+            </section>
+          ))}
+        </div>
+      </div>
+
+      <div className="dots">
+        {SLIDES.map((s, idx) => (
+          <button key={s.key} className={`dot${idx === i ? ' is-active' : ''}`} onClick={() => setI(idx)} aria-label={`${idx + 1} / ${SLIDES.length}`} aria-current={idx === i ? 'step' : undefined} />
+        ))}
+      </div>
+
       <div className="onboard-actions">
-        <button className="btn btn-primary btn-block btn-lg" onClick={() => nav('language')}>
-          시작하기
+        <button className="btn btn-primary btn-block btn-lg" onClick={next}>
+          {last ? t(lang, 'start') : t(lang, 'continue')}
         </button>
       </div>
     </main>
-  )
-}
-
-export function LanguageSelect() {
-  const { data, update, nav, replace, back } = useApp()
-  const [sel, setSel] = useState(data.profile.language)
-  // 유저 플로우 n8: 로그인 여부에 따라 분기
-  const next = () => {
-    update((d) => ({ profile: { ...d.profile, language: sel } }))
-    if (!data.user) nav('login')
-    else if (!data.profile.nationality || !data.profile.visa) replace('profile')
-    else replace('notify')
-  }
-  return (
-    <>
-      <TopBar onBack={back} />
-      <main className="screen onboard">
-        <h1 className="h1">사용할 언어를 선택하세요</h1>
-        <p className="lead multi">Chọn ngôn ngữ / Choose your language / 选择语言</p>
-        <ul className="option-list">
-          {LANGS.map((l) => (
-            <li key={l.code}>
-              <button className={`option${sel === l.code ? ' is-selected' : ''}`} onClick={() => setSel(l.code)} aria-pressed={sel === l.code}>
-                <span className="flag" aria-hidden="true">{l.flag}</span>
-                <span className="option-text">
-                  <strong>{l.label}</strong>
-                  <small>{l.ko}</small>
-                </span>
-                {sel === l.code && <Check size={20} />}
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="sticky-actions">
-          <button className="btn btn-primary btn-block btn-lg" onClick={next}>
-            다음
-          </button>
-        </div>
-      </main>
-    </>
   )
 }
 
@@ -92,15 +217,15 @@ function Field({ label, error, children }) {
 }
 
 export function Login() {
-  const { data, update, replace, back } = useApp()
+  const { data, update, replace, back, lang } = useApp()
   const [email, setEmail] = useState('')
   const [pw, setPw] = useState('')
   const [err, setErr] = useState({})
   const submit = (e) => {
     e.preventDefault()
     const next = {}
-    if (!email.includes('@')) next.email = '이메일 형식을 확인하세요.'
-    if (pw.length < 4) next.pw = '비밀번호를 4자 이상 입력하세요.'
+    if (!email.includes('@')) next.email = t(lang, 'errEmail')
+    if (pw.length < 4) next.pw = t(lang, 'errPw4')
     setErr(next)
     if (Object.keys(next).length) return
     update(() => ({ user: { email } }))
@@ -111,44 +236,43 @@ export function Login() {
   return (
     <>
       <TopBar onBack={back} />
-      <main className="screen onboard">
-        <h1 className="h1">로그인</h1>
-        <p className="lead">올린 문서와 일정을 안전하게 보관하려면 로그인이 필요해요.</p>
+      <main className="screen onboard" lang={uiLang(lang)}>
+        <h1 className="h1">{t(lang, 'loginTitle')}</h1>
+        <p className="lead">{t(lang, 'loginLead')}</p>
         <form onSubmit={submit} noValidate>
-          <Field label="이메일" error={err.email}>
+          <Field label={t(lang, 'email')} error={err.email}>
             <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
           </Field>
-          <Field label="비밀번호" error={err.pw}>
+          <Field label={t(lang, 'password')} error={err.pw}>
             <input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} />
           </Field>
           <button className="btn btn-primary btn-block btn-lg" type="submit">
-            로그인
+            {t(lang, 'loginTitle')}
           </button>
         </form>
         <p className="switch-line">
-          처음이신가요?{' '}
+          {t(lang, 'newHere')}{' '}
           <button className="text-btn" onClick={() => replace('signup')}>
-            회원가입
+            {t(lang, 'signup')}
           </button>
         </p>
-        <p className="demo-note">데모: 아무 이메일과 4자 이상 비밀번호로 로그인돼요.</p>
+        <p className="demo-note">{t(lang, 'demoNote')}</p>
       </main>
     </>
   )
 }
 
 export function Signup() {
-  const { update, replace, back } = useApp()
+  const { update, replace, back, lang } = useApp()
   const [f, setF] = useState({ email: '', pw: '', pw2: '' })
-  /* 유저 플로우 n6 ↔ n7 */
   const [err, setErr] = useState({})
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
   const submit = (e) => {
     e.preventDefault()
     const next = {}
-    if (!f.email.includes('@')) next.email = '이메일 형식을 확인하세요.'
-    if (f.pw.length < 8) next.pw = '비밀번호를 8자 이상 입력하세요.'
-    if (f.pw !== f.pw2) next.pw2 = '비밀번호가 서로 달라요.'
+    if (!f.email.includes('@')) next.email = t(lang, 'errEmail')
+    if (f.pw.length < 8) next.pw = t(lang, 'errPw8')
+    if (f.pw !== f.pw2) next.pw2 = t(lang, 'errPwMatch')
     setErr(next)
     if (Object.keys(next).length) return
     update(() => ({ user: { email: f.email } }))
@@ -157,26 +281,26 @@ export function Signup() {
   return (
     <>
       <TopBar onBack={back} />
-      <main className="screen onboard">
-        <h1 className="h1">회원가입</h1>
+      <main className="screen onboard" lang={uiLang(lang)}>
+        <h1 className="h1">{t(lang, 'signup')}</h1>
         <form onSubmit={submit} noValidate>
-          <Field label="이메일" error={err.email}>
+          <Field label={t(lang, 'email')} error={err.email}>
             <input type="email" autoComplete="email" value={f.email} onChange={set('email')} />
           </Field>
-          <Field label="비밀번호 (8자 이상)" error={err.pw}>
+          <Field label={t(lang, 'pw8')} error={err.pw}>
             <input type="password" autoComplete="new-password" value={f.pw} onChange={set('pw')} />
           </Field>
-          <Field label="비밀번호 확인" error={err.pw2}>
+          <Field label={t(lang, 'pwConfirm')} error={err.pw2}>
             <input type="password" autoComplete="new-password" value={f.pw2} onChange={set('pw2')} />
           </Field>
           <button className="btn btn-primary btn-block btn-lg" type="submit">
-            가입하기
+            {t(lang, 'join')}
           </button>
         </form>
         <p className="switch-line">
-          이미 계정이 있나요?{' '}
+          {t(lang, 'haveAccount')}{' '}
           <button className="text-btn" onClick={() => replace('login')}>
-            로그인
+            {t(lang, 'loginTitle')}
           </button>
         </p>
       </main>
@@ -184,11 +308,19 @@ export function Signup() {
   )
 }
 
-export function ProfileForm({ value, onChange, showErrors }) {
+/* 국적·체류자격 이름은 한국어 원문과 선택 언어를 함께 표시 */
+function localName(map, key, ko, lang) {
+  const l = uiLang(lang)
+  if (l === 'ko') return ko
+  const local = map[key]?.[l]
+  return local ? `${local} (${ko})` : ko
+}
+
+export function ProfileForm({ value, onChange, showErrors, lang = 'ko' }) {
   const set = (k) => (e) => onChange({ ...value, [k]: e.target.value })
   return (
     <>
-      <Field label="안내 언어">
+      <Field label={t(lang, 'fLang')}>
         <select value={value.language} onChange={set('language')}>
           {LANGS.map((l) => (
             <option key={l.code} value={l.code}>
@@ -197,20 +329,22 @@ export function ProfileForm({ value, onChange, showErrors }) {
           ))}
         </select>
       </Field>
-      <Field label="국적" error={showErrors && !value.nationality ? '국적을 선택하세요.' : null}>
+      <Field label={t(lang, 'fNat')} error={showErrors && !value.nationality ? t(lang, 'errNat') : null}>
         <select value={value.nationality} onChange={set('nationality')}>
-          <option value="">선택하세요</option>
+          <option value="">{t(lang, 'choose')}</option>
           {NATIONALITIES.map((n) => (
-            <option key={n}>{n}</option>
+            <option key={n} value={n}>
+              {localName(NATION_NAMES, n, n, lang)}
+            </option>
           ))}
         </select>
       </Field>
-      <Field label="체류자격" error={showErrors && !value.visa ? '체류자격을 선택하세요.' : null}>
+      <Field label={t(lang, 'fVisa')} error={showErrors && !value.visa ? t(lang, 'errVisa') : null}>
         <select value={value.visa} onChange={set('visa')}>
-          <option value="">선택하세요</option>
+          <option value="">{t(lang, 'choose')}</option>
           {VISAS.map((v) => (
             <option key={v.code} value={v.code}>
-              {v.label}
+              {uiLang(lang) === 'ko' ? v.label : `${v.code} ${VISA_NAMES[v.code]?.[uiLang(lang)] ?? ''} (${v.label})`}
             </option>
           ))}
         </select>
@@ -223,6 +357,7 @@ export function ProfileSetup() {
   const { data, update, replace } = useApp()
   const [p, setP] = useState(data.profile)
   const [tried, setTried] = useState(false)
+  const lang = p.language
   const save = () => {
     setTried(true)
     if (!p.nationality || !p.visa) return
@@ -232,14 +367,14 @@ export function ProfileSetup() {
   return (
     <>
       <TopBar />
-      <main className="screen onboard">
-        <h1 className="h1">내 정보를 알려주세요</h1>
-        <p className="lead">국적과 체류자격에 따라 적용되는 절차가 달라서, 맞춤 안내에 사용해요.</p>
-        <ProfileForm value={p} onChange={setP} showErrors={tried} />
-        <p className="hint">이 정보는 안내를 돕기 위한 것이며 공식 자격 판정에 쓰이지 않아요. 설정에서 언제든 바꿀 수 있어요.</p>
+      <main className="screen onboard" lang={uiLang(lang)}>
+        <h1 className="h1">{t(lang, 'profileTitle')}</h1>
+        <p className="lead">{t(lang, 'profileLead')}</p>
+        <ProfileForm value={p} onChange={setP} showErrors={tried} lang={lang} />
+        <p className="hint">{t(lang, 'profileHint')}</p>
         <div className="sticky-actions">
           <button className="btn btn-primary btn-block btn-lg" onClick={save}>
-            저장하고 계속하기
+            {t(lang, 'saveContinue')}
           </button>
         </div>
       </main>
@@ -248,7 +383,7 @@ export function ProfileSetup() {
 }
 
 export function NotifyPermission() {
-  const { update, tab, setSheet, isStandalone, data } = useApp()
+  const { update, tab, setSheet, isStandalone, data, lang } = useApp()
   const finish = (enabled) => {
     update((d) => ({ onboarded: true, notify: { ...d.notify, enabled } }))
     tab('home')
@@ -269,23 +404,23 @@ export function NotifyPermission() {
   return (
     <>
       <TopBar />
-      <main className="screen onboard">
+      <main className="screen onboard" lang={uiLang(lang)}>
         <div className="push-preview" aria-hidden="true">
           <div className="push-app">
             <span className="push-icon" />
-            ChungnamOn <small>지금</small>
+            ChungnamOn <small>{t(lang, 'now')}</small>
           </div>
-          <strong>주민세 내기 마감 7일 전이에요</strong>
-          <span>11월 30일까지 아산시청 세무과에 납부하세요.</span>
+          <strong>{t(lang, 'pushTitle')}</strong>
+          <span>{t(lang, 'pushBody')}</span>
         </div>
-        <h1 className="h1">마감일을 놓치지 않게 알려드릴게요</h1>
-        <p className="lead">등록한 일정의 마감 7일 전과 1일 전에 알림을 보내요.</p>
+        <h1 className="h1">{t(lang, 'notifyTitle')}</h1>
+        <p className="lead">{t(lang, 'notifyLead')}</p>
         <div className="sticky-actions stack">
           <button className="btn btn-primary btn-block btn-lg" onClick={allow}>
-            <Bell size={18} /> 알림 켜기
+            <Bell size={18} /> {t(lang, 'allow')}
           </button>
           <button className="btn btn-ghost btn-block" onClick={() => finish(false)}>
-            나중에
+            {t(lang, 'later')}
           </button>
         </div>
       </main>
