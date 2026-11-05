@@ -42,6 +42,7 @@ class Settings:
     min_chunk_chars: int
     history_turns: int
     request_timeout: float
+    max_tokens: int
 
 
 def _env(name: str, default: str) -> str:
@@ -77,6 +78,7 @@ def get_settings() -> Settings:
         min_chunk_chars=int(_env("AI_MIN_CHUNK_CHARS", "150")),
         history_turns=int(_env("AI_HISTORY_TURNS", "6")),
         request_timeout=float(_env("AI_REQUEST_TIMEOUT", "120")),
+        max_tokens=int(_env("AI_MAX_TOKENS", "4096")),
     )
 
 

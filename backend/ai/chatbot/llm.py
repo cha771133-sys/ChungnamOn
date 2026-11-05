@@ -23,7 +23,8 @@ def extract_json(text: str) -> dict:
         text = fence.group(1)
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end == -1:
-        raise ValueError(f"JSON을 찾지 못함: {text[:200]}")
+        # 모델 출력에는 질문·문서·답변이 섞여 있어서 로그로 새지 않게 길이만 남김
+        raise ValueError(f"JSON을 찾지 못함 (출력 {len(text)}자)")
     return json.loads(text[start : end + 1])
 
 
@@ -36,14 +37,18 @@ class AnthropicLLM:
         s = get_settings()
         self.client = anthropic.Anthropic(api_key=s.anthropic_api_key, timeout=s.request_timeout)
         self.model = s.anthropic_model
+        self.max_tokens = s.max_tokens
 
     def complete_json(self, system: str, messages: list[dict], **_) -> dict:
         resp = self.client.messages.create(
             model=self.model,
-            max_tokens=1500,
+            max_tokens=self.max_tokens,
             system=system,
             messages=messages,
         )
+        if getattr(resp, "stop_reason", None) == "max_tokens":
+            # 잘린 JSON을 억지로 파싱하지 않음. 베트남어·태국어 등은 같은 내용도 토큰이 많이 듦
+            raise ValueError(f"응답이 max_tokens({self.max_tokens})에서 잘림. AI_MAX_TOKENS를 늘려야 함")
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
         return extract_json(text)
 

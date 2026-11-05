@@ -131,3 +131,34 @@ class GeminiEmbedderTests(unittest.TestCase):
                 self.assertEqual((emb.model, emb.dim), ("gemini-embedding-001", 768))
             finally:
                 reset_settings()
+
+
+class AnthropicLLMTests(unittest.TestCase):
+    """실제 API 없이 응답 객체만 흉내 냄."""
+
+    def make(self, text, stop_reason="end_turn"):
+        from types import SimpleNamespace
+
+        from ai.chatbot.llm import AnthropicLLM
+
+        llm = AnthropicLLM.__new__(AnthropicLLM)
+        llm.model, llm.max_tokens = "claude-haiku-5-5", 4096
+        resp = SimpleNamespace(stop_reason=stop_reason, content=[SimpleNamespace(type="text", text=text)])
+        llm.client = SimpleNamespace(messages=SimpleNamespace(create=mock.Mock(return_value=resp)))
+        return llm
+
+    def test_truncated_response_is_clear_error(self):
+        llm = self.make('{"answer": "긴 답변', stop_reason="max_tokens")
+        with self.assertRaises(ValueError) as ctx:
+            llm.complete_json("s", [{"role": "user", "content": "q"}])
+        self.assertIn("max_tokens", str(ctx.exception))
+        self.assertEqual(llm.client.messages.create.call_args.kwargs["max_tokens"], 4096)
+
+    def test_parse_error_does_not_leak_model_output(self):
+        llm = self.make('{"answer": "개인 문서 내용')
+        with self.assertRaises(ValueError) as ctx:
+            llm.complete_json("s", [{"role": "user", "content": "q"}])
+        self.assertNotIn("개인 문서", str(ctx.exception))
+
+    def test_ok(self):
+        self.assertEqual(self.make('```json\n{"ok": true}\n```').complete_json("s", []), {"ok": True})
