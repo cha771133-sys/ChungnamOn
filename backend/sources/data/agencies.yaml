@@ -1,0 +1,48 @@
+# 공개 연락처 사실정보만 수동 확인. 원문·이미지·서식·개인 담당자 정보는 복제하지 않는다.
+# checked_at은 출처를 실제 확인한 시각이며 시드 실행 시각으로 갱신하지 않는다.
+# 업무 범위·이용조건·충돌 확인은 AGENCIES.md 참고. 기존 비활성 수집 자료는 사용하지 않는다.
+agencies:
+- name: 충청남도청
+  department: ''
+  region: 충청남도
+  phone: 041-120
+  phone_type: REPRESENTATIVE
+  source_url: https://www.passport.go.kr/home/kor/substitutional/index.do?idx=&menuPos=28&pageIndex=1&searchKeyword=&searchValue1=0&searchValue2=20&searchValue3=&searchValue4=&tabPos=A
+  checked_at: '2026-11-04T15:27:00+00:00'
+  aliases:
+  - 충남도청
+- name: 천안시청
+  department: 민원여권과
+  region: 천안시
+  phone: 041-521-3323
+  phone_type: DEPARTMENT
+  source_url: https://www.passport.go.kr/home/kor/substitutional/index.do?idx=&menuPos=28&pageIndex=1&searchKeyword=&searchValue1=0&searchValue2=20&searchValue3=&searchValue4=&tabPos=A
+  checked_at: '2026-11-04T15:27:00+00:00'
+  aliases:
+  - 천안시청 민원여권과
+- name: 아산시청
+  department: 징수과
+  region: 아산시
+  phone: 041-537-3001
+  phone_type: DEPARTMENT
+  source_url: https://www.asan.go.kr/main/cms/?no=93
+  checked_at: '2026-11-04T15:27:00+00:00'
+  aliases:
+  - 아산시청 징수과
+- name: 법무부
+  department: 외국인종합안내센터
+  region: 전국
+  phone: '1345'
+  phone_type: REPRESENTATIVE
+  source_url: https://www.moj.go.kr/moj/196/subview.do
+  checked_at: '2026-11-04T15:27:01+00:00'
+  aliases:
+  - 외국인종합안내센터
+- name: 국민건강보험공단
+  department: ''
+  region: 전국
+  phone: 033-811-2000
+  phone_type: REPRESENTATIVE
+  source_url: https://www.nhis.or.kr/static/alim/paper/oldpaper/202403/sub/section4_7.html
+  checked_at: '2026-11-04T15:27:02+00:00'
+  aliases: []

@@ -29,4 +29,5 @@ class ContentMigrationTests(TransactionTestCase):
             self.assertEqual(preserved.embedding, [0.1])
             self.assertEqual(preserved.chunk_text, '기존 AI 근거')
         finally:
-            MigrationExecutor(connection).migrate(new_target)
+            executor = MigrationExecutor(connection)
+            executor.migrate(executor.loader.graph.leaf_nodes())
