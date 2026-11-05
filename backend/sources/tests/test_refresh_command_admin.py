@@ -16,7 +16,7 @@ from django.utils import timezone
 from sources.management.commands.refresh_official_sources import CLIENTS
 from sources.models import CrawlLog, SourceDocument, SourceRefreshTarget, SourceRevision
 from sources.services.errors import CollectionError
-from sources.services.refresh_service import refresh_target
+from sources.services.refresh_service import refresh_target, review_revision
 
 from .pipeline_helpers import spec
 from .test_official_refresh import make_record
@@ -233,3 +233,35 @@ class RefreshAdminTests(TestCase):
         target.refresh_from_db()
         self.assertEqual(target.interval_hours, 2)
         self.assertEqual(target.lease_token, token)
+
+    def test_admin_post_cannot_activate_reprocessing_document_but_can_disable_it(self):
+        review_revision(self.revision.pk, self.admin, approve=True)
+        document = SourceDocument.objects.get()
+        self.client.force_login(self.admin)
+        url = reverse('admin:sources_sourcedocument_change', args=[document.pk])
+        data = {field: getattr(document, field) for field in ('title', 'agency', 'region', 'category')}
+        page = self.client.get(url)
+        data.update({field.html_name: field.value() for inline in page.context['inline_admin_formsets'] for field in inline.formset.management_form})
+        response = self.client.post(url, {**data, 'status': 'ACTIVE', '_save': '저장'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('status', response.context['adminform'].form.errors)
+        document.refresh_from_db()
+        self.assertEqual(document.status, 'PENDING')
+        response = self.client.post(url, {**data, 'status': 'INACTIVE', '_save': '저장'})
+        self.assertEqual(response.status_code, 302)
+        document.refresh_from_db()
+        self.assertEqual(document.status, 'INACTIVE')
+        self.assertTrue(document.ai_reprocessing_required)
+
+    def test_old_admin_form_checks_approval_committed_after_instance_was_loaded(self):
+        from django.contrib import admin
+        old_document = SourceDocument.objects.get()
+        model_admin = admin.site._registry[SourceDocument]
+        form_class = model_admin.get_form(SimpleNamespace(user=self.admin), old_document)
+        data = {field: getattr(old_document, field) for field in ('title', 'agency', 'region', 'category')}
+        form = form_class({**data, 'status': 'ACTIVE'}, instance=old_document)
+        review_revision(self.revision.pk, self.admin, approve=True)
+        self.assertFalse(old_document.ai_reprocessing_required)
+        self.assertFalse(form.is_valid())
+        self.assertIn('status', form.errors)
+        self.assertEqual(SourceDocument.objects.get().status, 'PENDING')

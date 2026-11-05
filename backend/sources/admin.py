@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin
 from django.contrib import messages
 from django.db import DatabaseError, transaction
@@ -42,8 +43,24 @@ class FreshnessFilter(admin.SimpleListFilter):
         return filter_freshness(queryset, self.value()) if self.value() else queryset
 
 
+class SourceDocumentAdminForm(forms.ModelForm):
+    class Meta:
+        model = SourceDocument
+        fields = '__all__'
+
+    def clean(self):
+        """Admin POST 트랜잭션에서 승인과 직렬화하여 이전 폼의 재활성화를 막는다."""
+        cleaned_data = super().clean()
+        if self.instance.pk and cleaned_data.get('status') == SourceDocument.Status.ACTIVE:
+            current = SourceDocument.objects.select_for_update().get(pk=self.instance.pk)
+            if current.ai_reprocessing_required:
+                self.add_error('status', 'AI 재처리가 끝날 때까지 자료를 사용 중으로 변경할 수 없습니다.')
+        return cleaned_data
+
+
 @admin.register(SourceDocument)
 class SourceDocumentAdmin(admin.ModelAdmin):
+    form = SourceDocumentAdminForm
     list_display = ('id', 'title', 'source_url', 'provider', 'external_id', 'agency', 'region', 'category', 'published_at', 'collected_at', 'last_success_at', 'updated_at', 'status', 'freshness_state', 'review_status', 'reviewed_by', 'reviewed_at')
     list_filter = ('agency', 'region', 'category', 'status', 'provider', 'review_status', FreshnessFilter, 'ai_reprocessing_required')
     search_fields = ('title', 'source_url', 'agency')
