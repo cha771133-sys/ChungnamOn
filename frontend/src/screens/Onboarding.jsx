@@ -1,21 +1,56 @@
 import { useRef, useState } from 'react'
 import { Check, Bell, Camera, Languages, Globe } from 'lucide-react'
-import { useApp } from '../store.js'
+import { useApp, purgeServerData } from '../store.js'
 import { LANGS, NATIONALITIES, VISAS } from '../data/mock.js'
 import { t, uiLang, NATION_NAMES, VISA_NAMES } from '../i18n.js'
 import { TopBar, Stamp } from '../components/ui.jsx'
+import { fetchMe, hasSession, login, register, updateMe } from '../lib/auth'
+import { parseApiError } from '../lib/api'
 
-/* 로그인 여부에 따라 다음 단계 결정 (유저 플로우 n8) */
+/** 소개를 마친 뒤 로그인 여부와 프로필 완료 여부에 따라 다음 화면을 고른다 (유저 플로우 n8). */
 function useAfterIntro() {
   const { data, nav, replace } = useApp()
   return () => {
-    if (!data.user) nav('login')
+    if (!hasSession()) nav('login')
     else if (!data.profile.nationality || !data.profile.visa) replace('profile')
     else replace('notify')
   }
 }
 
-/* ① 첫 화면: 언어 선택 — 외국인 사용자가 처음부터 자기 언어로 볼 수 있게 맨 앞에 둠 */
+/** 로그인·가입 직후 내 프로필을 불러와 로컬 상태에 반영하고 다음 화면으로 보낸다. */
+function useAfterLogin() {
+  const { data, update, replace, tab } = useApp()
+  return async () => {
+    const me = await fetchMe()
+    update((d) => ({
+      // 다른 계정으로 로그인하면 이전 계정의 서버 문서를 이 브라우저에서 지운다
+      ...(d.user?.id !== me.id ? purgeServerData(d) : {}),
+      user: { id: me.id, email: me.email },
+      profile: {
+        language: me.language ?? d.profile.language,
+        nationality: me.nationality ?? '',
+        visa: me.visaType ?? '',
+      },
+    }))
+    if (!me.onboardingCompleted) replace('profile')
+    else if (!data.onboarded) replace('notify')
+    else tab('home')
+  }
+}
+
+/** 서버 오류를 입력칸 오류와 화면 위 안내 문구로 나눈다. */
+function toFormErrors(error, lang, fieldMap = {}) {
+  const info = parseApiError(error)
+  if (info.code === 'NETWORK_ERROR') return { form: t(lang, 'errNetwork') }
+  const next = {}
+  for (const [server, local] of Object.entries(fieldMap)) {
+    if (info.fields[server]) next[local] = info.fields[server]
+  }
+  if (!Object.keys(next).length) next.form = info.fields.non_field_errors || info.message || t(lang, 'errUnknown')
+  return next
+}
+
+/** ① 첫 화면: 언어 선택. 외국인 사용자가 처음부터 자기 언어로 볼 수 있게 맨 앞에 둔다. */
 export function LanguageSelect() {
   const { data, update, nav } = useApp()
   const [sel, setSel] = useState(data.profile.language)
@@ -103,7 +138,7 @@ const SLIDES = [
         </span>
         {active && (
           <div className="intro-stamp">
-            <Stamp tone="seal" top="공식 자료" bottom="대조 완료" />
+            <Stamp tone="seal" top={t(lang, 'stampTop')} bottom={t(lang, 'stampBottom')} long={uiLang(lang) !== 'ko'} />
           </div>
         )}
       </div>
@@ -138,7 +173,7 @@ const SLIDES = [
   },
 ]
 
-/* ② 서비스 소개 3장 — 선택한 언어로 표시, 위에서 언어 다시 바꾸기 가능 */
+/** ② 서비스 소개 3장. 선택한 언어로 표시하고, 위에서 언어를 다시 바꿀 수 있다. */
 export function Intro() {
   const { lang, openLang, back } = useApp()
   const goNext = useAfterIntro()
@@ -206,6 +241,7 @@ export function Intro() {
   )
 }
 
+/** 라벨과 오류 문구를 함께 보여주는 입력칸 */
 function Field({ label, error, children }) {
   return (
     <label className={`field${error ? ' has-error' : ''}`}>
@@ -216,23 +252,44 @@ function Field({ label, error, children }) {
   )
 }
 
+/** 입력칸이 아닌 전체 오류(로그인 실패, 네트워크 오류 등)를 보여준다. */
+function FormError({ message }) {
+  if (!message) return null
+  return (
+    <p className="form-error" role="alert">
+      {message}
+    </p>
+  )
+}
+
+/** 로그인 화면: POST /api/auth/login/ 후 프로필 상태에 따라 이동 */
 export function Login() {
-  const { data, update, replace, back, lang } = useApp()
+  const { replace, back, lang } = useApp()
+  const afterLogin = useAfterLogin()
   const [email, setEmail] = useState('')
   const [pw, setPw] = useState('')
   const [err, setErr] = useState({})
-  const submit = (e) => {
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (e) => {
     e.preventDefault()
     const next = {}
     if (!email.includes('@')) next.email = t(lang, 'errEmail')
-    if (pw.length < 4) next.pw = t(lang, 'errPw4')
+    if (!pw) next.pw = t(lang, 'errPwRequired')
     setErr(next)
     if (Object.keys(next).length) return
-    update(() => ({ user: { email } }))
-    const p = data.profile
-    if (p.nationality && p.visa) replace('notify')
-    else replace('profile')
+    setBusy(true)
+    try {
+      await login(email.trim(), pw)
+      await afterLogin()
+    } catch (error) {
+      const info = parseApiError(error)
+      setErr(info.code === 'AUTHENTICATION_FAILED' ? { form: t(lang, 'errLogin') } : toFormErrors(error, lang, { email: 'email', password: 'pw' }))
+    } finally {
+      setBusy(false)
+    }
   }
+
   return (
     <>
       <TopBar onBack={back} />
@@ -246,8 +303,9 @@ export function Login() {
           <Field label={t(lang, 'password')} error={err.pw}>
             <input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} />
           </Field>
-          <button className="btn btn-primary btn-block btn-lg" type="submit">
-            {t(lang, 'loginTitle')}
+          <FormError message={err.form} />
+          <button className="btn btn-primary btn-block btn-lg" type="submit" disabled={busy}>
+            {busy ? t(lang, 'loading') : t(lang, 'loginTitle')}
           </button>
         </form>
         <p className="switch-line">
@@ -256,18 +314,25 @@ export function Login() {
             {t(lang, 'signup')}
           </button>
         </p>
-        <p className="demo-note">{t(lang, 'demoNote')}</p>
       </main>
     </>
   )
 }
 
+/**
+ * 회원가입 화면: 가입 후 바로 로그인해 프로필 설정으로 이동.
+ * 가입은 됐는데 로그인 단계가 실패한 경우, 다시 누르면 가입을 건너뛰고 로그인부터 이어서 한다.
+ */
 export function Signup() {
-  const { update, replace, back, lang } = useApp()
+  const { replace, back, lang } = useApp()
+  const afterLogin = useAfterLogin()
   const [f, setF] = useState({ email: '', pw: '', pw2: '' })
   const [err, setErr] = useState({})
+  const [busy, setBusy] = useState(false)
+  const registeredEmail = useRef(null)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
-  const submit = (e) => {
+
+  const submit = async (e) => {
     e.preventDefault()
     const next = {}
     if (!f.email.includes('@')) next.email = t(lang, 'errEmail')
@@ -275,9 +340,28 @@ export function Signup() {
     if (f.pw !== f.pw2) next.pw2 = t(lang, 'errPwMatch')
     setErr(next)
     if (Object.keys(next).length) return
-    update(() => ({ user: { email: f.email } }))
-    replace('profile')
+    const email = f.email.trim()
+    setBusy(true)
+    try {
+      if (registeredEmail.current !== email) {
+        await register(email, f.pw)
+        registeredEmail.current = email
+      }
+      await login(email, f.pw)
+      await afterLogin()
+    } catch (error) {
+      if (registeredEmail.current === email) {
+        // 가입은 끝났으니 같은 이메일로 다시 가입하지 않게 안내한다
+        const info = parseApiError(error)
+        setErr({ form: info.code === 'NETWORK_ERROR' ? t(lang, 'errAfterSignupRetry') : t(lang, 'errAfterSignupLogin') })
+      } else {
+        setErr(toFormErrors(error, lang, { email: 'email', password: 'pw' }))
+      }
+    } finally {
+      setBusy(false)
+    }
   }
+
   return (
     <>
       <TopBar onBack={back} />
@@ -293,8 +377,9 @@ export function Signup() {
           <Field label={t(lang, 'pwConfirm')} error={err.pw2}>
             <input type="password" autoComplete="new-password" value={f.pw2} onChange={set('pw2')} />
           </Field>
-          <button className="btn btn-primary btn-block btn-lg" type="submit">
-            {t(lang, 'join')}
+          <FormError message={err.form} />
+          <button className="btn btn-primary btn-block btn-lg" type="submit" disabled={busy}>
+            {busy ? t(lang, 'loading') : t(lang, 'join')}
           </button>
         </form>
         <p className="switch-line">
@@ -308,7 +393,7 @@ export function Signup() {
   )
 }
 
-/* 국적·체류자격 이름은 한국어 원문과 선택 언어를 함께 표시 */
+/** 국적·체류자격 이름을 선택 언어 이름과 한국어 원문을 함께 보여주도록 만든다. */
 function localName(map, key, ko, lang) {
   const l = uiLang(lang)
   if (l === 'ko') return ko
@@ -316,11 +401,12 @@ function localName(map, key, ko, lang) {
   return local ? `${local} (${ko})` : ko
 }
 
-export function ProfileForm({ value, onChange, showErrors, lang = 'ko' }) {
+/** 안내 언어·국적·체류자격 입력 폼. 온보딩과 설정 화면에서 함께 쓴다. */
+export function ProfileForm({ value, onChange, showErrors, errors = {}, lang = 'ko', disabled = false }) {
   const set = (k) => (e) => onChange({ ...value, [k]: e.target.value })
   return (
-    <>
-      <Field label={t(lang, 'fLang')}>
+    <fieldset className="plain-fieldset" disabled={disabled}>
+      <Field label={t(lang, 'fLang')} error={errors.language}>
         <select value={value.language} onChange={set('language')}>
           {LANGS.map((l) => (
             <option key={l.code} value={l.code}>
@@ -329,17 +415,17 @@ export function ProfileForm({ value, onChange, showErrors, lang = 'ko' }) {
           ))}
         </select>
       </Field>
-      <Field label={t(lang, 'fNat')} error={showErrors && !value.nationality ? t(lang, 'errNat') : null}>
+      <Field label={t(lang, 'fNat')} error={errors.nationality || (showErrors && !value.nationality ? t(lang, 'errNat') : null)}>
         <select value={value.nationality} onChange={set('nationality')}>
           <option value="">{t(lang, 'choose')}</option>
           {NATIONALITIES.map((n) => (
-            <option key={n} value={n}>
-              {localName(NATION_NAMES, n, n, lang)}
+            <option key={n.code} value={n.code}>
+              {localName(NATION_NAMES, n.code, n.ko, lang)}
             </option>
           ))}
         </select>
       </Field>
-      <Field label={t(lang, 'fVisa')} error={showErrors && !value.visa ? t(lang, 'errVisa') : null}>
+      <Field label={t(lang, 'fVisa')} error={errors.visa || (showErrors && !value.visa ? t(lang, 'errVisa') : null)}>
         <select value={value.visa} onChange={set('visa')}>
           <option value="">{t(lang, 'choose')}</option>
           {VISAS.map((v) => (
@@ -349,32 +435,47 @@ export function ProfileForm({ value, onChange, showErrors, lang = 'ko' }) {
           ))}
         </select>
       </Field>
-    </>
+    </fieldset>
   )
 }
 
+/** 프로필 설정 화면: PATCH /api/auth/me/로 세 항목을 함께 저장 */
 export function ProfileSetup() {
   const { data, update, replace } = useApp()
   const [p, setP] = useState(data.profile)
   const [tried, setTried] = useState(false)
+  const [err, setErr] = useState({})
+  const [busy, setBusy] = useState(false)
   const lang = p.language
-  const save = () => {
+
+  const save = async () => {
     setTried(true)
     if (!p.nationality || !p.visa) return
-    update(() => ({ profile: p }))
-    replace('notify')
+    setBusy(true)
+    setErr({})
+    try {
+      const me = await updateMe({ language: p.language, nationality: p.nationality, visaType: p.visa })
+      update(() => ({ profile: { language: me.language ?? p.language, nationality: me.nationality ?? '', visa: me.visaType ?? '' } }))
+      replace('notify')
+    } catch (error) {
+      setErr(toFormErrors(error, lang, { language: 'language', nationality: 'nationality', visaType: 'visa' }))
+    } finally {
+      setBusy(false)
+    }
   }
+
   return (
     <>
       <TopBar />
       <main className="screen onboard" lang={uiLang(lang)}>
         <h1 className="h1">{t(lang, 'profileTitle')}</h1>
         <p className="lead">{t(lang, 'profileLead')}</p>
-        <ProfileForm value={p} onChange={setP} showErrors={tried} lang={lang} />
+        <ProfileForm value={p} onChange={setP} showErrors={tried} errors={err} lang={lang} disabled={busy} />
+        <FormError message={err.form} />
         <p className="hint">{t(lang, 'profileHint')}</p>
         <div className="sticky-actions">
-          <button className="btn btn-primary btn-block btn-lg" onClick={save}>
-            {t(lang, 'saveContinue')}
+          <button className="btn btn-primary btn-block btn-lg" onClick={save} disabled={busy}>
+            {busy ? t(lang, 'loading') : t(lang, 'saveContinue')}
           </button>
         </div>
       </main>
@@ -382,6 +483,7 @@ export function ProfileSetup() {
   )
 }
 
+/** 알림 권한 안내 화면. 시스템 팝업 전에 왜 필요한지 먼저 설명한다. */
 export function NotifyPermission() {
   const { update, tab, setSheet, isStandalone, data, lang } = useApp()
   const finish = (enabled) => {

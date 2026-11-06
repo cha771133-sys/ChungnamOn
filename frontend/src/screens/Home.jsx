@@ -1,5 +1,5 @@
 import { Camera, BellOff, ChevronRight } from 'lucide-react'
-import { useApp, dday, ddayLabel, fmtDate } from '../store.js'
+import { useApp, dday, ddayLabel, fmtDate, isVisibleDoc } from '../store.js'
 import { TopBar, TabBar } from '../components/ui.jsx'
 import DocRow from './DocRow.jsx'
 
@@ -58,7 +58,7 @@ export default function Home() {
             </button>
           </div>
           <ul className="doc-list">
-            {data.docs.slice(0, 3).map((d) => (
+            {data.docs.filter((d) => isVisibleDoc(d, data.user)).slice(0, 3).map((d) => (
               <DocRow key={d.id} doc={d} />
             ))}
           </ul>

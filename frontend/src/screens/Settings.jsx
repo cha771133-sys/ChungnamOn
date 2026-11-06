@@ -1,16 +1,20 @@
 import { useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
-import { api } from '../lib/api'
-import { useApp } from '../store.js'
+import { api, parseApiError } from '../lib/api'
+import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
+import { useApp, purgeServerData } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, TabBar, Toggle } from '../components/ui.jsx'
 import { ProfileForm } from './Onboarding.jsx'
 
+/** 설정 화면: 프로필(서버 저장), 안내 언어, 알림, 개인정보 안내, 로그아웃 */
 export default function Settings() {
   const { data, update, openLang, setSheet, showToast, resetDemo, isStandalone, tab } = useApp()
   const L = LANGS.find((l) => l.code === data.profile.language)
   const [server, setServer] = useState('')
+  const [saving, setSaving] = useState(false)
 
+  /** 서버 상태 확인 (GET /api/health/) */
   const checkServer = async () => {
     setServer('확인 중...')
     try {
@@ -21,10 +25,33 @@ export default function Settings() {
     }
   }
 
-  const setProfile = (p) => {
+  /**
+   * 프로필을 바로 화면에 반영하고 서버에 저장한다. 실패하면 이전 값으로 되돌린다.
+   * 저장 중에는 폼을 잠가 요청이 겹치지 않게 하고, 국적·체류자격이 비어 있으면 보내지 않는다.
+   */
+  const setProfile = async (p) => {
+    if (saving) return
+    if (!p.nationality || !p.visa) {
+      showToast('국적과 체류자격을 선택하세요')
+      return
+    }
+    const prev = data.profile
     update(() => ({ profile: p }))
-    showToast('저장했어요')
+    setSaving(true)
+    try {
+      await updateMe({ language: p.language, nationality: p.nationality, visaType: p.visa })
+      showToast('저장했어요')
+    } catch (error) {
+      update(() => ({ profile: prev }))
+      const info = parseApiError(error)
+      // 세션이 만료됐으면 앱이 로그인 화면으로 보내며 안내하므로 여기서는 알리지 않는다
+      if (!hasSession()) return
+      showToast(info.code === 'NETWORK_ERROR' || info.code === 'AUTHENTICATION_FAILED' || info.code === 'NOT_AUTHENTICATED' ? '서버에 연결하지 못했어요. 다시 시도하세요' : '저장하지 못했어요. 다시 시도하세요')
+    } finally {
+      setSaving(false)
+    }
   }
+  /** 알림 켜기·끄기. 켤 때 브라우저 권한을 아직 묻지 않았으면 요청한다. */
   const setNotify = async (enabled) => {
     if (enabled && 'Notification' in window && Notification.permission === 'default') {
       try {
@@ -35,8 +62,14 @@ export default function Settings() {
     }
     update((d) => ({ notify: { ...d.notify, enabled } }))
   }
-  const logout = () => {
-    update(() => ({ user: null, onboarded: false }))
+  /** 서버의 Refresh Token을 무효화하고 로그인 화면으로 이동한다. */
+  const logout = async () => {
+    try {
+      await apiLogout()
+    } catch {
+      /* 서버 요청이 실패해도 저장된 토큰은 이미 지웠다 */
+    }
+    update((d) => ({ ...purgeServerData(d), user: null }))
     tab('login')
   }
 
@@ -47,7 +80,7 @@ export default function Settings() {
         <section className="settings-group">
           <h2>내 정보</h2>
           {data.user?.email && <p className="settings-email">{data.user.email}</p>}
-          <ProfileForm value={data.profile} onChange={setProfile} />
+          <ProfileForm value={data.profile} onChange={setProfile} disabled={saving} />
         </section>
 
         <section className="settings-group">
