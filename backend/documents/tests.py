@@ -964,6 +964,17 @@ class ScheduleDetailTests(FixedTodayMixin, APITestCase):
         self.schedule.refresh_from_db()
         self.assertFalse(self.schedule.done)
 
+    def test_former_owner_cannot_read_reassigned_document_schedule(self):
+        Document.objects.filter(id=self.document.id).update(owner=create_user('new@example.com'))
+
+        self.assertEqual(self.client.get(SCHEDULE_URL).json()['count'], 0)
+        for method, body in (('get', None), ('patch', {'done': True}), ('delete', None)):
+            with self.subTest(method=method):
+                response = getattr(self.client, method)(schedule_url(self.schedule.id), body, format='json')
+
+                self.assertEqual(response.status_code, 404)
+        self.assertTrue(Schedule.objects.filter(id=self.schedule.id).exists())
+
     def test_requires_login(self):
         self.client.force_authenticate(None)
 

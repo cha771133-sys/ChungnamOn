@@ -291,6 +291,11 @@ SCHEDULE_PK_PARAMETER = OpenApiParameter('pk', int, OpenApiParameter.PATH, descr
 BOOLEAN_VALUES = {'true': True, 'false': False}
 
 
+def owned_schedules(user):
+    """사용자의 일정. 문서 소유자가 바뀌면 이전 소유자가 문서 정보를 계속 보지 않도록 문서 소유자도 확인한다."""
+    return Schedule.objects.filter(owner=user, document__owner=user).select_related('document', 'document__result')
+
+
 def parse_boolean_param(params, name):
     """true/false 쿼리 값을 bool로 바꾼다. 없으면 None, 그 외 값은 400."""
     value = params.get(name)
@@ -375,11 +380,7 @@ class ScheduleListCreateView(generics.ListCreateAPIView):
         return ScheduleSerializer
 
     def get_queryset(self):
-        queryset = (
-            Schedule.objects.filter(owner=self.request.user)
-            .select_related('document', 'document__result')
-            .order_by('date', 'id')
-        )
+        queryset = owned_schedules(self.request.user).order_by('date', 'id')
         done = parse_boolean_param(self.request.query_params, 'done')
         overdue = parse_boolean_param(self.request.query_params, 'overdue')
         if done is not None:
@@ -480,7 +481,7 @@ class ScheduleDetailView(generics.RetrieveUpdateDestroyAPIView):
     http_method_names = ['get', 'patch', 'delete', 'head', 'options']
 
     def get_queryset(self):
-        return Schedule.objects.filter(owner=self.request.user).select_related('document', 'document__result')
+        return owned_schedules(self.request.user)
 
     def update(self, request, *args, **kwargs):
         schedule = self.get_object()
