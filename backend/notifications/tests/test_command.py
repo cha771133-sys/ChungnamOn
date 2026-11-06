@@ -2,11 +2,12 @@ from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from io import StringIO
 from unittest.mock import patch
 
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
 from django.db import connection
 from django.db.migrations.loader import MigrationLoader
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 from django.utils import timezone
 
 from documents.models import Document, Schedule
@@ -407,6 +408,28 @@ class DeadlineReminderCommandTests(TestCase):
         reminder = DeadlineReminder.objects.create(schedule=schedule, days_before=7)
         ReminderDelivery.objects.create(reminder=reminder, device=self.device)
         self.user.delete()
+        self.assertFalse(DeadlineReminder.objects.exists())
+        self.assertFalse(ReminderDelivery.objects.exists())
+
+    def test_reminder_history_does_not_block_existing_schedule_and_document_admin_deletion(self):
+        """알림 이력이 기존 Schedule/Document 관리자 삭제 권한에 제약을 추가하지 않는다."""
+        schedule = self.create_schedule(TODAY + timedelta(days=7))
+        reminder = DeadlineReminder.objects.create(schedule=schedule, days_before=7)
+        ReminderDelivery.objects.create(reminder=reminder, device=self.device)
+        self.user.is_staff = True
+        self.user.is_superuser = True
+        self.user.save()
+        request = RequestFactory().get('/admin/documents/')
+        request.user = self.user
+        for model, instance in ((Schedule, schedule), (Document, self.document)):
+            with self.subTest(model=model.__name__):
+                _, _, permissions, protected = admin.site._registry[model].get_deleted_objects([instance], request)
+                self.assertFalse(permissions)
+                self.assertFalse(protected)
+        self.client.force_login(self.user)
+        response = self.client.post(f'/admin/documents/document/{self.document.pk}/delete/', {'post': 'yes'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Schedule.objects.filter(pk=schedule.pk).exists())
         self.assertFalse(DeadlineReminder.objects.exists())
         self.assertFalse(ReminderDelivery.objects.exists())
 

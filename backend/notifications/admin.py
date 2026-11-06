@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import DeadlineReminder, NotificationPreference, PushDevice, ReminderDelivery
+from .models import NotificationPreference, PushDevice
 
 
 class RestrictedReadOnlyAdmin(admin.ModelAdmin):
@@ -42,24 +42,3 @@ class NotificationPreferenceAdmin(RestrictedReadOnlyAdmin):
     fields = ['id', 'user', 'enabled', 'enabled_since', 'created_at', 'updated_at']
     readonly_fields = fields
     list_select_related = ['user']
-
-
-@admin.register(DeadlineReminder)
-class DeadlineReminderAdmin(RestrictedReadOnlyAdmin):
-    list_display = ['id', 'schedule_id', 'days_before', 'created_at']
-    list_filter = ['days_before']
-    fields = ['id', 'schedule', 'days_before', 'created_at']
-    readonly_fields = fields
-    list_select_related = ['schedule']
-
-
-@admin.register(ReminderDelivery)
-class ReminderDeliveryAdmin(RestrictedReadOnlyAdmin):
-    list_display = ['id', 'reminder_id', 'device_id', 'status', 'claimed_at', 'completed_at', 'updated_at']
-    list_filter = ['status']
-    fields = [
-        'id', 'reminder', 'device', 'status', 'provider_message_id', 'error_code', 'claimed_at',
-        'completed_at', 'created_at', 'updated_at',
-    ]
-    readonly_fields = fields
-    list_select_related = ['reminder', 'device']
