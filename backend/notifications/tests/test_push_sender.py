@@ -23,13 +23,20 @@ class PushSenderTests(SimpleTestCase):
         message = build_deadline_message(**self.fields())
         self.assertEqual(message.fid, FID)
         self.assertIsNone(message.token)
-        self.assertIn('7일', message.notification.title)
-        self.assertEqual(message.notification.body, '등록한 행정업무의 마감일은 11월 20일입니다.')
+        self.assertEqual(message.notification.title, 'ChungnamOn 마감 알림')
+        self.assertEqual(message.notification.body, '등록한 일정의 마감일이 7일 남았습니다.')
         self.assertEqual(message.data, {
             'type': 'DEADLINE_REMINDER', 'scheduleId': '123', 'documentId': '456',
             'daysBefore': '7', 'deadlineDate': '2026-11-20', 'url': '/?schedule=123',
         })
         self.assertNotIn(FID, str(message.data))
+
+    def test_d1_lock_screen_message_has_no_schedule_or_document_title(self):
+        message = build_deadline_message(**self.fields(days_before=1))
+
+        self.assertEqual(message.notification.body, '등록한 일정의 마감일이 내일입니다.')
+        self.assertNotIn('주민세', message.notification.title + message.notification.body)
+        self.assertNotIn('문서', message.notification.title + message.notification.body)
 
     def test_optional_document_and_relative_deeplink(self):
         message = build_deadline_message(**self.fields(document_id=None, schedule_id='id&next=https://example.com'))
