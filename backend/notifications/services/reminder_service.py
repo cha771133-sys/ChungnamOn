@@ -15,6 +15,11 @@ from notifications.services.push_sender import PushStatus
 
 KOREA = ZoneInfo('Asia/Seoul')
 REMINDER_DAYS = (7, 1)
+RECLAIMABLE_STATUSES = (
+    ReminderDelivery.Status.PENDING,
+    ReminderDelivery.Status.RETRYABLE,
+    ReminderDelivery.Status.CONFIGURATION_ERROR,
+)
 
 
 def reminder_time(deadline_date, days_before):
@@ -105,7 +110,7 @@ def pending_delivery_count(event):
         reminder=reminder, device__in=devices,
     ).values_list('device_id', 'status'))
     return sum(
-        status_by_device.get(device.pk) in (None, ReminderDelivery.Status.PENDING, ReminderDelivery.Status.RETRYABLE)
+        status_by_device.get(device.pk) in (None, *RECLAIMABLE_STATUSES)
         for device in devices
     )
 
@@ -158,7 +163,7 @@ def claim_delivery(*, schedule_id, days_before, device_id, today=None, now=None)
         delivery, _ = ReminderDelivery.objects.get_or_create(reminder=reminder, device=device)
         claimed = ReminderDelivery.objects.filter(
             pk=delivery.pk,
-            status__in=[ReminderDelivery.Status.PENDING, ReminderDelivery.Status.RETRYABLE],
+            status__in=RECLAIMABLE_STATUSES,
         ).update(
             status=ReminderDelivery.Status.PROCESSING,
             claimed_at=now,
@@ -177,6 +182,42 @@ def claim_delivery(*, schedule_id, days_before, device_id, today=None, now=None)
             deadline_date=schedule.date,
             days_before=days_before,
         )
+
+
+def delivery_is_current(claim):
+    """외부 호출 직전 완료/삭제·수신 거부·기기 이전을 한 번 더 확인한다.
+
+    확인 직후의 변경까지 FCM과 원자적으로 묶을 수는 없다. 이 검사에서 제외된 건은
+    아직 외부 호출을 하지 않았으므로 PENDING으로 돌려 현재 조건에 따라 재평가한다.
+    """
+    now = timezone.now()
+    today = timezone.localdate()
+    scheduled_at = reminder_time(claim.deadline_date, claim.days_before)
+    valid = (
+        scheduled_at.date() == today
+        and scheduled_at <= now
+        and ReminderDelivery.objects.filter(
+            pk=claim.delivery_id,
+            status=ReminderDelivery.Status.PROCESSING,
+            reminder__schedule_id=claim.schedule_id,
+            reminder__schedule__done=False,
+            reminder__schedule__date=claim.deadline_date,
+            reminder__schedule__owner_id=claim.device.user_id,
+            reminder__schedule__document__owner_id=claim.device.user_id,
+            reminder__schedule__owner__notification_preference__enabled=True,
+            reminder__schedule__owner__notification_preference__enabled_since__lte=scheduled_at,
+            device_id=claim.device.pk,
+            device__user_id=claim.device.user_id,
+            device__is_active=True,
+            device__updated_at=claim.device.updated_at,
+            device__registration_hash=claim.device.registration_hash,
+        ).exists()
+    )
+    if not valid:
+        ReminderDelivery.objects.filter(
+            pk=claim.delivery_id, status=ReminderDelivery.Status.PROCESSING,
+        ).update(status=ReminderDelivery.Status.PENDING, claimed_at=None, updated_at=now)
+    return valid
 
 
 def complete_delivery(claim, result):

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from io import StringIO
 from unittest.mock import patch
 
@@ -13,6 +13,7 @@ from documents.models import Document, Schedule
 from notifications.models import DeadlineReminder, NotificationPreference, ReminderDelivery
 from notifications.services.devices import register_device
 from notifications.services.push_sender import PushResult, PushStatus
+from notifications.services.reminder_service import claim_delivery
 from .helpers import FID, OTHER_FID
 
 TODAY = date(2026, 8, 20)
@@ -47,11 +48,15 @@ class DeadlineReminderCommandTests(TestCase):
         schedule.refresh_from_db()
         return schedule
 
-    def run_command(self, **options):
+    def run_command(self, *, now=NOW, expected_error=None, **options):
+        """명령이 실제 한국 날짜 계산과 실패 종료를 함께 사용하도록 호출한다."""
         output = StringIO()
-        with patch('django.utils.timezone.localdate', return_value=TODAY), \
-                patch('django.utils.timezone.now', return_value=NOW):
-            call_command('send_deadline_reminders', stdout=output, **options)
+        with patch('django.utils.timezone.now', return_value=now):
+            if expected_error:
+                with self.assertRaisesMessage(CommandError, expected_error):
+                    call_command('send_deadline_reminders', stdout=output, **options)
+            else:
+                call_command('send_deadline_reminders', stdout=output, **options)
         return output.getvalue()
 
     def test_d7_and_d1_send_real_schedule_ids_and_exclude_other_schedule_states(self):
@@ -158,7 +163,7 @@ class DeadlineReminderCommandTests(TestCase):
         failure = PushResult(PushStatus.CONFIGURATION_ERROR, error_code='FIREBASE_CONFIGURATION')
 
         with patch(f'{COMMAND}.send_deadline_push', return_value=failure):
-            output = self.run_command()
+            output = self.run_command(expected_error='FIREBASE_CONFIGURATION_ERROR')
 
         delivery = ReminderDelivery.objects.get(reminder__schedule=schedule)
         self.assertEqual(delivery.status, ReminderDelivery.Status.CONFIGURATION_ERROR)
@@ -168,8 +173,6 @@ class DeadlineReminderCommandTests(TestCase):
 
     def test_claim_prevents_a_second_worker_from_sending_the_same_device_event(self):
         """PROCESSING 상태는 결과 불명 재발송보다 중복 전송 방지를 우선한다."""
-        from notifications.services.reminder_service import claim_delivery
-
         schedule = self.create_schedule(TODAY.replace(day=27))
         with patch('django.utils.timezone.localdate', return_value=TODAY), \
                 patch('django.utils.timezone.now', return_value=NOW):
@@ -179,6 +182,203 @@ class DeadlineReminderCommandTests(TestCase):
         self.assertIsNotNone(first)
         self.assertIsNone(second)
         self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.PROCESSING)
+
+    def test_configuration_failure_stops_remaining_devices_and_events_then_allows_recovery(self):
+        self.create_schedule(TODAY + timedelta(days=1))
+        self.create_schedule(TODAY + timedelta(days=7))
+        register_device(user=self.user, registration_id=OTHER_FID, registration_type='FID', platform='WEB')
+        failure = PushResult(PushStatus.CONFIGURATION_ERROR, 'FIREBASE_CONFIGURATION')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=failure) as send:
+            self.run_command(expected_error='FIREBASE_CONFIGURATION_ERROR')
+        send.assert_called_once()
+        self.assertEqual(ReminderDelivery.objects.count(), 1)
+        self.assertEqual(DeadlineReminder.objects.count(), 1)
+
+        accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/recovered')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            self.run_command()
+        self.assertEqual(send.call_count, 4)
+        self.assertEqual(ReminderDelivery.objects.filter(status=ReminderDelivery.Status.SENT).count(), 4)
+
+    def test_quota_rejection_retries_same_delivery_on_same_day_and_never_resends_success(self):
+        self.create_schedule(TODAY + timedelta(days=7))
+        failure = PushResult(PushStatus.RETRYABLE, 'QUOTA_EXCEEDED')
+        accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/retry')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=failure):
+            self.run_command(expected_error='DEADLINE_REMINDER_FAILURE')
+        delivery = ReminderDelivery.objects.get()
+        self.assertEqual(delivery.status, ReminderDelivery.Status.RETRYABLE)
+        self.assertFalse(delivery.provider_message_id)
+        with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            self.run_command(now=NOW + timedelta(hours=1))
+            self.run_command(now=NOW + timedelta(hours=2))
+        send.assert_called_once()
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, ReminderDelivery.Status.SENT)
+        self.assertEqual(delivery.provider_message_id, accepted.provider_message_id)
+        self.assertFalse(delivery.error_code)
+        self.assertEqual(ReminderDelivery.objects.count(), 1)
+
+    def test_quota_rejection_is_not_retried_on_next_korean_day(self):
+        self.create_schedule(TODAY + timedelta(days=7))
+        failure = PushResult(PushStatus.RETRYABLE, 'QUOTA_EXCEEDED')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=failure) as send:
+            self.run_command(expected_error='DEADLINE_REMINDER_FAILURE')
+            self.run_command(now=NOW + timedelta(days=1))
+        send.assert_called_once()
+        self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.RETRYABLE)
+
+    def test_uncertain_and_permanent_failures_never_retry_or_disable_device(self):
+        self.create_schedule(TODAY + timedelta(days=7))
+        for result, status in (
+            (PushResult(PushStatus.UNKNOWN, 'NETWORK_RESULT_UNKNOWN'), ReminderDelivery.Status.UNKNOWN),
+            (PushResult(PushStatus.PERMANENT_ERROR, 'INVALID_ARGUMENT'), ReminderDelivery.Status.FAILED),
+        ):
+            with self.subTest(status=status):
+                ReminderDelivery.objects.all().delete()
+                with patch(f'{COMMAND}.send_deadline_push', return_value=result) as send:
+                    self.run_command(expected_error='DEADLINE_REMINDER_FAILURE')
+                    self.run_command()
+                send.assert_called_once()
+                self.assertEqual(ReminderDelivery.objects.get().status, status)
+                self.device.refresh_from_db()
+                self.assertTrue(self.device.is_active)
+                self.assertIsNone(self.device.last_success_at)
+
+    def test_done_toggles_preserve_success_and_undone_unsent_schedule_is_reevaluated(self):
+        from rest_framework.test import APIClient
+
+        schedule = self.create_schedule(TODAY + timedelta(days=7))
+        client = APIClient()
+        client.force_authenticate(self.user)
+        accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/toggle')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            self.assertEqual(client.patch(f'/api/schedules/{schedule.pk}/', {'done': True}).status_code, 200)
+            self.run_command()
+            send.assert_not_called()
+            self.assertEqual(client.patch(f'/api/schedules/{schedule.pk}/', {'done': False}).status_code, 200)
+            self.run_command()
+            self.assertEqual(client.patch(f'/api/schedules/{schedule.pk}/', {'done': True}).status_code, 200)
+            self.assertEqual(client.patch(f'/api/schedules/{schedule.pk}/', {'done': False}).status_code, 200)
+            self.run_command()
+        send.assert_called_once()
+        self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.SENT)
+
+    def test_same_schedule_d7_success_does_not_block_d1(self):
+        schedule = self.create_schedule(TODAY + timedelta(days=7))
+        accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/event')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            self.run_command()
+            self.run_command(now=NOW + timedelta(days=6))
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual({call.kwargs['schedule_id'] for call in send.call_args_list}, {schedule.pk})
+        self.assertEqual(set(schedule.deadline_reminders.values_list('days_before', flat=True)), {7, 1})
+
+    def test_korean_midnight_prevents_previous_day_event_and_utc_midnight_is_nine_am(self):
+        self.create_schedule(TODAY + timedelta(days=7))
+        accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/boundary')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            # UTC 8/19 15:00 = 한국 8/20 00:00: 아직 09:00 전이다.
+            self.run_command(now=datetime(2026, 8, 19, 15, tzinfo=datetime_timezone.utc))
+            send.assert_not_called()
+            self.run_command(now=datetime(2026, 8, 20, 0, tzinfo=datetime_timezone.utc))
+            send.assert_called_once()
+            self.run_command(now=datetime(2026, 8, 20, 15, tzinfo=datetime_timezone.utc))
+        send.assert_called_once()
+
+    def test_completion_or_deletion_after_claim_prevents_external_call(self):
+        for change in ('done', 'delete'):
+            with self.subTest(change=change):
+                schedule = self.create_schedule(TODAY + timedelta(days=7), title=change)
+
+                def claim_then_change(**kwargs):
+                    claim = claim_delivery(**kwargs)
+                    if change == 'done':
+                        Schedule.objects.filter(pk=schedule.pk).update(done=True)
+                    else:
+                        Schedule.objects.filter(pk=schedule.pk).delete()
+                    return claim
+
+                with patch(f'{COMMAND}.claim_delivery', side_effect=claim_then_change), \
+                        patch(f'{COMMAND}.send_deadline_push') as send:
+                    self.run_command()
+                send.assert_not_called()
+        self.assertFalse(ReminderDelivery.objects.filter(status=ReminderDelivery.Status.PROCESSING).exists())
+
+    def test_device_transfer_or_consent_revocation_after_claim_prevents_external_call(self):
+        self.create_schedule(TODAY + timedelta(days=7))
+
+        def claim_then_revoke(**kwargs):
+            claim = claim_delivery(**kwargs)
+            NotificationPreference.objects.filter(pk=self.preference.pk).update(enabled=False, enabled_since=None)
+            return claim
+
+        with patch(f'{COMMAND}.claim_delivery', side_effect=claim_then_revoke), \
+                patch(f'{COMMAND}.send_deadline_push') as send:
+            self.run_command()
+        send.assert_not_called()
+        self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.PENDING)
+
+        other = get_user_model().objects.create_user(email='device-new-owner@example.com')
+        NotificationPreference.objects.filter(pk=self.preference.pk).update(enabled=True, enabled_since=BEFORE_DUE)
+
+        def claim_then_transfer(**kwargs):
+            claim = claim_delivery(**kwargs)
+            register_device(user=other, registration_id=FID, registration_type='FID', platform='WEB')
+            return claim
+
+        with patch(f'{COMMAND}.claim_delivery', side_effect=claim_then_transfer), \
+                patch(f'{COMMAND}.send_deadline_push') as send:
+            self.run_command()
+        send.assert_not_called()
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.user, other)
+
+    def test_deletion_during_external_call_does_not_recreate_cascaded_history(self):
+        schedule = self.create_schedule(TODAY + timedelta(days=7))
+
+        def accepted_while_deleted(**kwargs):
+            Schedule.objects.filter(pk=schedule.pk).delete()
+            return PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/deleted')
+
+        with patch(f'{COMMAND}.send_deadline_push', side_effect=accepted_while_deleted):
+            self.run_command()
+        self.assertFalse(DeadlineReminder.objects.exists())
+        self.assertFalse(ReminderDelivery.objects.exists())
+
+    def test_owner_mismatch_revoked_consent_and_inactive_devices_are_excluded(self):
+        schedule = self.create_schedule(TODAY + timedelta(days=7))
+        other = get_user_model().objects.create_user(email='changed-document-owner@example.com')
+        Document.objects.filter(pk=self.document.pk).update(owner=other)
+        with patch(f'{COMMAND}.send_deadline_push') as send:
+            self.run_command()
+        send.assert_not_called()
+        Document.objects.filter(pk=self.document.pk).update(owner=self.user)
+        NotificationPreference.objects.filter(pk=self.preference.pk).update(enabled=False, enabled_since=None)
+        with patch(f'{COMMAND}.send_deadline_push') as send:
+            self.run_command()
+        send.assert_not_called()
+        NotificationPreference.objects.filter(pk=self.preference.pk).update(enabled=True, enabled_since=BEFORE_DUE)
+        self.device.is_active = False
+        self.device.save()
+        with patch(f'{COMMAND}.send_deadline_push') as send:
+            self.run_command()
+        send.assert_not_called()
+        self.assertFalse(ReminderDelivery.objects.filter(reminder__schedule=schedule).exists())
+
+    def test_sdk_payload_and_lock_screen_never_include_sensitive_titles(self):
+        schedule = self.create_schedule(TODAY + timedelta(days=7))
+        with patch('notifications.services.push_sender.get_firebase_app'), \
+                patch('notifications.services.push_sender.messaging.send', return_value='projects/test/messages/payload') as send:
+            output = self.run_command()
+        message = send.call_args.args[0]
+        self.assertEqual(message.data['scheduleId'], str(schedule.pk))
+        self.assertEqual(message.data['documentId'], str(self.document.pk))
+        self.assertTrue(all(isinstance(value, str) for value in message.data.values()))
+        lock_screen = message.notification.title + message.notification.body
+        for private in (schedule.title, self.document.title, FID):
+            self.assertNotIn(private, lock_screen)
+            self.assertNotIn(private, output)
 
     def test_schedule_document_and_user_deletion_cascade_reminders_and_deliveries(self):
         accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/1')
@@ -204,9 +404,11 @@ class DeadlineReminderCommandTests(TestCase):
         schedule = Schedule.objects.create(
             owner=self.user, document=document, date=TODAY.replace(day=27), title='사용자 삭제',
         )
-        DeadlineReminder.objects.create(schedule=schedule, days_before=7)
+        reminder = DeadlineReminder.objects.create(schedule=schedule, days_before=7)
+        ReminderDelivery.objects.create(reminder=reminder, device=self.device)
         self.user.delete()
         self.assertFalse(DeadlineReminder.objects.exists())
+        self.assertFalse(ReminderDelivery.objects.exists())
 
     def test_limit_and_invalid_limit(self):
         self.create_schedule(TODAY.replace(day=21), title='D-1')

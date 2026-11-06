@@ -95,7 +95,6 @@ class DeadlineReminder(models.Model):
                 fields=['schedule', 'days_before'], name='unique_deadline_reminder_per_event',
             ),
         ]
-        indexes = [models.Index(fields=['schedule', 'days_before'], name='reminder_schedule_days_idx')]
 
     def __str__(self):
         return f'마감 알림 {self.pk} (일정 {self.schedule_id}, D-{self.days_before})'
@@ -105,8 +104,8 @@ class ReminderDelivery(models.Model):
     """한 알림 이벤트의 기기별 FCM 요청 결과.
 
     FCM 호출과 DB 갱신은 하나의 원자 작업이 될 수 없다. UNKNOWN 상태는 FCM이
-    접수했을 가능성이 있으므로 자동 재시도하지 않고, 명시적으로 거절된 RETRYABLE만
-    이후 명령 실행에서 다시 점유할 수 있다.
+    접수했을 가능성이 있으므로 자동 재시도하지 않는다. 명시적으로 거절된 RETRYABLE과
+    설정 오류만 같은 한국 날짜의 이후 명령 실행에서 다시 점유할 수 있다.
     """
 
     class Status(models.TextChoices):

@@ -36,10 +36,6 @@ class Migration(migrations.Migration):
                 ('reminder', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='deliveries', to='notifications.deadlinereminder')),
             ],
         ),
-        migrations.AddIndex(
-            model_name='deadlinereminder',
-            index=models.Index(fields=['schedule', 'days_before'], name='reminder_schedule_days_idx'),
-        ),
         migrations.AddConstraint(
             model_name='deadlinereminder',
             constraint=models.UniqueConstraint(fields=('schedule', 'days_before'), name='unique_deadline_reminder_per_event'),

@@ -5,6 +5,7 @@ from notifications.services.reminder_service import (
     active_devices_for,
     claim_delivery,
     complete_delivery,
+    delivery_is_current,
     due_schedule_events,
     pending_delivery_count,
 )
@@ -38,6 +39,7 @@ class Command(BaseCommand):
             )
             return
 
+        configuration_failed = False
         for event in events:
             # 기기 목록은 잠금 밖에서 읽고, 개별 기기는 claim_delivery에서 다시 검증한다.
             for device in active_devices_for(event.schedule):
@@ -47,6 +49,8 @@ class Command(BaseCommand):
                     device_id=device.pk,
                 )
                 if claim is None:
+                    continue
+                if not delivery_is_current(claim):
                     continue
                 stats['candidates'] += 1
                 stats['claimed'] += 1
@@ -61,16 +65,19 @@ class Command(BaseCommand):
                 except Exception:
                     # Adapter가 아닌 호출 경로의 예외도 비밀값 없이 결과 불명으로 남긴다.
                     result = PushResult(PushStatus.UNKNOWN, 'UNEXPECTED_COMMAND_ERROR')
-                if not complete_delivery(claim, result):
-                    continue
+                complete_delivery(claim, result)
                 if result.status == PushStatus.ACCEPTED:
                     stats['accepted'] += 1
                 elif result.status == PushStatus.INVALID_DEVICE:
                     stats['invalid_devices'] += 1
                 elif result.status == PushStatus.CONFIGURATION_ERROR:
                     stats['configuration_errors'] += 1
+                    configuration_failed = True
+                    break
                 else:
                     stats['other_failures'] += 1
+            if configuration_failed:
+                break
 
         self.stdout.write(
             'deadline reminders: '
@@ -79,3 +86,7 @@ class Command(BaseCommand):
             f'configuration_errors={stats["configuration_errors"]} '
             f'other_failures={stats["other_failures"]}',
         )
+        if configuration_failed:
+            raise CommandError('FIREBASE_CONFIGURATION_ERROR: 설정 오류로 나머지 발송을 중단했습니다.')
+        if stats['other_failures']:
+            raise CommandError('DEADLINE_REMINDER_FAILURE: 일부 발송이 실패했거나 결과를 확인할 수 없습니다.')
