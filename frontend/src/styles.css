@@ -2448,3 +2448,19 @@ ol {
   border-bottom: 2.5px solid currentColor;
   transform: translateX(2px) rotate(45deg);
 }
+
+/* 문서함 */
+.list-loading {
+  text-align: center;
+  padding: 24px 0;
+}
+.load-more {
+  margin-top: 12px;
+}
+.btn-danger {
+  background: var(--seal);
+  color: #fff;
+}
+.btn-danger:hover {
+  background: #a83226;
+}

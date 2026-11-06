@@ -66,6 +66,7 @@ export function adaptResult(raw, meta) {
     id,
     serverId: raw.documentId,
     ownerId: meta.ownerId,
+    hasDetail: true,
     source: 'api',
     contentLang: lang,
     docType: raw.docType || '문서',
@@ -105,4 +106,57 @@ export function adaptResult(raw, meta) {
     callScript: null,
     suggestedQuestions: [],
   }
+}
+
+/** 서버 상태를 화면 상태로 바꾼다. */
+function screenStatus(status) {
+  if (status === 'DONE') return 'done'
+  if (status === 'FAILED') return 'failed'
+  return 'processing'
+}
+
+/** ISO 시각을 사용자 기기 기준 날짜(YYYY-MM-DD)로 바꾼다. */
+function toLocalDate(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return localToday()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/**
+ * 서버 문서 목록 한 페이지를 로컬 문서 목록에 합친다.
+ * - 이미 해석 결과를 받아 둔 완료 문서는 그대로 두고 제목·상태만 맞춘다.
+ * - 처음 보는 문서는 목록 정보만 담은 문서로 추가하고, 열 때 결과를 불러온다(hasDetail: false).
+ * - complete가 true(전체 목록을 다 받음)이면 서버에 없는 이 계정의 서버 문서를 지운다.
+ */
+export function mergeServerList(docs, items, { ownerId, complete }) {
+  const byId = new Map(docs.map((d) => [d.id, d]))
+  const serverIds = new Set()
+  for (const item of items) {
+    const id = localDocId(item.documentId)
+    serverIds.add(id)
+    const prev = byId.get(id)
+    const status = screenStatus(item.status)
+    const base = {
+      id,
+      serverId: item.documentId,
+      ownerId,
+      source: 'api',
+      docType: item.docType || prev?.docType || '문서',
+      title: item.title || item.fileName || prev?.title || '행정문서',
+      fileName: item.fileName,
+      status,
+      createdAt: item.createdAt,
+      uploadedAt: toLocalDate(item.createdAt),
+      lowConfidence: item.lowConfidence,
+    }
+    // 결과를 이미 받아 둔 완료 문서는 결과 내용을 유지한다
+    const keepResult = prev?.hasDetail !== false && prev?.summary && status === 'done'
+    byId.set(id, keepResult ? { ...prev, ...base } : { ...prev, ...base, hasDetail: false })
+  }
+  let merged = [...byId.values()]
+  if (complete) {
+    merged = merged.filter((d) => d.source !== 'api' || d.ownerId !== ownerId || serverIds.has(d.id))
+  }
+  return merged
 }

@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import { SOURCES } from './data/mock.js'
+import { tokenStore } from './lib/api'
 
 export const Ctx = createContext(null)
 export const useApp = () => useContext(Ctx)
@@ -37,7 +38,9 @@ export function pick(obj, lang) {
 }
 /** 문서 상태에 맞는 화면으로 연다. 서버 문서가 분석 중이면 분석 화면에서 이어서 확인한다. */
 export function openDoc(doc, nav, showToast) {
-  if (doc.status === 'done') nav('result', { docId: doc.id })
+  // 목록으로만 받은 완료 문서는 결과를 먼저 불러온다
+  if (doc.status === 'done' && doc.source === 'api' && doc.hasDetail === false) nav('analyzing', { docId: doc.id, reopen: true })
+  else if (doc.status === 'done') nav('result', { docId: doc.id })
   else if (doc.status === 'failed') nav('failed', { docId: doc.id })
   else if (doc.serverId) nav('analyzing', { docId: doc.id })
   else showToast('아직 분석 중이에요. 잠시 후 다시 확인하세요.')
@@ -62,7 +65,29 @@ export function purgeServerData(d) {
 
 /** 현재 로그인한 계정에 보여줘도 되는 문서인지. 서버 문서는 올린 계정에만 보인다. */
 export function isVisibleDoc(doc, user) {
-  return doc.source !== 'api' || (user?.id != null && doc.ownerId === user.id)
+  if (doc.source !== 'api') return true
+  // 다른 탭에서 계정이 바뀐 직후에는 저장된 사용자 정보가 아직 이전 계정일 수 있으므로,
+  // 사용자 정보를 저장할 때의 세션 표식이 지금 세션과 같을 때만 서버 문서를 보여준다
+  return user?.id != null && doc.ownerId === user.id && user.session === tokenStore.marker()
+}
+
+/** 서버 문서를 최신순으로, 그 뒤에 시연용 목업 문서를 붙여 정렬한다. */
+export function sortDocs(docs) {
+  const api = docs.filter((d) => d.source === 'api')
+  const mock = docs.filter((d) => d.source !== 'api')
+  const key = (d) => d.createdAt || d.uploadedAt || ''
+  return [...api.sort((a, b) => key(b).localeCompare(key(a))), ...mock]
+}
+
+/** 문서 하나와 그 문서에 딸린 일정·대화를 로컬에서 지운다. */
+export function removeDocLocally(d, docId) {
+  const chats = { ...(d.chats ?? {}) }
+  delete chats[docId]
+  return {
+    docs: d.docs.filter((doc) => doc.id !== docId),
+    schedules: d.schedules.filter((s) => s.docId !== docId),
+    chats,
+  }
 }
 
 /** 근거 자료를 찾는다. 서버 문서는 문서마다 받은 출처(sourceMap), 목업 문서는 공통 목업 출처를 쓴다. */

@@ -61,3 +61,46 @@ export async function fetchResult(documentId: number): Promise<ResultResponse> {
   const { data } = await api.get<ResultResponse>(`/api/documents/${documentId}/result/`)
   return data
 }
+
+/** GET /api/documents/ 목록 항목 */
+export type DocumentListItem = {
+  documentId: number
+  title: string
+  docType: string
+  fileName: string
+  fileType: string
+  status: DocumentStatus
+  step: DocumentStep
+  lowConfidence: boolean
+  createdAt: string
+  expiresAt: string
+}
+
+/** GET /api/documents/<id>/ 상세 */
+export type DocumentDetail = DocumentListItem & {
+  failReason: string
+  maskedCount: number
+  hasResult: boolean
+}
+
+/** 페이지 단위 목록 응답 (최신순, 20개씩) */
+export type Page<T> = { count: number; next: string | null; previous: string | null; results: T[] }
+
+/** 내 문서 목록을 한 페이지 불러온다. status를 주면 그 상태만 걸러 받는다. */
+export async function listDocuments(page = 1, status?: DocumentStatus): Promise<Page<DocumentListItem>> {
+  const params: Record<string, string | number> = { page }
+  if (status) params.status = status
+  const { data } = await api.get<Page<DocumentListItem>>('/api/documents/', { params })
+  return data
+}
+
+/** 내 문서 하나의 상세(실패 사유, 결과 유무 등)를 불러온다. */
+export async function getDocument(documentId: number): Promise<DocumentDetail> {
+  const { data } = await api.get<DocumentDetail>(`/api/documents/${documentId}/`)
+  return data
+}
+
+/** 문서를 삭제한다. 해석 결과·챗봇 대화·원본 파일·일정이 함께 지워진다. 처리 중이면 409. */
+export async function deleteDocument(documentId: number): Promise<void> {
+  await api.delete(`/api/documents/${documentId}/`)
+}

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2 } from 'lucide-react'
+import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2 } from 'lucide-react'
 import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
@@ -63,7 +63,17 @@ export default function Result({ docId }) {
 
   return (
     <>
-      <TopBar title="해석 결과" onBack={back} />
+      <TopBar
+        title="해석 결과"
+        onBack={back}
+        right={
+          doc.source === 'api' && (
+            <button className="icon-btn danger" onClick={() => setSheet({ type: 'deleteDoc', payload: { docId } })} aria-label="문서 삭제">
+              <Trash2 size={20} />
+            </button>
+          )
+        }
+      />
       <main className="screen has-actions">
         <header className="result-head">
           <div>

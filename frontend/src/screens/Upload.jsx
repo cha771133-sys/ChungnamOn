@@ -3,7 +3,7 @@ import { Camera, Image as ImageIcon, FileUp, ShieldCheck, Check, Loader2, Refres
 import { useApp } from '../store.js'
 import { makeDocFromTemplate } from '../data/mock.js'
 import { TopBar } from '../components/ui.jsx'
-import { fetchResult, fetchStatus, uploadDocument } from '../lib/documents'
+import { fetchResult, fetchStatus, getDocument, uploadDocument } from '../lib/documents'
 import { fetchMe } from '../lib/auth'
 import { adaptResult, localDocId, localToday, serverDocId } from '../lib/documentAdapter.js'
 import { parseApiError, tokenStore } from '../lib/api'
@@ -105,10 +105,10 @@ const GIVE_UP_AFTER = 5 * 60 * 1000
 const MAX_TRANSIENT_FAILURES = 5
 
 /** 진행 단계 표시 (목업·실제 분석 화면 공통) */
-function AnalyzingView({ fileName, step, children }) {
+function AnalyzingView({ fileName, step, children, title = '분석 중' }) {
   return (
     <>
-      <TopBar title="분석 중" />
+      <TopBar title={title} />
       <main className="screen center-screen">
         <div className="scan" aria-hidden="true">
           <div className="paper small">
@@ -171,7 +171,7 @@ function DemoAnalyzing({ fileName, blur }) {
  * 끝나면 결과를 받아 화면용으로 바꾸고, 글자 인식이 낮으면 재촬영 안내, 실패하면 실패 화면으로 보낸다.
  * 화면을 벗어나도 문서는 문서함에 '분석 중'으로 남고, 다시 열면 이어서 확인한다.
  */
-function LiveAnalyzing({ file, fileName, docId }) {
+function LiveAnalyzing({ file, fileName, docId, reopen }) {
   const { data, update, updateDoc, replace, tab } = useApp()
   const [step, setStep] = useState(0)
   const [error, setError] = useState('')
@@ -181,7 +181,7 @@ function LiveAnalyzing({ file, fileName, docId }) {
   // 개발 모드(StrictMode)에서 effect가 두 번 실행돼도 업로드는 한 번만 하도록 진행 중인 작업을 기억한다
   const uploadRef = useRef(null)
   // 문서를 올린 계정 ID. StrictMode에서 effect가 다시 실행돼도 같은 값을 쓰도록 ref로 둔다
-  const ownerRef = useRef(data.user?.id ?? null)
+  const ownerRef = useRef(data.user?.session === tokenStore.marker() ? (data.user?.id ?? null) : null)
 
   useEffect(() => {
     let alive = true
@@ -203,7 +203,7 @@ function LiveAnalyzing({ file, fileName, docId }) {
                 // 조회하는 사이 로그아웃·계정 전환이 있었으면 이전 계정 정보를 저장하지 않는다
                 if (tokenStore.session() !== session) throw new Error('세션이 바뀌어 업로드를 중단했습니다.')
                 ownerRef.current = me.id
-                update(() => ({ user: { id: me.id, email: me.email } }))
+                update(() => ({ user: { id: me.id, email: me.email, session: tokenStore.marker() } }))
                 return me.id
               })
         // 시작한 세션을 함께 넘겨, 그사이 계정이 바뀌었으면 새 계정 토큰으로 업로드되지 않게 한다
@@ -220,6 +220,7 @@ function LiveAnalyzing({ file, fileName, docId }) {
             fileName: name,
             status: 'processing',
             uploadedAt: localToday(),
+            createdAt: new Date().toISOString(),
           }
           update((d) => ({ docs: [placeholder, ...d.docs.filter((x) => x.id !== id)] }))
           return id
@@ -243,7 +244,8 @@ function LiveAnalyzing({ file, fileName, docId }) {
             language,
             uploadedAt: data.docs.find((d) => d.id === id)?.uploadedAt ?? localToday(),
             fileName: name,
-            ownerId: ownerRef.current,
+            // 이어보기는 문서에 이미 기록된 소유 계정을 쓴다
+            ownerId: ownerRef.current ?? data.docs.find((d) => d.id === id)?.ownerId,
           })
           updateDoc(id, () => doc)
           replace(doc.lowConfidence ? 'ocrLow' : 'result', { docId: id })
@@ -319,8 +321,8 @@ function LiveAnalyzing({ file, fileName, docId }) {
   }
 
   return (
-    <AnalyzingView fileName={name} step={step}>
-      <p className="hint">{slow ? '평소보다 오래 걸리고 있어요. 조금만 더 기다려 주세요.' : '보통 20~40초 걸려요. 화면을 닫아도 문서함에서 이어서 볼 수 있어요.'}</p>
+    <AnalyzingView fileName={name} step={step} title={reopen ? '불러오는 중' : '분석 중'}>
+      <p className="hint">{reopen ? '해석 결과를 불러오고 있어요.' : slow ? '평소보다 오래 걸리고 있어요. 조금만 더 기다려 주세요.' : '보통 20~40초 걸려요. 화면을 닫아도 문서함에서 이어서 볼 수 있어요.'}</p>
       <button className="btn btn-ghost" onClick={() => tab('docs')}>
         <FileText size={18} /> 기다리는 동안 문서함 보기
       </button>
@@ -382,8 +384,20 @@ export function OcrLow({ docId }) {
 
 /** 처리 실패 화면: 서버가 알려준 실패 사유를 보여주고 다시 올리게 한다. */
 export function Failed({ docId }) {
-  const { data, back, replace } = useApp()
+  const { data, back, replace, updateDoc, setSheet } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
+
+  // 목록으로만 받은 실패 문서는 상세 API로 실패 사유를 받아 온다
+  useEffect(() => {
+    if (!doc?.serverId || doc.failReason) return
+    getDocument(doc.serverId)
+      .then((detail) => updateDoc(docId, () => ({ failReason: detail.failReason || '' })))
+      .catch(() => {
+        /* 사유를 못 받아도 기본 안내 문구를 보여준다 */
+      })
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId])
+
   return (
     <>
       <TopBar title="해석하지 못했어요" onBack={back} />
@@ -397,6 +411,11 @@ export function Failed({ docId }) {
           <button className="btn btn-primary btn-block btn-lg" onClick={() => replace('upload')}>
             <RefreshCw size={18} /> 다시 올리기
           </button>
+          {doc?.source === 'api' && (
+            <button className="btn btn-ghost btn-block" onClick={() => setSheet({ type: 'deleteDoc', payload: { docId } })}>
+              이 문서 삭제
+            </button>
+          )}
         </div>
       </main>
     </>
