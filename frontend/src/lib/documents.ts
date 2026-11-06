@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig } from 'axios'
 import { api } from './api'
 
 export type DocumentStatus = 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED'
@@ -34,11 +35,18 @@ export type ResultResponse = {
 /** 업로드는 큰 파일·느린 모바일 회선을 고려해 일반 요청보다 길게 기다린다. */
 const UPLOAD_TIMEOUT = 120000
 
-/** 문서 파일을 올리고 처리를 시작한다. 결과 대신 문서 ID를 먼저 받는다. */
-export async function uploadDocument(file: File): Promise<{ documentId: number; status: DocumentStatus }> {
+/**
+ * 문서 파일을 올리고 처리를 시작한다. 결과 대신 문서 ID를 먼저 받는다.
+ * session을 넘기면 그 로그인 세션이 아직 유효할 때만 보낸다 (다른 계정 소유로 저장되는 것 방지).
+ */
+export async function uploadDocument(
+  file: File,
+  session?: number,
+): Promise<{ documentId: number; status: DocumentStatus }> {
   const form = new FormData()
   form.append('file', file)
-  const { data } = await api.post('/api/documents/', form, { timeout: UPLOAD_TIMEOUT })
+  const config = { timeout: UPLOAD_TIMEOUT, _session: session } as AxiosRequestConfig
+  const { data } = await api.post('/api/documents/', form, config)
   return data
 }
 

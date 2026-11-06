@@ -200,11 +200,14 @@ function LiveAnalyzing({ file, fileName, docId }) {
           ownerRef.current != null
             ? Promise.resolve(ownerRef.current)
             : fetchMe().then((me) => {
+                // 조회하는 사이 로그아웃·계정 전환이 있었으면 이전 계정 정보를 저장하지 않는다
+                if (tokenStore.session() !== session) throw new Error('세션이 바뀌어 업로드를 중단했습니다.')
                 ownerRef.current = me.id
                 update(() => ({ user: { id: me.id, email: me.email } }))
                 return me.id
               })
-        uploadRef.current = ensureOwner.then(() => uploadDocument(file)).then(({ documentId }) => {
+        // 시작한 세션을 함께 넘겨, 그사이 계정이 바뀌었으면 새 계정 토큰으로 업로드되지 않게 한다
+        uploadRef.current = ensureOwner.then(() => uploadDocument(file, session)).then(({ documentId }) => {
           if (tokenStore.session() !== session) throw new Error('세션이 바뀌어 업로드 결과를 버렸습니다.')
           const id = localDocId(documentId)
           const placeholder = {

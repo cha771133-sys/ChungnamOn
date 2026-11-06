@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AUTH_EXPIRED_EVENT } from './lib/api'
+import { AUTH_EXPIRED_EVENT, tokenStore } from './lib/api'
 import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
 import { t } from './i18n.js'
 import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
@@ -105,8 +105,13 @@ export default function App() {
   // 이전 버전에서 로그인해 계정 ID가 저장되지 않았다면 한 번 불러와 채운다 (문서를 계정별로 구분하는 데 필요)
   useEffect(() => {
     if (!hasSession() || data.user?.id != null) return
+    const session = tokenStore.session()
     fetchMe()
-      .then((me) => setData((d) => ({ ...d, user: { id: me.id, email: me.email } })))
+      .then((me) => {
+        // 조회하는 사이 로그아웃·계정 전환이 있었으면 이전 계정 정보를 저장하지 않는다
+        if (tokenStore.session() !== session) return
+        setData((d) => ({ ...d, user: { id: me.id, email: me.email } }))
+      })
       .catch(() => {
         /* 실패하면 다음 실행 때 다시 시도한다 */
       })

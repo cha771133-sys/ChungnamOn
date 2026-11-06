@@ -71,21 +71,26 @@ export const api = axios.create({ baseURL, timeout: 15000 })
 
 type SessionConfig = InternalAxiosRequestConfig & { _retry?: boolean; _session?: number }
 
-/** 모든 요청에 저장된 Access Token을 Bearer 헤더로 붙이고, 요청을 보낸 세션 번호를 기록한다. */
-api.interceptors.request.use((config: SessionConfig) => {
-  if (config._session === undefined) config._session = tokenStore.session()
-  const token = tokenStore.getAccess()
-  if (token) config.headers.set('Authorization', `Bearer ${token}`)
-  return config
-})
-
 /** 세션이 바뀌어 결과를 버린 경우에 쓰는 오류 */
-class StaleSessionError extends Error {
+export class StaleSessionError extends Error {
   constructor() {
     super('세션이 바뀌어 요청을 중단했습니다.')
     this.name = 'StaleSessionError'
   }
 }
+
+/**
+ * 모든 요청에 저장된 Access Token을 Bearer 헤더로 붙이고, 요청을 보낸 세션 번호를 기록한다.
+ * 호출하는 쪽이 세션 번호(_session)를 정해 보냈는데 그사이 로그아웃·계정 전환이 있었다면,
+ * 새 계정의 토큰으로 요청이 나가지 않도록 보내지 않고 StaleSessionError로 실패시킨다.
+ */
+api.interceptors.request.use((config: SessionConfig) => {
+  if (config._session === undefined) config._session = tokenStore.session()
+  else if (config._session !== tokenStore.session()) throw new StaleSessionError()
+  const token = tokenStore.getAccess()
+  if (token) config.headers.set('Authorization', `Bearer ${token}`)
+  return config
+})
 
 /** 갱신 실패가 "다시 로그인해야 하는" 경우인지 판단한다. 네트워크 오류·서버 오류는 세션을 유지한다. */
 function isRefreshRejected(error: unknown): boolean {
