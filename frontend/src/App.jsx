@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AUTH_EXPIRED_EVENT, tokenStore } from './lib/api'
+import { AUTH_EXPIRED_EVENT, SESSION_CHANGED_EVENT, tokenStore } from './lib/api'
 import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
 import { t } from './i18n.js'
 import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
@@ -145,8 +145,12 @@ export default function App() {
       window.__toastTimer = setTimeout(() => setToast(null), 2400)
     }
     window.addEventListener(AUTH_EXPIRED_EVENT, expired)
+    // 다른 탭에서 계정이 바뀌면, 그 탭이 정리한 저장소 상태를 다시 읽도록 새로고침한다
+    const sessionChanged = () => window.location.reload()
+    window.addEventListener(SESSION_CHANGED_EVENT, sessionChanged)
     return () => {
       window.removeEventListener(AUTH_EXPIRED_EVENT, expired)
+      window.removeEventListener(SESSION_CHANGED_EVENT, sessionChanged)
       window.removeEventListener('online', on)
       window.removeEventListener('offline', off)
       window.removeEventListener('beforeinstallprompt', bip)

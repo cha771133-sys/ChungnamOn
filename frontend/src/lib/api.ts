@@ -3,9 +3,14 @@ import type { InternalAxiosRequestConfig } from 'axios'
 
 const ACCESS_KEY = 'chungnamon-access'
 const REFRESH_KEY = 'chungnamon-refresh'
+// 로그인할 때마다 새로 만드는 세션 표식. 같은 계정의 토큰 갱신으로는 바뀌지 않으므로,
+// 다른 탭에서 로그인·로그아웃·계정 전환이 일어났는지 구분하는 데 쓴다
+const SESSION_KEY = 'chungnamon-session'
 
 /** 토큰이 만료돼 다시 로그인해야 할 때 window에 보내는 이벤트 이름 */
 export const AUTH_EXPIRED_EVENT = 'chungnamon:auth-expired'
+/** 다른 탭에서 로그인·로그아웃·계정 전환이 일어났을 때 window에 보내는 이벤트 이름 */
+export const SESSION_CHANGED_EVENT = 'chungnamon:session-changed'
 
 /** 인증 API 경로. 이 요청들의 401은 토큰 갱신 대상이 아니다. */
 const AUTH_PATHS = ['/api/auth/login/', '/api/auth/register/', '/api/auth/token/refresh/', '/api/auth/logout/']
@@ -38,6 +43,11 @@ export const tokenStore = {
   start(access: string, refresh: string): void {
     sessionId += 1
     writeTokens(access, refresh)
+    try {
+      localStorage.setItem(SESSION_KEY, `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    } catch {
+      /* 무시 */
+    }
   },
   /** 갱신 시 Refresh Token도 바뀌므로 두 토큰을 항상 함께 교체한다. 세션은 그대로 유지한다. */
   set(access: string, refresh: string): void {
@@ -49,11 +59,23 @@ export const tokenStore = {
     try {
       localStorage.removeItem(ACCESS_KEY)
       localStorage.removeItem(REFRESH_KEY)
+      localStorage.removeItem(SESSION_KEY)
     } catch {
       /* 무시 */
     }
   },
 }
+
+/**
+ * 다른 탭에서 세션 표식이 바뀌면(로그인·로그아웃·계정 전환) 이 탭의 세션도 끝낸다.
+ * 진행 중이던 요청·업로드 결과는 세션 번호가 달라져 버려지고, 앱은 이벤트를 받아 화면을 새로 읽는다.
+ * 같은 계정의 토큰 갱신은 표식을 바꾸지 않으므로 영향이 없다.
+ */
+window.addEventListener('storage', (event) => {
+  if (event.key !== SESSION_KEY && event.key !== null) return
+  sessionId += 1
+  window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+})
 
 /** 두 토큰을 저장소에 쓴다. 저장소를 쓸 수 없으면 무시한다. */
 function writeTokens(access: string, refresh: string): void {
