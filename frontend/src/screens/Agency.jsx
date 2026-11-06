@@ -1,6 +1,5 @@
 import { Phone, AlertTriangle, Copy } from 'lucide-react'
-import { useApp, fmtDate } from '../store.js'
-import { SOURCES } from '../data/mock.js'
+import { useApp, fmtDate, getSource } from '../store.js'
 import { TopBar, Badge, Disclaimer } from '../components/ui.jsx'
 
 export default function Agency({ docId }) {
@@ -8,8 +7,8 @@ export default function Agency({ docId }) {
   const doc = data.docs.find((d) => d.id === docId)
   if (!doc) return null
   const a = doc.agency
-  const src = SOURCES[a.sourceId]
-  const conflictSrc = a.conflict ? SOURCES[a.conflict.sourceId] : null
+  const src = getSource(doc, a.sourceId)
+  const conflictSrc = a.conflict ? getSource(doc, a.conflict.sourceId) : null
 
   // 체크리스트의 조건부·확인 필요 항목을 우선 모으고, 없으면 미확인 검증 항목을 보여줌
   const fromChecklist = doc.checklist
@@ -37,11 +36,15 @@ export default function Agency({ docId }) {
         <section className="agency-card">
           <span className="agency-basis">문서를 보낸 기관 기준</span>
           <h1 className="h2">{a.name}</h1>
-          <a className="btn btn-primary btn-block btn-lg" href={`tel:${a.phone}`}>
-            <Phone size={18} /> {a.phone} 전화 걸기
-          </a>
+          {a.phone ? (
+            <a className="btn btn-primary btn-block btn-lg" href={`tel:${a.phone}`}>
+              <Phone size={18} /> {a.phone} 전화 걸기
+            </a>
+          ) : (
+            <p className="hint">문서에서 연락처를 찾지 못했어요. 문서를 보낸 기관에 직접 문의하세요.</p>
+          )}
           {src && (
-            <button className="agency-src" onClick={() => setSheet({ type: 'source', payload: { ids: [a.sourceId] } })}>
+            <button className="agency-src" onClick={() => setSheet({ type: 'source', payload: { ids: [a.sourceId], docId } })}>
               출처: {src.title}, {fmtDate(src.checkedAt)} 확인
             </button>
           )}

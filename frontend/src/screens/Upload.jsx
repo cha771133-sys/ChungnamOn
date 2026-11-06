@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react'
-import { Camera, Image as ImageIcon, FileUp, ShieldCheck, Check, Loader2, RefreshCw, AlertCircle } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Camera, Image as ImageIcon, FileUp, ShieldCheck, Check, Loader2, RefreshCw, AlertCircle, FileText } from 'lucide-react'
 import { useApp } from '../store.js'
 import { makeDocFromTemplate } from '../data/mock.js'
 import { TopBar } from '../components/ui.jsx'
+import { fetchResult, fetchStatus, uploadDocument } from '../lib/documents'
+import { adaptResult, localDocId, localToday, serverDocId } from '../lib/documentAdapter.js'
+import { parseApiError } from '../lib/api'
 
 const MAX = 20 * 1024 * 1024
+// 서버가 받는 형식과 맞춘다 (jpg, jpeg, png, pdf)
+const ALLOWED = /\.(jpe?g|png|pdf)$/i
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'application/pdf']
 
+/** 업로드 화면: 촬영·사진·PDF 중 하나를 골라 실제 서버로 올린다. */
 export function Upload() {
   const { back, nav } = useApp()
   const [error, setError] = useState('')
@@ -18,8 +25,12 @@ export function Upload() {
       setError('파일이 20MB보다 커요. 더 작은 파일을 선택하세요.')
       return
     }
+    if (!ALLOWED.test(f.name) && !ALLOWED_TYPES.includes(f.type)) {
+      setError('jpg, png, pdf 파일만 올릴 수 있어요.')
+      return
+    }
     setError('')
-    nav('analyzing', { fileName: f.name, blur: false })
+    nav('analyzing', { file: f, fileName: f.name })
   }
 
   return (
@@ -33,13 +44,13 @@ export function Upload() {
 
         <div className="upload-options">
           <label className="upload-option is-primary">
-            <input type="file" accept="image/*" capture="environment" onChange={onFile} hidden />
+            <input type="file" accept="image/jpeg,image/png" capture="environment" onChange={onFile} hidden />
             <Camera size={26} />
             <strong>사진 찍기</strong>
             <small>카메라로 문서를 바로 촬영해요</small>
           </label>
           <label className="upload-option">
-            <input type="file" accept="image/*" onChange={onFile} hidden />
+            <input type="file" accept="image/jpeg,image/png" onChange={onFile} hidden />
             <ImageIcon size={24} />
             <strong>사진 선택</strong>
           </label>
@@ -54,7 +65,7 @@ export function Upload() {
             {error}
           </p>
         )}
-        <p className="hint">이미지 또는 PDF, 최대 20MB. 한 번에 문서 1개씩 올려요.</p>
+        <p className="hint">jpg, png 또는 PDF, 최대 20MB. 한 번에 문서 1개씩 올려요.</p>
 
         <section className="section">
           <h2 className="h3">잘 찍는 방법</h2>
@@ -66,7 +77,7 @@ export function Upload() {
         </section>
 
         <section className="demo-box">
-          <strong>시연용</strong>
+          <strong>시연용 (목업 데이터, 서버에 올리지 않아요)</strong>
           <div className="demo-actions">
             <button className="btn btn-outline" onClick={() => nav('analyzing', { fileName: '주민세_고지서.jpg', blur: false })}>
               예시 고지서로 체험
@@ -83,25 +94,13 @@ export function Upload() {
 
 const STEPS = ['글자 읽기', '개인정보 가리기', '내용 해석하기', '공식 자료와 대조하기']
 
-export function Analyzing({ fileName, blur }) {
-  const { update, replace } = useApp()
-  const [step, setStep] = useState(0)
+// 서버 처리 단계 → 화면 진행 단계
+const STEP_INDEX = { QUEUED: 0, OCR: 0, MASKING: 1, INTERPRETING: 2, VERIFYING: 3, DONE: 4 }
+const POLL_INTERVAL = 2500
+const SLOW_AFTER = 90000
 
-  useEffect(() => {
-    if (blur && step === 1) {
-      const t = setTimeout(() => replace('ocrLow'), 500)
-      return () => clearTimeout(t)
-    }
-    if (step >= STEPS.length) {
-      const doc = makeDocFromTemplate(fileName)
-      update((d) => ({ docs: [doc, ...d.docs] }))
-      replace('result', { docId: doc.id })
-      return
-    }
-    const t = setTimeout(() => setStep((s) => s + 1), 1000)
-    return () => clearTimeout(t)
-  }, [step])
-
+/** 진행 단계 표시 (목업·실제 분석 화면 공통) */
+function AnalyzingView({ fileName, step, children }) {
   return (
     <>
       <TopBar title="분석 중" />
@@ -124,13 +123,176 @@ export function Analyzing({ fileName, blur }) {
             </li>
           ))}
         </ol>
-        <p className="hint">보통 20~40초 걸려요. 화면을 닫아도 문서함에서 이어서 볼 수 있어요.</p>
+        {children}
       </main>
     </>
   )
 }
 
-export function OcrLow() {
+/** 분석 화면: 파일(file)이나 이어서 볼 문서(docId)가 있으면 실제 서버, 없으면 시연용 목업으로 동작한다. */
+export function Analyzing(props) {
+  return props.file || props.docId ? <LiveAnalyzing {...props} /> : <DemoAnalyzing {...props} />
+}
+
+/** 시연용 목업 분석: 타이머로 단계를 넘기고 예시 문서를 만든다. */
+function DemoAnalyzing({ fileName, blur }) {
+  const { update, replace } = useApp()
+  const [step, setStep] = useState(0)
+
+  useEffect(() => {
+    if (blur && step === 1) {
+      const t = setTimeout(() => replace('ocrLow'), 500)
+      return () => clearTimeout(t)
+    }
+    if (step >= STEPS.length) {
+      const doc = makeDocFromTemplate(fileName)
+      update((d) => ({ docs: [doc, ...d.docs] }))
+      replace('result', { docId: doc.id })
+      return
+    }
+    const t = setTimeout(() => setStep((s) => s + 1), 1000)
+    return () => clearTimeout(t)
+  }, [step])
+
+  return (
+    <AnalyzingView fileName={fileName} step={step}>
+      <p className="hint">시연용 예시 문서로 분석 과정을 보여드려요.</p>
+    </AnalyzingView>
+  )
+}
+
+/**
+ * 실제 분석: 파일을 올려 문서 ID를 받고, 2.5초마다 상태를 확인한다.
+ * 끝나면 결과를 받아 화면용으로 바꾸고, 글자 인식이 낮으면 재촬영 안내, 실패하면 실패 화면으로 보낸다.
+ * 화면을 벗어나도 문서는 문서함에 '분석 중'으로 남고, 다시 열면 이어서 확인한다.
+ */
+function LiveAnalyzing({ file, fileName, docId }) {
+  const { data, update, updateDoc, replace, tab } = useApp()
+  const [step, setStep] = useState(0)
+  const [error, setError] = useState('')
+  const [slow, setSlow] = useState(false)
+  const name = fileName ?? data.docs.find((d) => d.id === docId)?.fileName ?? ''
+  const language = data.profile.language
+  // 개발 모드(StrictMode)에서 effect가 두 번 실행돼도 업로드는 한 번만 하도록 진행 중인 작업을 기억한다
+  const uploadRef = useRef(null)
+
+  useEffect(() => {
+    let alive = true
+    let timer = null
+    const started = Date.now()
+
+    /** 업로드하고 문서함에 '분석 중' 문서를 추가한다. 이어보기면 기존 문서 ID를 쓴다. */
+    const ensureUploaded = () => {
+      if (docId) return Promise.resolve(docId)
+      if (!uploadRef.current) {
+        uploadRef.current = uploadDocument(file).then(({ documentId }) => {
+          const id = localDocId(documentId)
+          const placeholder = {
+            id,
+            serverId: documentId,
+            source: 'api',
+            docType: '문서',
+            title: name,
+            fileName: name,
+            status: 'processing',
+            uploadedAt: localToday(),
+          }
+          update((d) => ({ docs: [placeholder, ...d.docs.filter((x) => x.id !== id)] }))
+          return id
+        })
+      }
+      return uploadRef.current
+    }
+
+    /** 상태를 한 번 확인하고, 끝나지 않았으면 다음 확인을 예약한다. */
+    const poll = async (id) => {
+      const serverId = serverDocId(id)
+      try {
+        const res = await fetchStatus(serverId)
+        if (!alive) return
+        setStep(STEP_INDEX[res.step] ?? 0)
+        if (res.status === 'DONE') {
+          const raw = await fetchResult(serverId)
+          if (!alive) return
+          const doc = adaptResult(raw, { language, uploadedAt: data.docs.find((d) => d.id === id)?.uploadedAt ?? localToday(), fileName: name })
+          updateDoc(id, () => doc)
+          replace(doc.lowConfidence ? 'ocrLow' : 'result', { docId: id })
+          return
+        }
+        if (res.status === 'FAILED') {
+          updateDoc(id, () => ({ status: 'failed', failReason: res.failReason || '' }))
+          replace('failed', { docId: id })
+          return
+        }
+        if (Date.now() - started > SLOW_AFTER) setSlow(true)
+      } catch (err) {
+        if (!alive) return
+        const info = parseApiError(err)
+        // 네트워크가 잠깐 끊긴 경우는 계속 확인하고, 그 밖의 오류는 멈추고 알린다
+        if (info.code !== 'NETWORK_ERROR') {
+          setError(info.message || '분석 상태를 확인하지 못했어요.')
+          return
+        }
+      }
+      timer = setTimeout(() => poll(id), POLL_INTERVAL)
+    }
+
+    ensureUploaded()
+      .then((id) => alive && poll(id))
+      .catch((err) => {
+        if (!alive) return
+        const info = parseApiError(err)
+        if (info.code === 'NETWORK_ERROR') setError('서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 올려 주세요.')
+        else setError(info.fields.file || info.message || '문서를 올리지 못했어요.')
+      })
+
+    return () => {
+      alive = false
+      clearTimeout(timer)
+    }
+    // 업로드·폴링은 화면에 들어올 때 한 번만 시작한다 (의존값이 바뀌어도 다시 올리지 않음)
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (error) {
+    return (
+      <>
+        <TopBar title="올리지 못했어요" onBack={() => replace('upload')} />
+        <main className="screen center-screen">
+          <div className="fail-icon">
+            <AlertCircle size={36} />
+          </div>
+          <p className="lead" role="alert">
+            {error}
+          </p>
+          <div className="sticky-actions stack">
+            <button className="btn btn-primary btn-block btn-lg" onClick={() => replace('upload')}>
+              <RefreshCw size={18} /> 다시 올리기
+            </button>
+            <button className="btn btn-ghost btn-block" onClick={() => tab('docs')}>
+              내 문서로 가기
+            </button>
+          </div>
+        </main>
+      </>
+    )
+  }
+
+  return (
+    <AnalyzingView fileName={name} step={step}>
+      <p className="hint">{slow ? '평소보다 오래 걸리고 있어요. 조금만 더 기다려 주세요.' : '보통 20~40초 걸려요. 화면을 닫아도 문서함에서 이어서 볼 수 있어요.'}</p>
+      <button className="btn btn-ghost" onClick={() => tab('docs')}>
+        <FileText size={18} /> 기다리는 동안 문서함 보기
+      </button>
+    </AnalyzingView>
+  )
+}
+
+/**
+ * 글자 인식 신뢰도가 낮을 때의 재촬영 안내.
+ * 서버 문서(docId)는 결과를 확정 정보처럼 보여주지 않되, 원하면 주의 문구와 함께 볼 수 있게 한다.
+ */
+export function OcrLow({ docId }) {
   const { replace, tab } = useApp()
   return (
     <>
@@ -167,12 +329,18 @@ export function OcrLow() {
           <button className="btn btn-ghost btn-block" onClick={() => replace('upload')}>
             다른 파일 선택
           </button>
+          {docId && (
+            <button className="btn btn-ghost btn-block" onClick={() => replace('result', { docId })}>
+              그래도 결과 보기 (정확하지 않을 수 있어요)
+            </button>
+          )}
         </div>
       </main>
     </>
   )
 }
 
+/** 처리 실패 화면: 서버가 알려준 실패 사유를 보여주고 다시 올리게 한다. */
 export function Failed({ docId }) {
   const { data, back, replace } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
