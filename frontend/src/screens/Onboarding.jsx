@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Check, Bell, Camera, Languages, Globe } from 'lucide-react'
-import { useApp } from '../store.js'
+import { useApp, purgeServerData } from '../store.js'
 import { LANGS, NATIONALITIES, VISAS } from '../data/mock.js'
 import { t, uiLang, NATION_NAMES, VISA_NAMES } from '../i18n.js'
 import { TopBar, Stamp } from '../components/ui.jsx'
@@ -23,7 +23,9 @@ function useAfterLogin() {
   return async () => {
     const me = await fetchMe()
     update((d) => ({
-      user: { email: me.email },
+      // 다른 계정으로 로그인하면 이전 계정의 서버 문서를 이 브라우저에서 지운다
+      ...(d.user?.id !== me.id ? purgeServerData(d) : {}),
+      user: { id: me.id, email: me.email },
       profile: {
         language: me.language ?? d.profile.language,
         nationality: me.nationality ?? '',

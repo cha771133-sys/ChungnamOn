@@ -3,9 +3,14 @@ import type { InternalAxiosRequestConfig } from 'axios'
 
 const ACCESS_KEY = 'chungnamon-access'
 const REFRESH_KEY = 'chungnamon-refresh'
+// 로그인할 때마다 새로 만드는 세션 표식. 같은 계정의 토큰 갱신으로는 바뀌지 않으므로,
+// 다른 탭에서 로그인·로그아웃·계정 전환이 일어났는지 구분하는 데 쓴다
+const SESSION_KEY = 'chungnamon-session'
 
 /** 토큰이 만료돼 다시 로그인해야 할 때 window에 보내는 이벤트 이름 */
 export const AUTH_EXPIRED_EVENT = 'chungnamon:auth-expired'
+/** 다른 탭에서 로그인·로그아웃·계정 전환이 일어났을 때 window에 보내는 이벤트 이름 */
+export const SESSION_CHANGED_EVENT = 'chungnamon:session-changed'
 
 /** 인증 API 경로. 이 요청들의 401은 토큰 갱신 대상이 아니다. */
 const AUTH_PATHS = ['/api/auth/login/', '/api/auth/register/', '/api/auth/token/refresh/', '/api/auth/logout/']
@@ -38,6 +43,11 @@ export const tokenStore = {
   start(access: string, refresh: string): void {
     sessionId += 1
     writeTokens(access, refresh)
+    try {
+      localStorage.setItem(SESSION_KEY, `${Date.now()}-${Math.random().toString(36).slice(2)}`)
+    } catch {
+      /* 무시 */
+    }
   },
   /** 갱신 시 Refresh Token도 바뀌므로 두 토큰을 항상 함께 교체한다. 세션은 그대로 유지한다. */
   set(access: string, refresh: string): void {
@@ -49,11 +59,23 @@ export const tokenStore = {
     try {
       localStorage.removeItem(ACCESS_KEY)
       localStorage.removeItem(REFRESH_KEY)
+      localStorage.removeItem(SESSION_KEY)
     } catch {
       /* 무시 */
     }
   },
 }
+
+/**
+ * 다른 탭에서 세션 표식이 바뀌면(로그인·로그아웃·계정 전환) 이 탭의 세션도 끝낸다.
+ * 진행 중이던 요청·업로드 결과는 세션 번호가 달라져 버려지고, 앱은 이벤트를 받아 화면을 새로 읽는다.
+ * 같은 계정의 토큰 갱신은 표식을 바꾸지 않으므로 영향이 없다.
+ */
+window.addEventListener('storage', (event) => {
+  if (event.key !== SESSION_KEY && event.key !== null) return
+  sessionId += 1
+  window.dispatchEvent(new Event(SESSION_CHANGED_EVENT))
+})
 
 /** 두 토큰을 저장소에 쓴다. 저장소를 쓸 수 없으면 무시한다. */
 function writeTokens(access: string, refresh: string): void {
@@ -71,21 +93,26 @@ export const api = axios.create({ baseURL, timeout: 15000 })
 
 type SessionConfig = InternalAxiosRequestConfig & { _retry?: boolean; _session?: number }
 
-/** 모든 요청에 저장된 Access Token을 Bearer 헤더로 붙이고, 요청을 보낸 세션 번호를 기록한다. */
-api.interceptors.request.use((config: SessionConfig) => {
-  if (config._session === undefined) config._session = tokenStore.session()
-  const token = tokenStore.getAccess()
-  if (token) config.headers.set('Authorization', `Bearer ${token}`)
-  return config
-})
-
 /** 세션이 바뀌어 결과를 버린 경우에 쓰는 오류 */
-class StaleSessionError extends Error {
+export class StaleSessionError extends Error {
   constructor() {
     super('세션이 바뀌어 요청을 중단했습니다.')
     this.name = 'StaleSessionError'
   }
 }
+
+/**
+ * 모든 요청에 저장된 Access Token을 Bearer 헤더로 붙이고, 요청을 보낸 세션 번호를 기록한다.
+ * 호출하는 쪽이 세션 번호(_session)를 정해 보냈는데 그사이 로그아웃·계정 전환이 있었다면,
+ * 새 계정의 토큰으로 요청이 나가지 않도록 보내지 않고 StaleSessionError로 실패시킨다.
+ */
+api.interceptors.request.use((config: SessionConfig) => {
+  if (config._session === undefined) config._session = tokenStore.session()
+  else if (config._session !== tokenStore.session()) throw new StaleSessionError()
+  const token = tokenStore.getAccess()
+  if (token) config.headers.set('Authorization', `Bearer ${token}`)
+  return config
+})
 
 /** 갱신 실패가 "다시 로그인해야 하는" 경우인지 판단한다. 네트워크 오류·서버 오류는 세션을 유지한다. */
 function isRefreshRejected(error: unknown): boolean {
@@ -161,6 +188,8 @@ api.interceptors.response.use(
 export type ApiErrorInfo = {
   /** 백엔드 오류 코드 (예: VALIDATION_ERROR, AUTHENTICATION_FAILED) 또는 NETWORK_ERROR */
   code: string
+  /** HTTP 상태 코드. 응답이 없으면(네트워크 오류) 0 */
+  status: number
   /** 백엔드가 보낸 전체 오류 메시지 */
   message: string
   /** 입력칸별 첫 번째 오류 메시지 */
@@ -169,13 +198,13 @@ export type ApiErrorInfo = {
 
 /** 백엔드 공통 오류 형식 {code, message, details}를 화면에 쓰기 쉬운 모양으로 바꾼다. */
 export function parseApiError(error: unknown): ApiErrorInfo {
-  if (!axios.isAxiosError(error)) return { code: 'UNKNOWN', message: '', fields: {} }
-  if (!error.response) return { code: 'NETWORK_ERROR', message: '', fields: {} }
+  if (!axios.isAxiosError(error)) return { code: 'UNKNOWN', status: 0, message: '', fields: {} }
+  if (!error.response) return { code: 'NETWORK_ERROR', status: 0, message: '', fields: {} }
   const body = (error.response.data ?? {}) as { code?: string; message?: string; details?: Record<string, unknown> }
   const fields: Record<string, string> = {}
   for (const [key, value] of Object.entries(body.details ?? {})) {
     const first = Array.isArray(value) ? value[0] : value
     if (typeof first === 'string') fields[key] = first
   }
-  return { code: body.code ?? 'API_ERROR', message: body.message ?? '', fields }
+  return { code: body.code ?? 'API_ERROR', status: error.response.status, message: body.message ?? '', fields }
 }

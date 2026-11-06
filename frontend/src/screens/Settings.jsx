@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
 import { api, parseApiError } from '../lib/api'
 import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
-import { useApp } from '../store.js'
+import { useApp, purgeServerData } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, TabBar, Toggle } from '../components/ui.jsx'
 import { ProfileForm } from './Onboarding.jsx'
@@ -69,7 +69,7 @@ export default function Settings() {
     } catch {
       /* 서버 요청이 실패해도 저장된 토큰은 이미 지웠다 */
     }
-    update(() => ({ user: null }))
+    update((d) => ({ ...purgeServerData(d), user: null }))
     tab('login')
   }
 

@@ -1,13 +1,13 @@
 import { Check, ExternalLink, Share, PlusSquare, Download, Building2 } from 'lucide-react'
-import { useApp, fmtDate, pick } from '../store.js'
-import { LANGS, SOURCES } from '../data/mock.js'
+import { useApp, fmtDate, pick, getSource } from '../store.js'
+import { LANGS } from '../data/mock.js'
 import { t, uiLang } from '../i18n.js'
 import { updateMe, hasSession } from '../lib/auth'
 import { Sheet, Badge } from './ui.jsx'
 
 /** 공식 근거 자료 카드: 기관, 제목, 확인일, 기준일, 원문 링크 */
-export function SourceCard({ id }) {
-  const s = SOURCES[id]
+export function SourceCard({ id, doc }) {
+  const s = getSource(doc, id)
   if (!s) return null
   return (
     <div className="source-card">
@@ -65,11 +65,13 @@ function LangSheet() {
 /** 행정용어 풀이 시트 */
 function TermSheet({ term }) {
   const { setSheet, contentLang } = useApp()
+  // 서버 문서는 해석한 언어 하나로만 풀이가 오므로, 선택 언어가 없으면 있는 풀이를 보여준다
+  const local = pick(term.explain, contentLang) ?? Object.values(term.explain).find(Boolean)
   return (
     <Sheet title="행정용어 풀이" onClose={() => setSheet(null)}>
       <p className="term-word">{term.word}</p>
-      {contentLang !== 'ko' && <p className="term-explain">{pick(term.explain, contentLang)}</p>}
-      <p className="term-explain-ko">{term.explain.ko}</p>
+      {local && local !== term.explain.ko && <p className="term-explain">{local}</p>}
+      {term.explain.ko && <p className="term-explain-ko">{term.explain.ko}</p>}
     </Sheet>
   )
 }
@@ -106,7 +108,7 @@ function EvidenceSheet({ docId, itemId }) {
         <>
           <h3 className="sheet-sub">근거 자료</h3>
           {item.sources.map((s) => (
-            <SourceCard key={s} id={s} />
+            <SourceCard key={s} id={s} doc={doc} />
           ))}
         </>
       ) : (
@@ -122,12 +124,13 @@ function EvidenceSheet({ docId, itemId }) {
 }
 
 /** 챗봇 답변 근거 자료 목록 시트 */
-function SourceSheet({ ids }) {
-  const { setSheet } = useApp()
+function SourceSheet({ ids, docId }) {
+  const { setSheet, data } = useApp()
+  const doc = data.docs.find((d) => d.id === docId)
   return (
     <Sheet title="답변 근거" onClose={() => setSheet(null)}>
       {ids.map((id) => (
-        <SourceCard key={id} id={id} />
+        <SourceCard key={id} id={id} doc={doc} />
       ))}
     </Sheet>
   )

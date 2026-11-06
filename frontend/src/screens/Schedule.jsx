@@ -185,7 +185,7 @@ export function Schedule() {
 export function ScheduleNew({ docId }) {
   const { data, update, back, replace, tab, nav, showToast } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
-  const [title, setTitle] = useState(doc ? pick(doc.task, 'ko') : '')
+  const [title, setTitle] = useState(doc ? pick(doc.task, 'ko') || doc.title : '')
   const [remind, setRemind] = useState({ d7: true, d1: true })
   if (!doc) return null
   const n = doc.deadline ? dday(doc.deadline) : null
