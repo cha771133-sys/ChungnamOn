@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2 } from 'lucide-react'
-import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays } from '../store.js'
+import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
 
@@ -9,7 +9,9 @@ function RichText({ text, terms = [], onTerm }) {
   const words = terms.map((t) => t.word).sort((a, b) => b.length - a.length)
   // 서버 용어에는 괄호 등 정규식 특수문자가 들어 있을 수 있어 그대로 찾도록 이스케이프한다
   const escape = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = words.length ? new RegExp(`(${words.map(escape).join('|')})`, 'g') : null
+  // 빈 문자열이 섞이면 모든 위치에 일치해 원문이 글자 단위로 쪼개지므로 제외한다
+  const valid = words.filter((w) => typeof w === 'string' && w.length > 0)
+  const re = valid.length ? new RegExp(`(${valid.map(escape).join('|')})`, 'g') : null
   // 목업은 ●, 서버는 *로 개인정보를 가린다
   const renderMask = (part, key) =>
     part.split(/(●+|\*{3,})/).map((p, i) =>
@@ -40,7 +42,9 @@ function RichText({ text, terms = [], onTerm }) {
 /** 문서 해석 결과 화면: 요약, 핵심 정보, 공식 자료 대조, 번역·원문, 행정용어 */
 export default function Result({ docId }) {
   const { data, back, nav, setSheet, contentLang, lang } = useApp()
-  const doc = data.docs.find((d) => d.id === docId)
+  const found = data.docs.find((d) => d.id === docId)
+  // 다른 계정이 올린 서버 문서는 이 계정에 보여주지 않는다
+  const doc = found && isVisibleDoc(found, data.user) ? found : null
   // 서버 문서는 해석할 때의 프로필 언어 하나로만 번역이 오므로 그 언어로 보여준다
   const [view, setView] = useState(doc?.contentLang ?? contentLang)
   const [showOriginal, setShowOriginal] = useState(false)

@@ -5,7 +5,7 @@ import { makeDocFromTemplate } from '../data/mock.js'
 import { TopBar } from '../components/ui.jsx'
 import { fetchResult, fetchStatus, uploadDocument } from '../lib/documents'
 import { adaptResult, localDocId, localToday, serverDocId } from '../lib/documentAdapter.js'
-import { parseApiError } from '../lib/api'
+import { parseApiError, tokenStore } from '../lib/api'
 
 const MAX = 20 * 1024 * 1024
 // 서버가 받는 형식과 맞춘다 (jpg, jpeg, png, pdf)
@@ -98,6 +98,10 @@ const STEPS = ['글자 읽기', '개인정보 가리기', '내용 해석하기',
 const STEP_INDEX = { QUEUED: 0, OCR: 0, MASKING: 1, INTERPRETING: 2, VERIFYING: 3, DONE: 4 }
 const POLL_INTERVAL = 2500
 const SLOW_AFTER = 90000
+// 이 시간이 지나도 끝나지 않으면 멈추고 안내한다 (서버 재시작 등으로 처리가 멈춘 경우)
+const GIVE_UP_AFTER = 5 * 60 * 1000
+// 네트워크 끊김·배포 중 502/503/504 같은 일시 오류는 연속 이 횟수까지 다시 확인한다
+const MAX_TRANSIENT_FAILURES = 5
 
 /** 진행 단계 표시 (목업·실제 분석 화면 공통) */
 function AnalyzingView({ fileName, step, children }) {
@@ -180,16 +184,22 @@ function LiveAnalyzing({ file, fileName, docId }) {
     let alive = true
     let timer = null
     const started = Date.now()
+    // 업로드를 시작한 로그인 세션과 계정. 업로드가 끝났을 때 로그아웃·계정 전환이 있었으면 결과를 버린다
+    const session = tokenStore.session()
+    const ownerId = data.user?.id
+    let failures = 0
 
     /** 업로드하고 문서함에 '분석 중' 문서를 추가한다. 이어보기면 기존 문서 ID를 쓴다. */
     const ensureUploaded = () => {
       if (docId) return Promise.resolve(docId)
       if (!uploadRef.current) {
         uploadRef.current = uploadDocument(file).then(({ documentId }) => {
+          if (tokenStore.session() !== session) throw new Error('세션이 바뀌어 업로드 결과를 버렸습니다.')
           const id = localDocId(documentId)
           const placeholder = {
             id,
             serverId: documentId,
+            ownerId,
             source: 'api',
             docType: '문서',
             title: name,
@@ -214,7 +224,13 @@ function LiveAnalyzing({ file, fileName, docId }) {
         if (res.status === 'DONE') {
           const raw = await fetchResult(serverId)
           if (!alive) return
-          const doc = adaptResult(raw, { language, uploadedAt: data.docs.find((d) => d.id === id)?.uploadedAt ?? localToday(), fileName: name })
+          if (tokenStore.session() !== session) return
+          const doc = adaptResult(raw, {
+            language,
+            uploadedAt: data.docs.find((d) => d.id === id)?.uploadedAt ?? localToday(),
+            fileName: name,
+            ownerId,
+          })
           updateDoc(id, () => doc)
           replace(doc.lowConfidence ? 'ocrLow' : 'result', { docId: id })
           return
@@ -224,15 +240,25 @@ function LiveAnalyzing({ file, fileName, docId }) {
           replace('failed', { docId: id })
           return
         }
+        failures = 0
         if (Date.now() - started > SLOW_AFTER) setSlow(true)
       } catch (err) {
         if (!alive) return
         const info = parseApiError(err)
-        // 네트워크가 잠깐 끊긴 경우는 계속 확인하고, 그 밖의 오류는 멈추고 알린다
-        if (info.code !== 'NETWORK_ERROR') {
-          setError(info.message || '분석 상태를 확인하지 못했어요.')
+        const transient = info.code === 'NETWORK_ERROR' || info.status >= 500
+        // 일시 오류는 정해진 횟수까지 다시 확인하고, 그 밖의 오류는 바로 멈추고 알린다
+        if (!transient || ++failures > MAX_TRANSIENT_FAILURES) {
+          setError(
+            transient
+              ? '서버와 연결이 불안정해요. 잠시 후 문서함에서 다시 확인하세요.'
+              : info.message || '분석 상태를 확인하지 못했어요.',
+          )
           return
         }
+      }
+      if (Date.now() - started > GIVE_UP_AFTER) {
+        setError('분석이 너무 오래 걸리고 있어요. 잠시 후 문서함에서 다시 확인하거나 다시 올려 주세요.')
+        return
       }
       timer = setTimeout(() => poll(id), POLL_INTERVAL)
     }

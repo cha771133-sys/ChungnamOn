@@ -161,6 +161,8 @@ api.interceptors.response.use(
 export type ApiErrorInfo = {
   /** 백엔드 오류 코드 (예: VALIDATION_ERROR, AUTHENTICATION_FAILED) 또는 NETWORK_ERROR */
   code: string
+  /** HTTP 상태 코드. 응답이 없으면(네트워크 오류) 0 */
+  status: number
   /** 백엔드가 보낸 전체 오류 메시지 */
   message: string
   /** 입력칸별 첫 번째 오류 메시지 */
@@ -169,13 +171,13 @@ export type ApiErrorInfo = {
 
 /** 백엔드 공통 오류 형식 {code, message, details}를 화면에 쓰기 쉬운 모양으로 바꾼다. */
 export function parseApiError(error: unknown): ApiErrorInfo {
-  if (!axios.isAxiosError(error)) return { code: 'UNKNOWN', message: '', fields: {} }
-  if (!error.response) return { code: 'NETWORK_ERROR', message: '', fields: {} }
+  if (!axios.isAxiosError(error)) return { code: 'UNKNOWN', status: 0, message: '', fields: {} }
+  if (!error.response) return { code: 'NETWORK_ERROR', status: 0, message: '', fields: {} }
   const body = (error.response.data ?? {}) as { code?: string; message?: string; details?: Record<string, unknown> }
   const fields: Record<string, string> = {}
   for (const [key, value] of Object.entries(body.details ?? {})) {
     const first = Array.isArray(value) ? value[0] : value
     if (typeof first === 'string') fields[key] = first
   }
-  return { code: body.code ?? 'API_ERROR', message: body.message ?? '', fields }
+  return { code: body.code ?? 'API_ERROR', status: error.response.status, message: body.message ?? '', fields }
 }

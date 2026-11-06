@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { FileText, Plus } from 'lucide-react'
-import { useApp, needsCheck } from '../store.js'
+import { useApp, needsCheck, isVisibleDoc } from '../store.js'
 import { TopBar, TabBar, Empty } from '../components/ui.jsx'
 import DocRow from './DocRow.jsx'
 
@@ -14,7 +14,8 @@ const FILTERS = [
 export default function Docs() {
   const { data, nav } = useApp()
   const [f, setF] = useState('all')
-  const list = data.docs.filter((d) => {
+  const docs = data.docs.filter((d) => isVisibleDoc(d, data.user))
+  const list = docs.filter((d) => {
     if (f === 'all') return true
     if (f === 'processing') return d.status === 'processing'
     if (f === 'done') return d.status === 'done'
@@ -38,7 +39,7 @@ export default function Docs() {
             </button>
           ))}
         </div>
-        {data.docs.length === 0 ? (
+        {docs.length === 0 ? (
           <Empty
             icon={FileText}
             title="아직 올린 문서가 없어요"

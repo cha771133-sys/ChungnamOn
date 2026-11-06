@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { AUTH_EXPIRED_EVENT } from './lib/api'
-import { hasSession, logout as apiLogout } from './lib/auth'
+import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
 import { t } from './i18n.js'
-import { Ctx, CONTENT_LANGS } from './store.js'
+import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
 import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
 import { WifiOff } from 'lucide-react'
 import SheetHost from './components/Sheets.jsx'
@@ -102,6 +102,17 @@ export default function App() {
     langRef.current = data.profile.language
   }, [data.profile.language])
 
+  // 이전 버전에서 로그인해 계정 ID가 저장되지 않았다면 한 번 불러와 채운다 (문서를 계정별로 구분하는 데 필요)
+  useEffect(() => {
+    if (!hasSession() || data.user?.id != null) return
+    fetchMe()
+      .then((me) => setData((d) => ({ ...d, user: { id: me.id, email: me.email } })))
+      .catch(() => {
+        /* 실패하면 다음 실행 때 다시 시도한다 */
+      })
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     try {
       localStorage.setItem(KEY, JSON.stringify(data))
@@ -122,7 +133,7 @@ export default function App() {
     window.addEventListener('beforeinstallprompt', bip)
     // 토큰 갱신까지 실패하면 로그인 화면으로 보낸다
     const expired = () => {
-      setData((d) => ({ ...d, user: null }))
+      setData((d) => ({ ...d, ...purgeServerData(d), user: null }))
       setStack([{ name: 'login', params: {} }])
       setToast(t(langRef.current, 'sessionExpired'))
       clearTimeout(window.__toastTimer)

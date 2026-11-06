@@ -39,8 +39,9 @@ const VERIFY_REASON = {
 /**
  * 서버 결과를 화면용 문서로 바꾼다.
  * @param {object} raw 서버 해석 결과
- * @param {{ language: string, uploadedAt: string, fileName?: string }} meta
+ * @param {{ language: string, uploadedAt: string, fileName?: string, ownerId: number }} meta
  *   language: 해석을 요청한 사용자 프로필 언어 (서버가 이 언어로 번역·요약한다)
+ *   ownerId: 문서를 올린 계정 ID. 같은 브라우저의 다른 계정에 보이지 않게 하는 데 쓴다
  */
 export function adaptResult(raw, meta) {
   const lang = meta.language
@@ -64,6 +65,7 @@ export function adaptResult(raw, meta) {
   return {
     id,
     serverId: raw.documentId,
+    ownerId: meta.ownerId,
     source: 'api',
     contentLang: lang,
     docType: raw.docType || '문서',
@@ -81,7 +83,10 @@ export function adaptResult(raw, meta) {
     summary: { [lang]: summary },
     translated: { [lang]: raw.translatedText ?? '' },
     original: raw.originalText ?? '',
-    terms: (raw.terms ?? []).map((t) => ({ word: t.word, explain: { [lang]: t.explain } })),
+    // 단어가 비어 있는 용어는 화면에서 쓸 수 없으므로 뺀다
+    terms: (raw.terms ?? [])
+      .filter((t) => typeof t?.word === 'string' && t.word.trim())
+      .map((t) => ({ word: t.word.trim(), explain: { [lang]: t.explain ?? '' } })),
     // 서버는 문서 전체에 대한 대조 결과 하나를 준다 (항목별 대조는 백엔드 A5 작업 후 확장)
     verification: [
       {
