@@ -4,6 +4,7 @@ import { useApp } from '../store.js'
 import { makeDocFromTemplate } from '../data/mock.js'
 import { TopBar } from '../components/ui.jsx'
 import { fetchResult, fetchStatus, uploadDocument } from '../lib/documents'
+import { fetchMe } from '../lib/auth'
 import { adaptResult, localDocId, localToday, serverDocId } from '../lib/documentAdapter.js'
 import { parseApiError, tokenStore } from '../lib/api'
 
@@ -179,6 +180,8 @@ function LiveAnalyzing({ file, fileName, docId }) {
   const language = data.profile.language
   // 개발 모드(StrictMode)에서 effect가 두 번 실행돼도 업로드는 한 번만 하도록 진행 중인 작업을 기억한다
   const uploadRef = useRef(null)
+  // 문서를 올린 계정 ID. StrictMode에서 effect가 다시 실행돼도 같은 값을 쓰도록 ref로 둔다
+  const ownerRef = useRef(data.user?.id ?? null)
 
   useEffect(() => {
     let alive = true
@@ -186,20 +189,28 @@ function LiveAnalyzing({ file, fileName, docId }) {
     const started = Date.now()
     // 업로드를 시작한 로그인 세션과 계정. 업로드가 끝났을 때 로그아웃·계정 전환이 있었으면 결과를 버린다
     const session = tokenStore.session()
-    const ownerId = data.user?.id
     let failures = 0
 
     /** 업로드하고 문서함에 '분석 중' 문서를 추가한다. 이어보기면 기존 문서 ID를 쓴다. */
     const ensureUploaded = () => {
       if (docId) return Promise.resolve(docId)
       if (!uploadRef.current) {
-        uploadRef.current = uploadDocument(file).then(({ documentId }) => {
+        // 계정 ID를 모르면 문서를 계정에 묶을 수 없으므로, 먼저 확인한 뒤에만 업로드한다
+        const ensureOwner =
+          ownerRef.current != null
+            ? Promise.resolve(ownerRef.current)
+            : fetchMe().then((me) => {
+                ownerRef.current = me.id
+                update(() => ({ user: { id: me.id, email: me.email } }))
+                return me.id
+              })
+        uploadRef.current = ensureOwner.then(() => uploadDocument(file)).then(({ documentId }) => {
           if (tokenStore.session() !== session) throw new Error('세션이 바뀌어 업로드 결과를 버렸습니다.')
           const id = localDocId(documentId)
           const placeholder = {
             id,
             serverId: documentId,
-            ownerId,
+            ownerId: ownerRef.current,
             source: 'api',
             docType: '문서',
             title: name,
@@ -229,7 +240,7 @@ function LiveAnalyzing({ file, fileName, docId }) {
             language,
             uploadedAt: data.docs.find((d) => d.id === id)?.uploadedAt ?? localToday(),
             fileName: name,
-            ownerId,
+            ownerId: ownerRef.current,
           })
           updateDoc(id, () => doc)
           replace(doc.lowConfidence ? 'ocrLow' : 'result', { docId: id })
