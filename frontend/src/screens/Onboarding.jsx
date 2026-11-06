@@ -317,13 +317,17 @@ export function Login() {
   )
 }
 
-/** 회원가입 화면: 가입 후 바로 로그인해 프로필 설정으로 이동 */
+/**
+ * 회원가입 화면: 가입 후 바로 로그인해 프로필 설정으로 이동.
+ * 가입은 됐는데 로그인 단계가 실패한 경우, 다시 누르면 가입을 건너뛰고 로그인부터 이어서 한다.
+ */
 export function Signup() {
   const { replace, back, lang } = useApp()
   const afterLogin = useAfterLogin()
   const [f, setF] = useState({ email: '', pw: '', pw2: '' })
   const [err, setErr] = useState({})
   const [busy, setBusy] = useState(false)
+  const registeredEmail = useRef(null)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
 
   const submit = async (e) => {
@@ -334,13 +338,23 @@ export function Signup() {
     if (f.pw !== f.pw2) next.pw2 = t(lang, 'errPwMatch')
     setErr(next)
     if (Object.keys(next).length) return
+    const email = f.email.trim()
     setBusy(true)
     try {
-      await register(f.email.trim(), f.pw)
-      await login(f.email.trim(), f.pw)
+      if (registeredEmail.current !== email) {
+        await register(email, f.pw)
+        registeredEmail.current = email
+      }
+      await login(email, f.pw)
       await afterLogin()
     } catch (error) {
-      setErr(toFormErrors(error, lang, { email: 'email', password: 'pw' }))
+      if (registeredEmail.current === email) {
+        // 가입은 끝났으니 같은 이메일로 다시 가입하지 않게 안내한다
+        const info = parseApiError(error)
+        setErr({ form: info.code === 'NETWORK_ERROR' ? t(lang, 'errAfterSignupRetry') : t(lang, 'errAfterSignupLogin') })
+      } else {
+        setErr(toFormErrors(error, lang, { email: 'email', password: 'pw' }))
+      }
     } finally {
       setBusy(false)
     }

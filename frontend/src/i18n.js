@@ -100,6 +100,16 @@ const T = {
     en: 'Your session has expired. Please log in again.',
   },
   loading: { ko: '처리 중...', vi: 'Đang xử lý...', en: 'Working...' },
+  errAfterSignupRetry: {
+    ko: '가입은 완료됐어요. 연결이 불안정해 로그인하지 못했어요. 다시 눌러 주세요.',
+    vi: 'Đăng ký đã hoàn tất nhưng chưa thể đăng nhập do kết nối không ổn định. Vui lòng nhấn lại.',
+    en: 'Your account was created, but we could not log you in due to a connection problem. Please try again.',
+  },
+  errAfterSignupLogin: {
+    ko: '가입은 완료됐어요. 로그인 화면에서 로그인해 주세요.',
+    vi: 'Đăng ký đã hoàn tất. Vui lòng đăng nhập ở màn hình đăng nhập.',
+    en: 'Your account was created. Please log in from the login screen.',
+  },
   pw8: { ko: '비밀번호 (8자 이상)', vi: 'Mật khẩu (từ 8 ký tự)', en: 'Password (8+ characters)' },
   pwConfirm: { ko: '비밀번호 확인', vi: 'Xác nhận mật khẩu', en: 'Confirm password' },
   errPw8: { ko: '비밀번호를 8자 이상 입력하세요.', vi: 'Nhập mật khẩu từ 8 ký tự trở lên.', en: 'Enter at least 8 characters.' },

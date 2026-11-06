@@ -20,7 +20,7 @@ export async function register(email: string, password: string): Promise<void> {
 /** 로그인하고 받은 토큰 쌍을 저장한다. */
 export async function login(email: string, password: string): Promise<void> {
   const { data } = await api.post('/api/auth/login/', { email, password })
-  tokenStore.set(data.access, data.refresh)
+  tokenStore.start(data.access, data.refresh)
 }
 
 /** 내 프로필과 온보딩 완료 여부를 불러온다. */
