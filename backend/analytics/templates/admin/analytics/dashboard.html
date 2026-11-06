@@ -1,0 +1,49 @@
+{% extends "admin/base_site.html" %}
+{% block breadcrumbs %}
+<div class="breadcrumbs"><a href="{% url 'admin:index' %}">관리자 홈</a> &rsaquo;
+<a href="{% url 'admin:analytics_kpievent_changelist' %}">KPI 이벤트</a> &rsaquo; KPI 요약</div>
+{% endblock %}
+{% block content %}
+<form method="get">{{ form.as_p }}<input type="submit" value="조회"></form>
+{% if summary %}
+<p>기간: {{ summary.start|date:"Y-m-d H:i:s T" }} 이상, {{ summary.end|date:"Y-m-d H:i:s T" }} 미만 (최근 {{ summary.days }}일)</p>
+<p>최초 이벤트 저장 시각: {{ summary.measurement_started_at|date:"Y-m-d H:i:s T"|default:"수집 이력 없음" }}.
+도입 전 이력을 역생성하지 않습니다. 실제 업무(REAL)만 집계하며 더미·테스트·출처 미확인은 제외합니다.</p>
+<p>보관 기간: {% if summary.retention_days is None %}운영 정책 미확정{% else %}설정값 {{ summary.retention_days }}일{% endif %}.
+자동 삭제는 실행하지 않습니다. 사용자·문서 삭제 시 해당 문서의 이벤트를 함께 제거합니다.</p>
+<div class="module">
+<table>
+<caption>6개 KPI</caption>
+<thead><tr><th>지표</th><th>분자</th><th>분모</th><th>비율/평균</th><th>상태</th><th>집계 기준·한계</th></tr></thead>
+<tbody>{% for item in summary.metrics %}<tr>
+<th>{{ item.label }}</th><td>{{ item.numerator|default_if_none:"—" }}</td><td>{{ item.denominator|default_if_none:"—" }}</td>
+<td>{% if item.rate is not None %}{{ item.rate }}%{% else %}N/A{% endif %}</td>
+<td>{{ item.status }}</td><td>{{ item.note }}</td></tr>{% endfor %}</tbody>
+</table>
+</div>
+<p>AVAILABLE: 계산 가능 · PARTIAL: 부분 측정 · NO_DATA: 분모 없음 · NOT_MEASURABLE: 필요한 모델/계약 없음</p>
+<div class="module"><h2>결과 제공과 처리 상태</h2>
+<p>{{ summary.result_provided.label }}: {{ summary.result_provided.numerator }}/{{ summary.result_provided.denominator }} —
+{% if summary.result_provided.rate is not None %}{{ summary.result_provided.rate }}%{% else %}N/A{% endif %}
+({{ summary.result_provided.status }})</p><p>{{ summary.result_provided.note }}</p>
+<table><tbody>
+<tr><th>분석 시작 문서</th><td>{{ summary.document_states.total }}</td></tr>
+<tr><th>현재 결과가 있는 서버 완료 문서</th><td>{{ summary.document_states.completed }}</td></tr>
+<tr><th>실패 이력이 있는 분석 문서 (완료와 중복 가능)</th><td>{{ summary.document_states.failed }}</td></tr>
+<tr><th>챗봇 GROUNDED</th><td>{{ summary.chat_states.grounded }}</td></tr>
+<tr><th>챗봇 UNVERIFIED</th><td>{{ summary.chat_states.unverified }}</td></tr>
+<tr><th>챗봇 MISMATCH</th><td>{{ summary.chat_states.mismatch }}</td></tr>
+<tr><th>검증 MATCHED/MISMATCH/UNVERIFIED</th><td>NOT_MEASURABLE — 항목별 대조 계약 없음</td></tr>
+<tr><th>체크리스트 완료/미완료</th><td>NOT_MEASURABLE — 모델 없음</td></tr>
+<tr><th>챗봇 답변 보류/AI 호출 실패</th><td>{{ summary.chat_withheld.status }} — {{ summary.chat_withheld.note }}</td></tr>
+</tbody></table></div>
+<div class="module"><h2>수집 범위 점검 (선택 언어와 무관한 전체 기간)</h2>
+<p>과거 이력·직접 ORM 저장·bulk update·저장 오류로 인한 누락을 정상 수집으로 보정하지 않습니다.
+아래 건수는 원인 진단용이며 KPI 분모에 더하지 않습니다. 현재 모델 상태를 조회하므로 과거 시점의 완전한 재현은 불가능합니다.</p>
+<table><tbody>
+{% for kind,count in summary.data_kinds.items %}<tr><th>{{ kind }} 이벤트</th><td>{{ count }}</td></tr>{% endfor %}
+<tr><th>기간 내 생성·처리 상태 문서 중 분석 시작 이력 없음</th><td>{{ summary.documents_without_start_events }}</td></tr>
+<tr><th>기간 내 생성 답변 중 저장 이벤트 없음</th><td>{{ summary.answers_without_events }}</td></tr>
+</tbody></table></div>
+{% endif %}
+{% endblock %}
