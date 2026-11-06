@@ -247,7 +247,10 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
             // 이어보기는 문서에 이미 기록된 소유 계정을 쓴다
             ownerId: ownerRef.current ?? data.docs.find((d) => d.id === id)?.ownerId,
           })
-          updateDoc(id, () => doc)
+          // 이 기기에 없던 문서(다른 기기에서 올린 문서)면 새로 추가한다
+          update((d) => ({
+            docs: d.docs.some((x) => x.id === id) ? d.docs.map((x) => (x.id === id ? { ...x, ...doc } : x)) : [doc, ...d.docs],
+          }))
           replace(doc.lowConfidence ? 'ocrLow' : 'result', { docId: id })
           return
         }

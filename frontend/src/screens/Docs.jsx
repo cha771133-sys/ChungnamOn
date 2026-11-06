@@ -54,7 +54,7 @@ export default function Docs() {
 /** 한 필터의 서버 문서 목록 + (전체일 때) 시연용 예시 문서 */
 function DocList({ status, showDemo }) {
   const { data, nav } = useApp()
-  const { ids, loading, error, hasMore, loadMore, reload, ready } = useServerDocuments(status)
+  const { ids, loading, error, hasMore, loadMore, retry, ready } = useServerDocuments(status)
   const serverDocs = ids
     .map((id) => data.docs.find((d) => d.id === id))
     .filter((d) => d && isVisibleDoc(d, data.user))
@@ -63,7 +63,7 @@ function DocList({ status, showDemo }) {
   return (
     <>
       {error && (
-        <button className="banner tone-amber" onClick={reload}>
+        <button className="banner tone-amber" onClick={retry}>
           <RefreshCw size={18} />
           <span>{error} 눌러서 다시 시도하세요.</span>
         </button>
@@ -94,7 +94,7 @@ function DocList({ status, showDemo }) {
         )
       )}
 
-      {hasMore && (
+      {hasMore && !error && (
         <button className="btn btn-outline btn-block load-more" onClick={loadMore} disabled={loading}>
           {loading ? '불러오는 중...' : '더 보기'}
         </button>

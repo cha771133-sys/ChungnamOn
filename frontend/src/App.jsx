@@ -104,6 +104,7 @@ export default function App() {
 
   // 저장된 사용자 정보가 없거나 다른 세션(이전 계정·다른 탭 로그인)의 것이면 현재 토큰으로 다시 확인한다.
   // 계정이 다르면 이전 계정의 서버 문서를 지운다. 확인 전까지 서버 문서는 isVisibleDoc에서 숨겨진다.
+  const [verifyAttempt, setVerifyAttempt] = useState(0)
   useEffect(() => {
     const marker = tokenStore.marker()
     if (!hasSession() || (data.user?.id != null && data.user.session === marker)) return
@@ -119,9 +120,16 @@ export default function App() {
         }))
       })
       .catch(() => {
-        /* 실패하면 다음 실행 때 다시 시도한다 */
+        /* 실패하면 인터넷이 다시 연결될 때나 화면에서 다시 시도할 때 확인한다 */
       })
     // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifyAttempt])
+
+  // 인터넷이 다시 연결되면 계정 확인을 다시 시도한다
+  useEffect(() => {
+    const onOnline = () => setVerifyAttempt((n) => n + 1)
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
   }, [])
 
   useEffect(() => {
@@ -211,6 +219,8 @@ export default function App() {
     isStandalone,
     isIOS,
     openLang: () => setSheet({ type: 'lang' }),
+    /** 저장된 사용자 정보가 현재 세션과 맞지 않을 때 계정 확인을 다시 시도한다 */
+    reverifyUser: () => setVerifyAttempt((n) => n + 1),
     resetDemo: () => {
       apiLogout().catch(() => {})
       setData(fresh())

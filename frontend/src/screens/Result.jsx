@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2 } from 'lucide-react'
+import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck } from 'lucide-react'
 import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
@@ -212,7 +212,21 @@ export default function Result({ docId }) {
           <MessageCircle size={18} /> 질문하기
         </button>
         {/* 유저 플로우 n34: 절차 정보가 충분하면 체크리스트, 아니면 담당기관 안내 */}
-        {doc.checklist.length > 0 ? (
+        {doc.source === 'api' && doc.deadlines?.length > 0 ? (
+          // 서버 문서는 체크리스트(A6) 연결 전까지 마감일 일정 등록으로 바로 이어준다
+          (() => {
+            const existing = data.schedules.find((x) => x.docId === docId && doc.deadlines.some((dl) => dl.date === x.date))
+            return existing ? (
+              <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: existing.id })}>
+                <CalendarCheck size={18} /> 등록된 일정 보기
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={() => nav('scheduleNew', { docId })}>
+                <CalendarPlus size={18} /> 마감일 일정 등록
+              </button>
+            )
+          })()
+        ) : doc.checklist.length > 0 ? (
           <button className="btn btn-primary" onClick={() => nav('checklist', { docId })}>
             <ListChecks size={18} /> 할 일 체크리스트
           </button>

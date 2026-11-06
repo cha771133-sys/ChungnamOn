@@ -71,6 +71,27 @@ export function isVisibleDoc(doc, user) {
   return user?.id != null && doc.ownerId === user.id && user.session === tokenStore.marker()
 }
 
+/** 현재 계정에 보여줘도 되는 일정인지 (서버 일정은 문서와 같은 기준) */
+export function isVisibleSchedule(schedule, user) {
+  if (schedule.source !== 'api') return true
+  return user?.id != null && schedule.ownerId === user.id && user.session === tokenStore.marker()
+}
+
+/** 일정까지 남은 일수. 서버 일정은 받은 날에는 서버 값(한국 날짜 기준)을, 날이 바뀌면 기기 날짜로 계산한다. */
+export function scheduleDaysLeft(schedule) {
+  if (schedule.source === 'api' && typeof schedule.daysLeft === 'number' && schedule.fetchedOn === todayString()) {
+    return schedule.daysLeft
+  }
+  return dday(schedule.date)
+}
+
+/** 기기 기준 오늘(YYYY-MM-DD) */
+function todayString() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 /** 서버 문서를 최신순으로, 그 뒤에 시연용 목업 문서를 붙여 정렬한다. */
 export function sortDocs(docs) {
   const api = docs.filter((d) => d.source === 'api')

@@ -1,5 +1,6 @@
 import { Camera, BellOff, ChevronRight } from 'lucide-react'
-import { useApp, dday, ddayLabel, fmtDate, isVisibleDoc, sortDocs } from '../store.js'
+import { useApp, ddayLabel, fmtDate, isVisibleDoc, sortDocs, isVisibleSchedule, scheduleDaysLeft } from '../store.js'
+import { useServerSchedules } from '../lib/useServerSchedules.js'
 import { useServerDocuments } from '../lib/useServerDocuments.js'
 import { TopBar, TabBar } from '../components/ui.jsx'
 import DocRow from './DocRow.jsx'
@@ -9,11 +10,12 @@ export default function Home() {
   const { data, nav, tab } = useApp()
   // 서버 목록 첫 페이지를 받아 최근 문서를 최신 상태로 맞춘다
   useServerDocuments()
-  const open = data.schedules.filter((s) => !s.done)
-  const upcoming = open.filter((s) => dday(s.date) >= 0).sort((a, b) => a.date.localeCompare(b.date))
-  const overdue = open.filter((s) => dday(s.date) < 0)
+  useServerSchedules()
+  const open = data.schedules.filter((s) => !s.done && isVisibleSchedule(s, data.user))
+  const upcoming = open.filter((s) => scheduleDaysLeft(s) >= 0).sort((a, b) => a.date.localeCompare(b.date))
+  const overdue = open.filter((s) => scheduleDaysLeft(s) < 0)
   const next = upcoming[0]
-  const n = next ? dday(next.date) : null
+  const n = next ? scheduleDaysLeft(next) : null
 
   return (
     <>

@@ -2464,3 +2464,15 @@ ol {
 .btn-danger:hover {
   background: #a83226;
 }
+
+.link-static {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}

@@ -128,10 +128,12 @@ function toLocalDate(iso) {
  * - 이미 해석 결과를 받아 둔 완료 문서는 그대로 두고 제목·상태만 맞춘다.
  * - 처음 보는 문서는 목록 정보만 담은 문서로 추가하고, 열 때 결과를 불러온다(hasDetail: false).
  * - complete가 true(전체 목록을 다 받음)이면 서버에 없는 이 계정의 서버 문서를 지운다.
+ *   knownIds: 앞 페이지까지 받은 문서 ID (여러 페이지를 다 받은 뒤 정리할 때 함께 넘긴다)
  */
-export function mergeServerList(docs, items, { ownerId, complete }) {
+export function mergeServerList(docs, items, { ownerId, complete, knownIds = [] }) {
   const byId = new Map(docs.map((d) => [d.id, d]))
-  const serverIds = new Set()
+  // 앞 페이지에서 받은 문서도 서버에 있는 것으로 본다
+  const serverIds = new Set(knownIds)
   for (const item of items) {
     const id = localDocId(item.documentId)
     serverIds.add(id)
