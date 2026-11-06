@@ -14,6 +14,7 @@ PROPERTY_RULES = {
 
 
 def validate_properties(event_type, properties):
+    """이벤트별 정확한 키 집합과 값의 타입·범위·근거 상태 일관성을 검증한다."""
     rules = PROPERTY_RULES.get(event_type)
     if rules is None or not isinstance(properties, dict) or set(properties) != set(rules):
         raise ValidationError('이벤트 종류별 허용 속성만 빠짐없이 전달해야 합니다.')

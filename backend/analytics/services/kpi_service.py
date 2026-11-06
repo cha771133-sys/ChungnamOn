@@ -15,6 +15,7 @@ from ..models import KPIEvent
 
 
 def _metric(key, label, note, numerator=None, denominator=None, status=None):
+    """지표의 공통 표시 형식을 만들고 분모가 없으면 비율을 결측으로 둔다."""
     return {
         'metric': key, 'label': label, 'numerator': numerator, 'denominator': denominator,
         'rate': round(numerator / denominator * 100, 2) if denominator else None,
@@ -23,6 +24,7 @@ def _metric(key, label, note, numerator=None, denominator=None, status=None):
 
 
 def get_kpi_summary(*, days=7, now=None, language=None):
+    """7일·30일의 실측 KPI와 전체 기간 수집 진단을 DB 변경 없이 반환한다."""
     if type(days) is not int or days not in (7, 30):
         raise ValidationError('집계 기간은 7일 또는 30일이어야 합니다.')
     if language is not None and language not in ['', *UserProfile.Language.values]:
@@ -86,7 +88,7 @@ def get_kpi_summary(*, days=7, now=None, language=None):
                 'Checklist/ChecklistItem 모델이 없다. 사용자 완료 표시는 실제 행정업무 완료의 증거가 아니다.',
                 status='NOT_MEASURABLE'),
         _metric('deadline_schedule_rate', '마감일 등록률',
-                'Schedule 모델과 마감일 확인 여부 계약이 없다. deadlines 단순 추출값을 확정 기한으로 간주하지 않는다.',
+                'Schedule 모델은 있으나 마감일 확인 여부 계약이 없다. deadlines 단순 추출값을 확정 기한으로 간주하지 않는다.',
                 status='NOT_MEASURABLE'),
         _metric('chat_grounded_answer_rate', '챗봇 근거 답변 비율',
                 '실측 저장 이벤트와 연결된 생성 답변 기준. 공식자료 ID·승인·URL·본문 해시·확인일을 저장 시 검증한다. '

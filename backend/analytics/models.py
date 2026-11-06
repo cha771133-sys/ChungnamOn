@@ -62,6 +62,7 @@ class KPIEvent(models.Model):
         ]
 
     def clean(self):
+        """속성 허용 목록, 발생 시간대, 이벤트와 업무 식별자의 일치를 검증한다."""
         super().clean()
         validate_properties(self.event_type, self.properties)
         if timezone.is_naive(self.occurred_at):
@@ -73,8 +74,10 @@ class KPIEvent(models.Model):
             raise ValidationError('문서와 업무 ID가 일치해야 합니다.')
 
     def save(self, *args, **kwargs):
+        """직접 모델 저장에도 입력 검증을 적용하고 중복 키는 DB 제약에 맡긴다."""
         self.full_clean(validate_unique=False, validate_constraints=False)
         super().save(*args, **kwargs)
 
     def __str__(self):
+        """문서 내용 없이 이벤트 종류와 로그 ID만 표시한다."""
         return f'{self.get_event_type_display()} #{self.pk}'

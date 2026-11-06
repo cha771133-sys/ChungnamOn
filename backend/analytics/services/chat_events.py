@@ -12,6 +12,7 @@ from .event_service import logger, observe_event
 
 
 def _official_source_count(message):
+    """승인된 공식자료와 ID·URL·해시·확인일이 일치하는 출처 스냅샷만 센다."""
     snapshots = {entry['sourceDocumentId']: entry for entry in message.sources
                  if type(entry.get('sourceDocumentId')) is int}
     count = 0

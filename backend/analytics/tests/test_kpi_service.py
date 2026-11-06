@@ -14,18 +14,22 @@ from .helpers import AnalyticsFixtures, NOW
 
 class KPIServiceTests(AnalyticsFixtures, TestCase):
     def started(self, document, *, age=1, **kwargs):
+        """종료 시각에서 지정 일수 전의 실측 분석 시작을 생성한다."""
         return self.event(KPIEvent.Type.ANALYSIS_STARTED, document,
                           occurred_at=NOW - timedelta(days=age), **kwargs)
 
     def completed(self, document, **kwargs):
+        """종료 시각 전 번역·요약 완료 이벤트를 생성한다."""
         return self.event(KPIEvent.Type.INTERPRETATION_COMPLETED, document,
                           occurred_at=NOW - timedelta(hours=2),
                           properties={'has_translation': True, 'has_summary': True}, **kwargs)
 
     def metric(self, summary, key):
+        """요약 결과에서 지정한 KPI 계약을 찾는다."""
         return next(m for m in summary['metrics'] if m['metric'] == key)
 
     def test_no_denominator_and_missing_contracts_are_not_zero_percent(self):
+        """분모 없음과 측정 계약 부재를 0%로 바꾸지 않고 구분한다."""
         summary = get_kpi_summary(now=NOW)
         self.assertEqual(len(summary['metrics']), 6)
         for metric in summary['metrics']:
@@ -36,6 +40,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
             self.assertIsNone(summary['metrics'][index]['denominator'])
 
     def test_started_only_with_failures_retries_and_result_provision_separated(self):
+        """시작 문서 기준으로 실패·재시도를 포함하고 서버 완료와 제공을 구분한다."""
         completed, ocr_failed, ai_failed, pending = [self.document() for _ in range(4)]
         for document in (completed, ocr_failed, ai_failed):
             self.started(document)
@@ -56,6 +61,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(get_kpi_summary(now=NOW)['result_provided']['numerator'], 1)
 
     def test_done_without_translation_or_summary_is_not_success(self):
+        """완료 이벤트가 있어도 현재 번역·요약이 비어 있으면 성공으로 세지 않는다."""
         document = self.document(status='DONE')
         self.started(document)
         self.completed(document)
@@ -70,6 +76,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(get_kpi_summary(now=NOW)['metrics'][0]['numerator'], 0)
 
     def test_period_boundaries_first_start_and_retry_cohort(self):
+        """기간 시작은 포함하고 종료는 제외하며 과거 시작 문서의 재시도는 제외한다."""
         for age in (0, 7, 8, 30, 31):
             self.started(self.document(), age=age)
         old = self.document()
@@ -79,6 +86,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(get_kpi_summary(now=NOW, days=30)['metrics'][0]['denominator'], 3)
 
     def test_future_outcomes_do_not_count(self):
+        """집계 종료 시각 이후의 완료 사실을 현재 성공 수에 포함하지 않는다."""
         document = self.document()
         self.started(document)
         self.result(document)
@@ -87,6 +95,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(get_kpi_summary(now=NOW)['metrics'][0]['numerator'], 0)
 
     def test_dummy_test_unknown_and_untracked_history_are_not_real_metrics(self):
+        """더미·테스트·미확인 이벤트와 관찰 전 이력을 실측 분모에서 제외한다."""
         for kind in (KPIEvent.DataKind.DUMMY, KPIEvent.DataKind.TEST, KPIEvent.DataKind.UNKNOWN):
             document = self.document()
             self.started(document, data_kind=kind)
@@ -99,6 +108,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(summary['data_kinds'], {'DUMMY': 2, 'TEST': 2, 'UNKNOWN': 2})
 
     def test_language_uses_first_event_snapshot_and_unknown_is_separate(self):
+        """최초 분석 시작 언어를 사용하고 언어 미확인을 별도로 집계한다."""
         for language in ('vi', 'en', ''):
             self.started(self.document(), language=language)
         self.assertEqual(get_kpi_summary(now=NOW, language='vi')['metrics'][0]['denominator'], 1)
@@ -106,6 +116,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(get_kpi_summary(now=NOW)['metrics'][0]['denominator'], 3)
 
     def test_generated_chat_answers_count_with_statuses_and_no_double_count(self):
+        """실제 저장 답변만 상태별로 세고 공식 근거 답변 비율을 계산한다."""
         document = self.document()
         source = self.official_source()
         for status in ('GROUNDED', 'UNVERIFIED', 'MISMATCH'):
@@ -127,6 +138,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(summary['chat_states'], {'grounded': 1, 'unverified': 1, 'mismatch': 1, 'total': 3})
 
     def test_query_count_stays_bounded_and_read_has_no_writes(self):
+        """문서 수가 늘어도 쿼리 수를 유지하고 집계가 SELECT만 실행함을 확인한다."""
         self.started(self.document())
         with CaptureQueriesContext(connection) as small:
             get_kpi_summary(now=NOW)
@@ -141,6 +153,7 @@ class KPIServiceTests(AnalyticsFixtures, TestCase):
         self.assertEqual(KPIEvent.objects.count(), before)
 
     def test_unsupported_ranges_language_and_naive_time_are_rejected(self):
+        """계약 밖 기간·언어와 시간대 없는 종료 시각을 거부한다."""
         for kwargs in ({'days': 0}, {'days': 365}, {'days': True}, {'days': '7'},
                        {'language': 'nationality'}, {'now': NOW.replace(tzinfo=None)}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValidationError):

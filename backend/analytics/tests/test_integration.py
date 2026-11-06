@@ -22,10 +22,12 @@ from .helpers import AnalyticsFixtures
 @override_settings(DOCUMENTS_STEP_DELAY=0, CHATBOT_AI_MODE='dummy')
 class IntegrationTests(AnalyticsFixtures, TestCase):
     def setUp(self):
+        """문서 소유자로 인증된 DRF 테스트 클라이언트를 준비한다."""
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
     def test_real_pipeline_records_dummy_start_completion_and_successful_result_response(self):
+        """기존 더미 파이프라인과 결과 조회를 관찰하되 운영 KPI에서는 제외한다."""
         document = self.document()
         self.assertFalse(KPIEvent.objects.exists())
         self.assertTrue(process_document(document.pk))
@@ -40,6 +42,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertNotIn('번역', str(list(KPIEvent.objects.values('properties'))))
 
     def test_ocr_failure_is_started_and_retry_has_distinct_attempt(self):
+        """OCR 실패를 시작 시도에 연결하고 재처리는 새 시도로 관찰한다."""
         document = self.document()
         with patch('documents.services.pipeline.run_ocr', side_effect=RuntimeError('테스트 실패')):
             with self.assertLogs('documents.services.pipeline', level='ERROR'):
@@ -51,6 +54,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertEqual(document.kpi_events.filter(event_type=KPIEvent.Type.INTERPRETATION_COMPLETED).count(), 1)
 
     def test_unready_unauthorized_and_missing_results_do_not_record_provision(self):
+        """준비되지 않은 결과와 비인증 요청은 제공 이벤트를 만들지 않는다."""
         document = self.document()
         self.assertEqual(self.client.get(f'/api/documents/{document.pk}/result/').status_code, 409)
         self.client.force_authenticate(None)
@@ -58,6 +62,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertFalse(KPIEvent.objects.filter(event_type=KPIEvent.Type.RESULT_PROVIDED).exists())
 
     def test_historical_result_response_is_observed_without_inventing_old_completion(self):
+        """과거 완료 이력이 없는 결과 조회는 UNKNOWN 제공 사실만 기록한다."""
         document = self.document(status='DONE')
         self.result(document)
         self.assertEqual(self.client.get(f'/api/documents/{document.pk}/result/').status_code, 200)
@@ -68,6 +73,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertEqual(get_kpi_summary()['metrics'][0]['denominator'], 0)
 
     def test_stale_instance_and_repeated_step_saves_do_not_invent_start(self):
+        """저장 대상이 아닌 낡은 상태와 같은 단계 반복 저장으로 시작을 늘리지 않는다."""
         document = self.document()
         document.status, document.step = 'PROCESSING', 'OCR'
         document.save(update_fields=['title'])
@@ -78,6 +84,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertEqual(KPIEvent.objects.filter(event_type=KPIEvent.Type.ANALYSIS_STARTED).count(), 1)
 
     def test_chat_success_is_logged_only_after_save_and_dummy_is_excluded(self):
+        """저장된 더미 답변만 관찰하고 질문·답변 본문은 이벤트에 남기지 않는다."""
         document = self.document(status='DONE')
         self.result(document)
         message = submit_question(self.user, document.pk, {'message': '필요한 안내는 무엇인가요?'})
@@ -89,6 +96,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertNotIn('안내', str(event.properties))
 
     def test_chat_call_failure_does_not_become_generated_answer(self):
+        """AI 호출 실패는 답변과 성공 이벤트를 생성하지 않는다."""
         document = self.document(status='DONE')
         self.result(document)
         with patch('chatbot.services.ai_client.generate_answer', side_effect=RuntimeError('민감 오류')):
@@ -98,6 +106,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertFalse(KPIEvent.objects.exists())
 
     def test_chat_event_failure_preserves_answer_and_exposes_no_raw_error(self):
+        """이벤트 수집 실패에도 답변을 보존하고 누락 진단에 반영한다."""
         document = self.document(status='DONE')
         self.result(document)
         with patch('analytics.services.event_service.record_event', side_effect=DatabaseError('민감 오류')):
@@ -108,6 +117,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertEqual(get_kpi_summary()['answers_without_events'], 1)
 
     def test_chat_and_event_are_both_removed_by_business_rollback(self):
+        """외부 업무 롤백이 답변과 연결 이벤트를 함께 제거함을 확인한다."""
         document = self.document(status='DONE')
         self.result(document)
         with self.assertRaises(RuntimeError):
@@ -118,6 +128,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
         self.assertFalse(KPIEvent.objects.exists())
 
     def test_official_source_requires_real_id_approval_and_matching_snapshot(self):
+        """실제 승인 자료의 스냅샷과 일치하는 근거만 인정하고 위조를 거부한다."""
         document = self.document(status='DONE')
         official = self.official_source()
         message = ChatMessage.objects.create(document=document, question='질문', answer='답변', language='vi',
@@ -138,6 +149,7 @@ class IntegrationTests(AnalyticsFixtures, TestCase):
                                  'status': 'GROUNDED', 'grounded': True, 'official_source_count': 1})
 
     def test_answer_creation_is_idempotent_even_if_retry_key_changes(self):
+        """재시도 키가 달라도 답변 ID당 생성 이벤트를 하나만 저장한다."""
         document = self.document()
         message = ChatMessage.objects.create(document=document, question='질문', answer='답변', language='vi')
         kwargs = dict(document=document, entity_id=message.pk,

@@ -15,9 +15,11 @@ class ResultProvidedMiddleware:
     """성공한 기존 결과 API 응답만 관찰한다. 브라우저 표시/수신을 증명하지 않는다."""
 
     def __init__(self, get_response):
+        """Django 응답 처리 함수를 보관한다."""
         self.get_response = get_response
 
     def __call__(self, request):
+        """소유자의 성공한 결과 조회를 관찰하고 수집 DB 오류를 응답에서 격리한다."""
         response = self.get_response(request)
         match = request.resolver_match
         if (request.method != 'GET' or response.status_code != 200 or not match

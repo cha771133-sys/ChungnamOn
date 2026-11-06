@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 @receiver(pre_save, sender=Document)
 def remember_document_state(sender, instance, raw=False, using='default', update_fields=None, **kwargs):
+    """일반 저장의 상태 전이 비교를 위해 저장 전 DB 상태만 보관한다."""
     instance._kpi_previous = None
     if raw or using != 'default' or (update_fields is not None and not {'status', 'step'}.intersection(update_fields)):
         return
@@ -31,6 +32,7 @@ def remember_document_state(sender, instance, raw=False, using='default', update
 
 @receiver(post_save, sender=Document)
 def observe_document_state(sender, instance, raw=False, using='default', **kwargs):
+    """저장 후 DB 상태를 다시 읽어 관찰하고 수집 실패는 savepoint로 격리한다."""
     previous = getattr(instance, '_kpi_previous', None)
     if raw or using != 'default' or not previous:
         return
@@ -44,6 +46,7 @@ def observe_document_state(sender, instance, raw=False, using='default', **kwarg
 
 
 def _observe_transition(document, previous):
+    """OCR 진입과 대응 완료·실패를 DUMMY로 기록하며 누락된 시작은 추측하지 않는다."""
     # 기존 파이프라인은 OCR 진입 직전에 PROCESSING/QUEUED를 선점한다.
     # 업로드 생성만으로 분석 시작을 기록하지 않는다.
     if (document.status == Document.Status.PROCESSING and document.step == Document.Step.OCR
@@ -71,5 +74,6 @@ def _observe_transition(document, previous):
 
 @receiver(pre_delete, sender=Document)
 def erase_document_events(sender, instance, using='default', **kwargs):
+    """문서 삭제 트랜잭션에서 연결된 KPI 이력도 제거한다."""
     # SET_NULL은 부모 Admin 삭제 권한을 바꾸지 않는다. 삭제 트랜잭션에서 이력도 제거한다.
     KPIEvent.objects.using(using).filter(document_id=instance.pk).delete()
