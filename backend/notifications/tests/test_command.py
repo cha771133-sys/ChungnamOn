@@ -61,6 +61,7 @@ class DeadlineReminderCommandTests(TestCase):
         return output.getvalue()
 
     def test_d7_and_d1_send_real_schedule_ids_and_exclude_other_schedule_states(self):
+        """두 알림 시점의 실제 일정 ID만 발송하고 완료·경과·당일은 제외한다."""
         d7 = self.create_schedule(TODAY.replace(day=27), title='D-7 개인정보 일정')
         d1 = self.create_schedule(TODAY.replace(day=21), title='D-1 개인정보 일정')
         self.create_schedule(TODAY.replace(day=27), title='완료 일정', done=True)
@@ -230,6 +231,7 @@ class DeadlineReminderCommandTests(TestCase):
         self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.RETRYABLE)
 
     def test_uncertain_and_permanent_failures_never_retry_or_disable_device(self):
+        """결과 불명과 영구 오류는 재발송하거나 유효한 기기를 해제하지 않는다."""
         self.create_schedule(TODAY + timedelta(days=7))
         for result, status in (
             (PushResult(PushStatus.UNKNOWN, 'NETWORK_RESULT_UNKNOWN'), ReminderDelivery.Status.UNKNOWN),
@@ -266,6 +268,7 @@ class DeadlineReminderCommandTests(TestCase):
         self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.SENT)
 
     def test_same_schedule_d7_success_does_not_block_d1(self):
+        """동일 일정의 D-7과 D-1은 각각 독립된 발송 이력을 가진다."""
         schedule = self.create_schedule(TODAY + timedelta(days=7))
         accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/event')
         with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
@@ -288,11 +291,13 @@ class DeadlineReminderCommandTests(TestCase):
         send.assert_called_once()
 
     def test_completion_or_deletion_after_claim_prevents_external_call(self):
+        """점유 이후 완료되거나 삭제된 일정은 외부 호출 전에 제외한다."""
         for change in ('done', 'delete'):
             with self.subTest(change=change):
                 schedule = self.create_schedule(TODAY + timedelta(days=7), title=change)
 
                 def claim_then_change(**kwargs):
+                    """DB 점유와 발송 직전 검사 사이에 일정 상태 변경을 재현한다."""
                     claim = claim_delivery(**kwargs)
                     if change == 'done':
                         Schedule.objects.filter(pk=schedule.pk).update(done=True)
@@ -310,6 +315,7 @@ class DeadlineReminderCommandTests(TestCase):
         self.create_schedule(TODAY + timedelta(days=7))
 
         def claim_then_revoke(**kwargs):
+            """점유 후 수신 동의가 철회되는 경합을 재현한다."""
             claim = claim_delivery(**kwargs)
             NotificationPreference.objects.filter(pk=self.preference.pk).update(enabled=False, enabled_since=None)
             return claim
@@ -324,6 +330,7 @@ class DeadlineReminderCommandTests(TestCase):
         NotificationPreference.objects.filter(pk=self.preference.pk).update(enabled=True, enabled_since=BEFORE_DUE)
 
         def claim_then_transfer(**kwargs):
+            """점유 후 동일 FID의 소유자가 바뀌는 경합을 재현한다."""
             claim = claim_delivery(**kwargs)
             register_device(user=other, registration_id=FID, registration_type='FID', platform='WEB')
             return claim
@@ -335,10 +342,73 @@ class DeadlineReminderCommandTests(TestCase):
         self.device.refresh_from_db()
         self.assertEqual(self.device.user, other)
 
+    def test_same_owner_reregistration_after_claim_is_reclaimed_in_same_command(self):
+        """동일 FID 재등록의 최신 스냅샷으로 발송하되 성공 이력은 재사용한다."""
+        self.create_schedule(TODAY + timedelta(days=7))
+        claimed_count = 0
+
+        def claim_then_reregister_once(**kwargs):
+            """첫 점유 직후에만 같은 사용자의 FID를 재등록한다."""
+            nonlocal claimed_count
+            claim = claim_delivery(**kwargs)
+            if claim is not None:
+                claimed_count += 1
+                if claimed_count == 1:
+                    with patch('django.utils.timezone.now', return_value=NOW + timedelta(microseconds=1)):
+                        register_device(
+                            user=self.user, registration_id=FID, registration_type='FID', platform='ANDROID',
+                        )
+            return claim
+
+        accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/reregistered')
+        with patch(f'{COMMAND}.claim_delivery', side_effect=claim_then_reregister_once), \
+                patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            self.run_command()
+            self.run_command()
+        send.assert_called_once()
+        self.assertEqual(claimed_count, 2)
+        self.assertEqual(ReminderDelivery.objects.count(), 1)
+        self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.SENT)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.platform, 'ANDROID')
+        self.assertEqual(self.device.last_success_at, NOW)
+
+    def test_repeated_reregistration_stops_after_bounded_retry_and_reports_failure(self):
+        """검사 때마다 바뀌는 기기는 무한 반복 없이 실패하고 같은 날 복구할 수 있다."""
+        self.create_schedule(TODAY + timedelta(days=7))
+        claimed_count = 0
+
+        def claim_then_reregister(**kwargs):
+            """매 점유 뒤에 서로 다른 재등록 시각을 저장한다."""
+            nonlocal claimed_count
+            claim = claim_delivery(**kwargs)
+            if claim is not None:
+                claimed_count += 1
+                with patch('django.utils.timezone.now', return_value=NOW + timedelta(microseconds=claimed_count)):
+                    register_device(user=self.user, registration_id=FID, registration_type='FID', platform='WEB')
+            return claim
+
+        with patch(f'{COMMAND}.claim_delivery', side_effect=claim_then_reregister), \
+                patch(f'{COMMAND}.send_deadline_push') as send:
+            output = self.run_command(expected_error='DEADLINE_REMINDER_FAILURE')
+        send.assert_not_called()
+        self.assertEqual(claimed_count, 2)
+        self.assertIn('other_failures=1', output)
+        self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.PENDING)
+
+        accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/stable')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            self.run_command(now=NOW + timedelta(hours=1))
+            self.run_command(now=NOW + timedelta(hours=2))
+        send.assert_called_once()
+        self.assertEqual(ReminderDelivery.objects.count(), 1)
+        self.assertEqual(ReminderDelivery.objects.get().status, ReminderDelivery.Status.SENT)
+
     def test_deletion_during_external_call_does_not_recreate_cascaded_history(self):
         schedule = self.create_schedule(TODAY + timedelta(days=7))
 
         def accepted_while_deleted(**kwargs):
+            """외부 접수 직전에 일정이 삭제되는 경합을 재현한다."""
             Schedule.objects.filter(pk=schedule.pk).delete()
             return PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/deleted')
 
@@ -368,6 +438,7 @@ class DeadlineReminderCommandTests(TestCase):
         self.assertFalse(ReminderDelivery.objects.filter(reminder__schedule=schedule).exists())
 
     def test_sdk_payload_and_lock_screen_never_include_sensitive_titles(self):
+        """FCM 데이터는 문자열 ID를 사용하고 잠금 화면과 로그는 제목을 숨긴다."""
         schedule = self.create_schedule(TODAY + timedelta(days=7))
         with patch('notifications.services.push_sender.get_firebase_app'), \
                 patch('notifications.services.push_sender.messaging.send', return_value='projects/test/messages/payload') as send:
@@ -434,6 +505,7 @@ class DeadlineReminderCommandTests(TestCase):
         self.assertFalse(ReminderDelivery.objects.exists())
 
     def test_limit_and_invalid_limit(self):
+        """처리 이벤트 수 제한을 적용하고 양수가 아닌 제한은 거부한다."""
         self.create_schedule(TODAY.replace(day=21), title='D-1')
         self.create_schedule(TODAY.replace(day=27), title='D-7')
         accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/1')

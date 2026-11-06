@@ -43,14 +43,20 @@ class Command(BaseCommand):
         for event in events:
             # 기기 목록은 잠금 밖에서 읽고, 개별 기기는 claim_delivery에서 다시 검증한다.
             for device in active_devices_for(event.schedule):
-                claim = claim_delivery(
-                    schedule_id=event.schedule.pk,
-                    days_before=event.days_before,
-                    device_id=device.pk,
-                )
+                # 같은 사용자의 재등록으로 스냅샷이 바뀌면 최신 조건으로 한 번 재점유한다.
+                for _ in range(2):
+                    claim = claim_delivery(
+                        schedule_id=event.schedule.pk,
+                        days_before=event.days_before,
+                        device_id=device.pk,
+                    )
+                    if claim is None or delivery_is_current(claim):
+                        break
+                    claim = None
+                else:
+                    # 계속 갱신되는 기기는 무한 재시도하지 않고 Cron에 실패를 알린다.
+                    stats['other_failures'] += 1
                 if claim is None:
-                    continue
-                if not delivery_is_current(claim):
                     continue
                 stats['candidates'] += 1
                 stats['claimed'] += 1

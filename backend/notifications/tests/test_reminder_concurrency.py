@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from django.db import close_old_connections
+from django.db import close_old_connections, connections
 from django.test import TransactionTestCase, skipUnlessDBFeature
 
 from documents.models import Document, Schedule
@@ -37,7 +37,7 @@ class ConcurrentReminderTests(TransactionTestCase):
                 barrier.wait(timeout=10)
                 call_command('send_deadline_reminders', stdout=StringIO())
             finally:
-                close_old_connections()
+                connections.close_all()
 
         accepted = PushResult(PushStatus.ACCEPTED, provider_message_id='projects/test/messages/concurrent')
         with patch('django.utils.timezone.now', return_value=NOW), \
