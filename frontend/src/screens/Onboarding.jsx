@@ -5,7 +5,7 @@ import { LANGS, NATIONALITIES, VISAS } from '../data/mock.js'
 import { t, uiLang, NATION_NAMES, VISA_NAMES } from '../i18n.js'
 import { TopBar, Stamp } from '../components/ui.jsx'
 import { fetchMe, hasSession, login, register, updateMe } from '../lib/auth'
-import { parseApiError } from '../lib/api'
+import { parseApiError, tokenStore } from '../lib/api'
 
 /** 소개를 마친 뒤 로그인 여부와 프로필 완료 여부에 따라 다음 화면을 고른다 (유저 플로우 n8). */
 function useAfterIntro() {
@@ -25,7 +25,7 @@ function useAfterLogin() {
     update((d) => ({
       // 다른 계정으로 로그인하면 이전 계정의 서버 문서를 이 브라우저에서 지운다
       ...(d.user?.id !== me.id ? purgeServerData(d) : {}),
-      user: { id: me.id, email: me.email },
+      user: { id: me.id, email: me.email, session: tokenStore.marker() },
       profile: {
         language: me.language ?? d.profile.language,
         nationality: me.nationality ?? '',

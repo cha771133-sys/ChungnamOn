@@ -102,15 +102,21 @@ export default function App() {
     langRef.current = data.profile.language
   }, [data.profile.language])
 
-  // 이전 버전에서 로그인해 계정 ID가 저장되지 않았다면 한 번 불러와 채운다 (문서를 계정별로 구분하는 데 필요)
+  // 저장된 사용자 정보가 없거나 다른 세션(이전 계정·다른 탭 로그인)의 것이면 현재 토큰으로 다시 확인한다.
+  // 계정이 다르면 이전 계정의 서버 문서를 지운다. 확인 전까지 서버 문서는 isVisibleDoc에서 숨겨진다.
   useEffect(() => {
-    if (!hasSession() || data.user?.id != null) return
+    const marker = tokenStore.marker()
+    if (!hasSession() || (data.user?.id != null && data.user.session === marker)) return
     const session = tokenStore.session()
     fetchMe()
       .then((me) => {
         // 조회하는 사이 로그아웃·계정 전환이 있었으면 이전 계정 정보를 저장하지 않는다
         if (tokenStore.session() !== session) return
-        setData((d) => ({ ...d, user: { id: me.id, email: me.email } }))
+        setData((d) => ({
+          ...d,
+          ...(d.user?.id !== me.id ? purgeServerData(d) : {}),
+          user: { id: me.id, email: me.email, session: marker },
+        }))
       })
       .catch(() => {
         /* 실패하면 다음 실행 때 다시 시도한다 */

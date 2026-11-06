@@ -1,8 +1,11 @@
 import { Check, ExternalLink, Share, PlusSquare, Download, Building2 } from 'lucide-react'
-import { useApp, fmtDate, pick, getSource } from '../store.js'
+import { useApp, fmtDate, pick, getSource, removeDocLocally } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { t, uiLang } from '../i18n.js'
 import { updateMe, hasSession } from '../lib/auth'
+import { deleteDocument } from '../lib/documents'
+import { parseApiError } from '../lib/api'
+import { useState } from 'react'
 import { Sheet, Badge } from './ui.jsx'
 
 /** 공식 근거 자료 카드: 기관, 제목, 확인일, 기준일, 원문 링크 */
@@ -178,6 +181,57 @@ function InstallSheet() {
   )
 }
 
+/**
+ * 문서 삭제 확인 시트. 삭제하면 해석 결과·대화·원본 파일·일정까지 서버에서 함께 지워진다.
+ * 분석 중인 문서는 서버가 409로 막으므로 안내만 한다.
+ */
+function DeleteDocSheet({ docId }) {
+  const { data, update, setSheet, showToast, tab } = useApp()
+  const [busy, setBusy] = useState(false)
+  const doc = data.docs.find((d) => d.id === docId)
+  if (!doc) return null
+
+  const remove = async () => {
+    setBusy(true)
+    try {
+      await deleteDocument(doc.serverId)
+      update((d) => removeDocLocally(d, docId))
+      setSheet(null)
+      showToast('문서를 삭제했어요')
+      tab('docs')
+    } catch (err) {
+      const info = parseApiError(err)
+      if (info.status === 404) {
+        // 이미 지워진 문서는 로컬에서도 정리한다
+        update((d) => removeDocLocally(d, docId))
+        setSheet(null)
+        tab('docs')
+        return
+      }
+      setSheet(null)
+      showToast(info.status === 409 ? '분석이 끝난 뒤에 삭제할 수 있어요' : '삭제하지 못했어요. 다시 시도하세요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Sheet title="문서를 삭제할까요?" onClose={() => setSheet(null)}>
+      <p className="lead">
+        <strong>{doc.title}</strong>
+        <br />
+        해석 결과, 질문한 대화, 등록한 일정, 원본 파일이 모두 지워지고 되돌릴 수 없어요.
+      </p>
+      <button className="btn btn-danger btn-block btn-lg" onClick={remove} disabled={busy}>
+        {busy ? '삭제하는 중...' : '삭제하기'}
+      </button>
+      <button className="btn btn-ghost btn-block" onClick={() => setSheet(null)} disabled={busy}>
+        취소
+      </button>
+    </Sheet>
+  )
+}
+
 /** 현재 열린 시트 종류에 맞는 바텀시트를 그린다. */
 export default function SheetHost() {
   const { sheet } = useApp()
@@ -192,6 +246,8 @@ export default function SheetHost() {
       return <SourceSheet {...sheet.payload} />
     case 'install':
       return <InstallSheet />
+    case 'deleteDoc':
+      return <DeleteDocSheet {...sheet.payload} />
     default:
       return null
   }

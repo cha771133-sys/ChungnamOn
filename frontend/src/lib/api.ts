@@ -39,6 +39,8 @@ export const tokenStore = {
   getRefresh: (): string | null => readStorage(REFRESH_KEY),
   /** 현재 세션 번호를 돌려준다. */
   session: (): number => sessionId,
+  /** 이 브라우저의 현재 로그인 세션 표식 (로그인할 때마다 바뀜). 없으면 null */
+  marker: (): string | null => readStorage(SESSION_KEY),
   /** 로그인 성공 시 새 세션을 시작하고 토큰을 저장한다. */
   start(access: string, refresh: string): void {
     sessionId += 1
