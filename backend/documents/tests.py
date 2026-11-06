@@ -1,18 +1,19 @@
 import shutil
 import tempfile
-from datetime import timedelta
+from datetime import date, timedelta
 from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models.fields.files import FieldFile
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from accounts.models import UserProfile
 from chatbot.models import ChatMessage
 
-from .models import Document, InterpretationResult
+from .models import Document, InterpretationResult, Schedule
 from .serializers import MAX_FILE_SIZE
 from .services import pipeline
 from .services.pipeline import process_document
@@ -638,3 +639,334 @@ class DocumentDeleteTests(APITestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertTrue(Document.objects.filter(id=self.document.id).exists())
+
+
+SCHEDULE_URL = '/api/schedules/'
+TODAY = date(2026, 8, 20)
+AGENCY = {'name': '아산시청 세무과', 'phone': '041-000-0000', 'source': 'document'}
+SCHEDULE_KEYS = {
+    'scheduleId', 'documentId', 'documentTitle', 'title', 'date', 'done', 'doneAt',
+    'isOverdue', 'daysLeft', 'agency', 'createdAt', 'updatedAt',
+}
+
+
+def schedule_url(schedule_id):
+    return f'{SCHEDULE_URL}{schedule_id}/'
+
+
+def create_done_document(owner, deadlines=None, agency=None):
+    document = create_document(
+        owner, status=Document.Status.DONE, title='주민세 납부 안내', doc_type='고지서',
+    )
+    InterpretationResult.objects.create(
+        document=document,
+        title=document.title,
+        deadlines=deadlines if deadlines is not None else [
+            {'label': '납부 마감', 'date': '2026-08-31'},
+            {'label': '이의 신청', 'date': '2026-08-10'},
+        ],
+        agency=AGENCY if agency is None else agency,
+    )
+    return document
+
+
+def create_schedule(document, schedule_date, title='납부 마감', **fields):
+    return Schedule.objects.create(
+        owner=document.owner, document=document, date=schedule_date, title=title, **fields,
+    )
+
+
+class FixedTodayMixin:
+    """isOverdue·daysLeft와 overdue 필터의 기준 날짜를 TODAY로 고정한다."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch('django.utils.timezone.localdate', return_value=TODAY)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class ScheduleCreateTests(FixedTodayMixin, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = create_user('owner@example.com')
+        self.document = create_done_document(self.user)
+        self.client.force_authenticate(self.user)
+
+    def test_create_with_default_title(self):
+        response = self.client.post(
+            SCHEDULE_URL, {'documentId': self.document.id, 'date': '2026-08-31'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        self.assertEqual(set(data), SCHEDULE_KEYS)
+        self.assertEqual(data['documentId'], self.document.id)
+        self.assertEqual(data['documentTitle'], '주민세 납부 안내')
+        self.assertEqual(data['title'], '납부 마감 - 주민세 납부 안내')
+        self.assertEqual(data['date'], '2026-08-31')
+        self.assertFalse(data['done'])
+        self.assertIsNone(data['doneAt'])
+        self.assertFalse(data['isOverdue'])
+        self.assertEqual(data['daysLeft'], 11)
+        self.assertEqual(data['agency'], AGENCY)
+        schedule = Schedule.objects.get(id=data['scheduleId'])
+        self.assertEqual(schedule.owner, self.user)
+        self.assertEqual(schedule.date, date(2026, 8, 31))
+
+    def test_create_with_title(self):
+        response = self.client.post(SCHEDULE_URL, {
+            'documentId': self.document.id, 'date': '2026-08-31', 'title': '  주민세 내기  ',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['title'], '주민세 내기')
+
+    def test_unfinished_document_returns_400(self):
+        for current in (Document.Status.PENDING, Document.Status.PROCESSING, Document.Status.FAILED):
+            with self.subTest(status=current):
+                Document.objects.filter(id=self.document.id).update(status=current)
+
+                response = self.client.post(
+                    SCHEDULE_URL, {'documentId': self.document.id, 'date': '2026-08-31'}, format='json',
+                )
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()['code'], 'VALIDATION_ERROR')
+                self.assertIn('documentId', response.json()['details'])
+        self.assertFalse(Schedule.objects.exists())
+
+    def test_date_not_in_deadlines_returns_400(self):
+        response = self.client.post(
+            SCHEDULE_URL, {'documentId': self.document.id, 'date': '2026-09-01'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('date', response.json()['details'])
+        self.assertFalse(Schedule.objects.exists())
+
+    def test_missing_fields_return_400(self):
+        response = self.client.post(SCHEDULE_URL, {}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(set(response.json()['details']), {'documentId', 'date'})
+
+    def test_other_user_and_missing_document_get_404(self):
+        other_document = create_done_document(create_user('other@example.com'))
+
+        other = self.client.post(
+            SCHEDULE_URL, {'documentId': other_document.id, 'date': '2026-08-31'}, format='json',
+        )
+        missing = self.client.post(
+            SCHEDULE_URL, {'documentId': other_document.id + 100, 'date': '2026-08-31'}, format='json',
+        )
+
+        self.assertEqual(other.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(other.json(), missing.json())
+        self.assertFalse(Schedule.objects.exists())
+
+    def test_duplicate_returns_409(self):
+        body = {'documentId': self.document.id, 'date': '2026-08-31'}
+        first = self.client.post(SCHEDULE_URL, body, format='json')
+
+        second = self.client.post(SCHEDULE_URL, body, format='json')
+
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.json(), {
+            'detail': '이미 등록된 일정입니다.', 'scheduleId': first.json()['scheduleId'],
+        })
+        self.assertEqual(Schedule.objects.count(), 1)
+
+    def test_same_date_with_other_title_is_allowed(self):
+        self.client.post(SCHEDULE_URL, {'documentId': self.document.id, 'date': '2026-08-31'}, format='json')
+
+        response = self.client.post(SCHEDULE_URL, {
+            'documentId': self.document.id, 'date': '2026-08-31', 'title': '서류 준비',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Schedule.objects.count(), 2)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        response = self.client.post(
+            SCHEDULE_URL, {'documentId': self.document.id, 'date': '2026-08-31'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+
+class ScheduleListTests(FixedTodayMixin, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = create_user('owner@example.com')
+        self.client.force_authenticate(self.user)
+        document = create_done_document(self.user)
+        self.later = create_schedule(document, date(2026, 8, 31))
+        self.overdue = create_schedule(document, date(2026, 8, 10), title='이의 신청')
+        self.done_past = create_schedule(
+            document, date(2026, 8, 1), title='완료한 일', done=True, done_at=timezone.now(),
+        )
+        self.today = create_schedule(document, TODAY, title='오늘 마감')
+        create_schedule(create_done_document(create_user('other@example.com')), date(2026, 8, 25))
+
+    def ids(self, response):
+        return [item['scheduleId'] for item in response.json()['results']]
+
+    def test_lists_only_mine_by_nearest_date(self):
+        response = self.client.get(SCHEDULE_URL)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['count'], 4)
+        self.assertEqual(self.ids(response), [self.done_past.id, self.overdue.id, self.today.id, self.later.id])
+
+    def test_overdue_and_days_left(self):
+        items = {item['scheduleId']: item for item in self.client.get(SCHEDULE_URL).json()['results']}
+
+        self.assertEqual((items[self.overdue.id]['isOverdue'], items[self.overdue.id]['daysLeft']), (True, -10))
+        self.assertEqual((items[self.today.id]['isOverdue'], items[self.today.id]['daysLeft']), (False, 0))
+        self.assertEqual((items[self.later.id]['isOverdue'], items[self.later.id]['daysLeft']), (False, 11))
+        # 완료한 일정은 마감일이 지나도 경과로 보지 않는다.
+        self.assertEqual((items[self.done_past.id]['isOverdue'], items[self.done_past.id]['daysLeft']), (False, -19))
+
+    def test_done_filter(self):
+        done = self.client.get(SCHEDULE_URL, {'done': 'true'})
+        not_done = self.client.get(SCHEDULE_URL, {'done': 'false'})
+
+        self.assertEqual(self.ids(done), [self.done_past.id])
+        self.assertEqual(self.ids(not_done), [self.overdue.id, self.today.id, self.later.id])
+
+    def test_overdue_filter(self):
+        overdue = self.client.get(SCHEDULE_URL, {'overdue': 'true'})
+        not_overdue = self.client.get(SCHEDULE_URL, {'overdue': 'false'})
+
+        self.assertEqual(self.ids(overdue), [self.overdue.id])
+        self.assertEqual(self.ids(not_overdue), [self.done_past.id, self.today.id, self.later.id])
+
+    def test_invalid_filter_returns_400(self):
+        for name in ('done', 'overdue'):
+            with self.subTest(name=name):
+                response = self.client.get(SCHEDULE_URL, {name: 'yes'})
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()['details'], {name: ['true 또는 false를 입력하세요.']})
+
+    def test_pagination(self):
+        response = self.client.get(SCHEDULE_URL, {'page_size': 3})
+        second = self.client.get(SCHEDULE_URL, {'page_size': 3, 'page': 2})
+
+        self.assertEqual(response.json()['count'], 4)
+        self.assertEqual(len(response.json()['results']), 3)
+        self.assertIsNotNone(response.json()['next'])
+        self.assertEqual(self.ids(second), [self.later.id])
+
+    def test_agency_is_null_without_result_agency(self):
+        Schedule.objects.all().delete()
+        create_schedule(create_done_document(self.user, agency={}), date(2026, 8, 31))
+
+        response = self.client.get(SCHEDULE_URL)
+
+        self.assertIsNone(response.json()['results'][0]['agency'])
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        self.assertEqual(self.client.get(SCHEDULE_URL).status_code, 401)
+
+
+class ScheduleDetailTests(FixedTodayMixin, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = create_user('owner@example.com')
+        self.client.force_authenticate(self.user)
+        self.document = create_done_document(self.user)
+        self.schedule = create_schedule(self.document, date(2026, 8, 31))
+
+    def test_detail(self):
+        response = self.client.get(schedule_url(self.schedule.id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.json()), SCHEDULE_KEYS)
+        self.assertEqual(response.json()['scheduleId'], self.schedule.id)
+
+    def test_patch_done_toggles_done_at(self):
+        done = self.client.patch(schedule_url(self.schedule.id), {'done': True}, format='json')
+
+        self.assertEqual(done.status_code, 200)
+        self.assertTrue(done.json()['done'])
+        self.assertIsNotNone(done.json()['doneAt'])
+        self.schedule.refresh_from_db()
+        done_at = self.schedule.done_at
+        self.assertIsNotNone(done_at)
+
+        # 이미 완료한 일정은 처음 완료 시각을 유지한다.
+        self.client.patch(schedule_url(self.schedule.id), {'done': True}, format='json')
+        self.schedule.refresh_from_db()
+        self.assertEqual(self.schedule.done_at, done_at)
+
+        undone = self.client.patch(schedule_url(self.schedule.id), {'done': False}, format='json')
+
+        self.assertEqual(undone.status_code, 200)
+        self.assertFalse(undone.json()['done'])
+        self.assertIsNone(undone.json()['doneAt'])
+        self.schedule.refresh_from_db()
+        self.assertIsNone(self.schedule.done_at)
+
+    def test_patch_rejects_other_fields(self):
+        for body in ({'done': True, 'date': '2026-09-01'}, {'title': '바꾼 이름'}):
+            with self.subTest(body=body):
+                response = self.client.patch(schedule_url(self.schedule.id), body, format='json')
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()['code'], 'VALIDATION_ERROR')
+        self.schedule.refresh_from_db()
+        self.assertFalse(self.schedule.done)
+        self.assertEqual(self.schedule.title, '납부 마감')
+
+    def test_patch_requires_done(self):
+        response = self.client.patch(schedule_url(self.schedule.id), {}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('done', response.json()['details'])
+
+    def test_put_not_allowed(self):
+        response = self.client.put(schedule_url(self.schedule.id), {'done': True}, format='json')
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_delete(self):
+        response = self.client.delete(schedule_url(self.schedule.id))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Schedule.objects.filter(id=self.schedule.id).exists())
+        self.assertTrue(Document.objects.filter(id=self.document.id).exists())
+
+    def test_document_delete_cascades_to_schedules(self):
+        self.document.delete()
+
+        self.assertFalse(Schedule.objects.filter(id=self.schedule.id).exists())
+
+    def test_other_user_and_missing_schedule_get_404(self):
+        self.client.force_authenticate(create_user('other@example.com'))
+        url = schedule_url(self.schedule.id)
+        missing_url = schedule_url(self.schedule.id + 100)
+
+        for method, body in (('get', None), ('patch', {'done': True}), ('delete', None)):
+            with self.subTest(method=method):
+                other = getattr(self.client, method)(url, body, format='json')
+                missing = getattr(self.client, method)(missing_url, body, format='json')
+
+                self.assertEqual(other.status_code, 404)
+                self.assertEqual(missing.status_code, 404)
+                self.assertEqual(other.json(), missing.json())
+        self.schedule.refresh_from_db()
+        self.assertFalse(self.schedule.done)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        self.assertEqual(self.client.get(schedule_url(self.schedule.id)).status_code, 401)
+        self.assertEqual(self.client.delete(schedule_url(self.schedule.id)).status_code, 401)
+        self.assertTrue(Schedule.objects.filter(id=self.schedule.id).exists())

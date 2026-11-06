@@ -1,8 +1,10 @@
 from pathlib import Path
 
+from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import NotFound
 
-from .models import Document, InterpretationResult
+from .models import Document, InterpretationResult, Schedule
 
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'pdf'}
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -132,3 +134,108 @@ class DocumentResultSerializer(serializers.ModelSerializer):
             'maskedCount', 'lowConfidence',
         ]
         read_only_fields = fields
+
+
+def get_result(document):
+    """문서의 해석 결과. 없으면 None."""
+    return document.result if hasattr(document, 'result') else None
+
+
+def find_deadline_label(document, date):
+    """해석 결과 deadlines에서 date와 같은 첫 항목의 label. 해당 날짜가 없으면 None."""
+    result = get_result(document)
+    if result is None:
+        return None
+    for deadline in result.deadlines or []:
+        if isinstance(deadline, dict) and deadline.get('date') == date.isoformat():
+            return deadline.get('label') or ''
+    return None
+
+
+class ScheduleSerializer(serializers.ModelSerializer):
+    """일정 응답 형식. isOverdue·daysLeft는 한국 날짜(timezone.localdate) 기준이다."""
+
+    scheduleId = serializers.IntegerField(source='id', read_only=True)
+    documentId = serializers.IntegerField(source='document_id', read_only=True)
+    documentTitle = serializers.CharField(source='document.title', read_only=True)
+    doneAt = serializers.DateTimeField(source='done_at', read_only=True, allow_null=True)
+    isOverdue = serializers.SerializerMethodField(help_text='미완료이고 마감일이 오늘보다 이전이면 true')
+    daysLeft = serializers.SerializerMethodField(help_text='마감일 - 오늘. 0이면 오늘 마감, 음수면 지난 일수')
+    agency = serializers.SerializerMethodField(help_text='문서 해석 결과의 담당 기관. 없으면 null')
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
+
+    class Meta:
+        model = Schedule
+        fields = [
+            'scheduleId', 'documentId', 'documentTitle', 'title', 'date', 'done', 'doneAt',
+            'isOverdue', 'daysLeft', 'agency', 'createdAt', 'updatedAt',
+        ]
+        read_only_fields = fields
+
+    def get_isOverdue(self, instance) -> bool:
+        return not instance.done and instance.date < timezone.localdate()
+
+    def get_daysLeft(self, instance) -> int:
+        return (instance.date - timezone.localdate()).days
+
+    def get_agency(self, instance) -> dict | None:
+        result = get_result(instance.document)
+        return (result.agency or None) if result is not None else None
+
+
+class ScheduleCreateSerializer(serializers.Serializer):
+    documentId = serializers.IntegerField(help_text='본인 소유의 DONE 문서 ID')
+    date = serializers.DateField(help_text='해석 결과 deadlines의 date 중 하나 (YYYY-MM-DD)')
+    title = serializers.CharField(
+        required=False, allow_blank=True, max_length=200,
+        help_text='업무명. 비우면 "마감 항목 label - 문서 제목"으로 만든다',
+    )
+
+    def validate_documentId(self, value):
+        user = self.context['request'].user
+        document = Document.objects.select_related('result').filter(pk=value, owner=user).first()
+        if document is None:
+            # 타인 문서와 없는 문서는 다른 조회 API처럼 같은 404로 응답한다.
+            raise NotFound()
+        if document.status != Document.Status.DONE:
+            raise serializers.ValidationError('해석이 완료된 문서만 일정으로 등록할 수 있습니다.')
+        return document
+
+    def validate(self, attrs):
+        document = attrs['documentId']
+        label = find_deadline_label(document, attrs['date'])
+        if label is None:
+            raise serializers.ValidationError({'date': ['문서의 마감일 중 하나를 선택하세요.']})
+        title = attrs.get('title', '').strip()
+        if not title:
+            title = ' - '.join(part for part in (label, document.title) if part) or '등록한 행정업무'
+        return {'document': document, 'date': attrs['date'], 'title': title[:200]}
+
+
+class ScheduleUpdateSerializer(serializers.Serializer):
+    done = serializers.BooleanField(help_text='완료 여부. true면 완료 시각을 기록하고 false면 비운다')
+
+    def to_internal_value(self, data):
+        unknown = sorted(set(data) - set(self.fields)) if isinstance(data, dict) else []
+        if unknown:
+            raise serializers.ValidationError({name: ['수정할 수 없는 필드입니다.'] for name in unknown})
+        return super().to_internal_value(data)
+
+    def update(self, instance, validated_data):
+        done = validated_data['done']
+        if not done:
+            instance.done_at = None
+        elif not instance.done:
+            # 이미 완료된 일정을 다시 완료로 보내면 처음 완료한 시각을 유지한다.
+            instance.done_at = timezone.now()
+        instance.done = done
+        instance.save(update_fields=['done', 'done_at', 'updated_at'])
+        return instance
+
+
+class ScheduleConflictSerializer(serializers.Serializer):
+    """중복 일정 409 응답의 명세."""
+
+    detail = serializers.CharField()
+    scheduleId = serializers.IntegerField(help_text='이미 등록된 일정 ID')

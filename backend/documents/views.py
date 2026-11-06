@@ -1,7 +1,8 @@
 import logging
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import Http404
+from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import generics, status
@@ -15,11 +16,12 @@ from core.pagination import StandardPagination
 from core.permissions import IsOwner
 from core.schema import error_response
 
-from .models import Document, InterpretationResult
+from .models import Document, InterpretationResult, Schedule
 from .serializers import (
     DocumentDetailSerializer, DocumentListSerializer, DocumentNotReadySerializer,
     DocumentResultSerializer, DocumentStatusResponseSerializer, DocumentStatusSerializer,
-    DocumentUploadResponseSerializer, DocumentUploadSerializer,
+    DocumentUploadResponseSerializer, DocumentUploadSerializer, ScheduleConflictSerializer,
+    ScheduleCreateSerializer, ScheduleSerializer, ScheduleUpdateSerializer,
 )
 from .services.runner import start_processing
 
@@ -276,3 +278,213 @@ class DocumentResultView(APIView):
                 'failReason': document.fail_reason,
             }
         return {'detail': '아직 처리 중입니다.', 'status': document.status, 'step': document.step}
+
+
+SCHEDULE_EXAMPLE = {
+    'scheduleId': 7, 'documentId': 123, 'documentTitle': '주민세 납부 안내',
+    'title': '납부 마감 - 주민세 납부 안내', 'date': '2026-08-31', 'done': False, 'doneAt': None,
+    'isOverdue': False, 'daysLeft': 12,
+    'agency': {'name': '아산시청 세무과', 'phone': '041-000-0000', 'source': 'document'},
+    'createdAt': '2026-08-19T09:00:00+09:00', 'updatedAt': '2026-08-19T09:00:00+09:00',
+}
+SCHEDULE_PK_PARAMETER = OpenApiParameter('pk', int, OpenApiParameter.PATH, description='일정 ID')
+BOOLEAN_VALUES = {'true': True, 'false': False}
+
+
+def parse_boolean_param(params, name):
+    """true/false 쿼리 값을 bool로 바꾼다. 없으면 None, 그 외 값은 400."""
+    value = params.get(name)
+    if value is None:
+        return None
+    if value.lower() not in BOOLEAN_VALUES:
+        raise ValidationError({name: ['true 또는 false를 입력하세요.']})
+    return BOOLEAN_VALUES[value.lower()]
+
+
+@extend_schema_view(get=extend_schema(
+    operation_id='schedule_list',
+    summary='내 일정 목록 조회',
+    description=(
+        '현재 사용자의 일정을 마감일이 가까운 순(date 오름차순, ID 오름차순)으로 반환합니다. '
+        '기본 20개·최대 100개입니다. isOverdue·daysLeft는 한국 날짜 기준입니다. '
+        'overdue=true는 미완료이면서 마감일이 오늘보다 이전인 일정만, overdue=false는 그 외 일정만 반환합니다.'
+    ),
+    parameters=[
+        OpenApiParameter('done', bool, description='완료 여부 필터 (true/false)'),
+        OpenApiParameter('overdue', bool, description='마감 경과 필터 (true/false)'),
+        OpenApiParameter('page', int, description='페이지 번호'),
+        OpenApiParameter('page_size', int, description='기본 20, 최대 100'),
+    ],
+    responses={
+        200: ScheduleSerializer(many=True),
+        400: error_response('VALIDATION_ERROR: done·overdue 값이 true/false가 아님'),
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 없는 페이지'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+    },
+    examples=[
+        OpenApiExample('내 일정 목록', value={
+            'count': 1, 'next': None, 'previous': None, 'results': [SCHEDULE_EXAMPLE],
+        }, response_only=True, status_codes=['200']),
+        OpenApiExample('필터 검증 오류', value={
+            'code': 'VALIDATION_ERROR', 'message': '입력값을 확인해 주세요.',
+            'details': {'done': ['true 또는 false를 입력하세요.']},
+        }, response_only=True, status_codes=['400']),
+    ],
+    tags=['일정'],
+), post=extend_schema(
+    operation_id='schedule_create',
+    summary='일정 등록',
+    description=(
+        '해석이 끝난(DONE) 본인 문서의 마감일 하나를 일정으로 등록합니다. '
+        'date는 결과 조회 API deadlines의 date 중 하나여야 합니다. '
+        'title을 비우면 "마감 항목 label - 문서 제목"으로 만듭니다. '
+        '같은 문서·날짜·업무명 일정이 이미 있으면 409와 기존 scheduleId를 반환합니다. '
+        '타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
+    ),
+    request=ScheduleCreateSerializer,
+    responses={
+        201: ScheduleSerializer,
+        400: error_response('VALIDATION_ERROR: 필드 누락, 처리 전 문서, deadlines에 없는 날짜'),
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 접근 가능한 문서가 없음'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        409: ScheduleConflictSerializer,
+    },
+    examples=[
+        OpenApiExample('마감일 등록', value={'documentId': 123, 'date': '2026-08-31'}, request_only=True),
+        OpenApiExample('등록 완료', value=SCHEDULE_EXAMPLE, response_only=True, status_codes=['201']),
+        OpenApiExample('처리 전 문서', value={
+            'code': 'VALIDATION_ERROR', 'message': '입력값을 확인해 주세요.',
+            'details': {'documentId': ['해석이 완료된 문서만 일정으로 등록할 수 있습니다.']},
+        }, response_only=True, status_codes=['400']),
+        OpenApiExample('중복 일정', value={'detail': '이미 등록된 일정입니다.', 'scheduleId': 7},
+                       response_only=True, status_codes=['409']),
+    ],
+    tags=['일정'],
+))
+class ScheduleListCreateView(generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return ScheduleCreateSerializer
+        return ScheduleSerializer
+
+    def get_queryset(self):
+        queryset = (
+            Schedule.objects.filter(owner=self.request.user)
+            .select_related('document', 'document__result')
+            .order_by('date', 'id')
+        )
+        done = parse_boolean_param(self.request.query_params, 'done')
+        overdue = parse_boolean_param(self.request.query_params, 'overdue')
+        if done is not None:
+            queryset = queryset.filter(done=done)
+        if overdue is not None:
+            overdue_filter = {'done': False, 'date__lt': timezone.localdate()}
+            queryset = queryset.filter(**overdue_filter) if overdue else queryset.exclude(**overdue_filter)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fields = {'owner': request.user, **serializer.validated_data}
+        existing = Schedule.objects.filter(**fields).first()
+        if existing is None:
+            try:
+                with transaction.atomic():
+                    schedule = Schedule.objects.create(**fields)
+            except IntegrityError:
+                # 동시에 같은 일정을 등록해 고유 제약에 걸리면 먼저 저장된 일정으로 409를 돌려준다.
+                existing = Schedule.objects.filter(**fields).first()
+                if existing is None:
+                    raise
+            else:
+                return Response(ScheduleSerializer(schedule).data, status=status.HTTP_201_CREATED)
+        return Response(
+            {'detail': '이미 등록된 일정입니다.', 'scheduleId': existing.id},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+
+@extend_schema_view(
+    get=extend_schema(
+        operation_id='schedule_detail',
+        summary='내 일정 상세 조회',
+        description='현재 사용자 소유 일정을 반환합니다. 타인 일정과 없는 일정은 동일하게 404를 반환합니다.',
+        parameters=[SCHEDULE_PK_PARAMETER],
+        responses={
+            200: ScheduleSerializer,
+            401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+            403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+            404: error_response('NOT_FOUND: 접근 가능한 일정이 없음'),
+            405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        },
+        examples=[OpenApiExample('미완료 일정', value=SCHEDULE_EXAMPLE, response_only=True, status_codes=['200'])],
+        tags=['일정'],
+    ),
+    patch=extend_schema(
+        operation_id='schedule_update',
+        summary='일정 완료 처리',
+        description=(
+            'done만 수정할 수 있습니다. true면 완료 시각(doneAt)을 기록하고, '
+            '이미 완료된 일정이면 처음 완료 시각을 유지합니다. false면 doneAt을 비웁니다. '
+            '다른 필드를 보내면 400을 반환합니다.'
+        ),
+        parameters=[SCHEDULE_PK_PARAMETER],
+        request=ScheduleUpdateSerializer,
+        responses={
+            200: ScheduleSerializer,
+            400: error_response('VALIDATION_ERROR: done 누락·형식 오류 또는 수정할 수 없는 필드'),
+            401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+            403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+            404: error_response('NOT_FOUND: 접근 가능한 일정이 없음'),
+            405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        },
+        examples=[
+            OpenApiExample('완료 처리', value={'done': True}, request_only=True),
+            OpenApiExample('완료된 일정', value={
+                **SCHEDULE_EXAMPLE, 'done': True, 'doneAt': '2026-08-20T10:30:00+09:00',
+                'updatedAt': '2026-08-20T10:30:00+09:00',
+            }, response_only=True, status_codes=['200']),
+            OpenApiExample('수정할 수 없는 필드', value={
+                'code': 'VALIDATION_ERROR', 'message': '입력값을 확인해 주세요.',
+                'details': {'date': ['수정할 수 없는 필드입니다.']},
+            }, response_only=True, status_codes=['400']),
+        ],
+        tags=['일정'],
+    ),
+    delete=extend_schema(
+        operation_id='schedule_delete',
+        summary='내 일정 삭제',
+        description='현재 사용자 소유 일정을 삭제합니다. 문서는 그대로 둡니다. 타인 일정과 없는 일정은 동일하게 404를 반환합니다.',
+        parameters=[SCHEDULE_PK_PARAMETER],
+        responses={
+            204: None,
+            401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+            403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+            404: error_response('NOT_FOUND: 접근 가능한 일정이 없음'),
+            405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        },
+        tags=['일정'],
+    ),
+)
+class ScheduleDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsOwner]
+    serializer_class = ScheduleSerializer
+    # 수정은 완료 여부만 바꾸는 PATCH로 제한한다.
+    http_method_names = ['get', 'patch', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        return Schedule.objects.filter(owner=self.request.user).select_related('document', 'document__result')
+
+    def update(self, request, *args, **kwargs):
+        schedule = self.get_object()
+        serializer = ScheduleUpdateSerializer(schedule, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ScheduleSerializer(schedule).data)
