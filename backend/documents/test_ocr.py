@@ -379,6 +379,10 @@ class RunClovaOcrTests(ClovaTestCase):
             [{**success, 'fields': [field('글자', None)]}],
             [{**success, 'fields': [field('글자', '0.9')]}],
             [{**success, 'fields': [{'inferText': '글자'}]}],
+            [{**success, 'fields': [field('글자', True)]}],
+            [{**success, 'fields': [field('글자', float('nan'))]}],
+            [{**success, 'fields': [field(None)]}],
+            [{**success, 'fields': [field(123)]}],
         ):
             with self.subTest(images=images):
                 self.post.return_value = clova_response(images)

@@ -68,7 +68,11 @@ def validate_images(data):
         if not isinstance(image, dict) or not isinstance(image.get('fields', []), list):
             sys.exit('응답 형식이 올바르지 않습니다.')
         for field in image.get('fields', []):
-            if not isinstance(field, dict) or not isinstance(field.get('inferConfidence'), (int, float)):
+            if (
+                not isinstance(field, dict)
+                or not isinstance(field.get('inferText'), str)
+                or not isinstance(field.get('inferConfidence'), (int, float))
+            ):
                 sys.exit('응답 형식이 올바르지 않습니다.')
     return data['images']
 

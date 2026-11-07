@@ -8,6 +8,7 @@ OCR 원문과 Secret Key, Invoke URL은 로그에 남기지 않는다. pipeline�
 """
 
 import base64
+import math
 import re
 import time
 import uuid
@@ -62,7 +63,11 @@ def _validate_images(images):
         if not isinstance(fields, list):
             raise invalid
         for field in fields:
-            if not isinstance(field, dict) or not isinstance(field.get('inferConfidence'), (int, float)):
+            if not isinstance(field, dict) or not isinstance(field.get('inferText'), str):
+                raise invalid
+            confidence = field.get('inferConfidence')
+            # bool은 int의 하위 타입이고, NaN은 비교가 항상 거짓이라 저신뢰 판정을 끌 수 있다.
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
                 raise invalid
 
 
