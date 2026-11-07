@@ -50,7 +50,7 @@ ADDRESS_PATTERN = re.compile(r'(주소\s*[:：]\s*)[^\n]+')
 
 
 def run_ocr(document):
-    """문서 파일에서 글자를 읽는다. (더미)
+    """문서 파일에서 글자를 읽는다. OCR_MODE가 dummy면 더미, clova면 CLOVA OCR을 쓴다.
 
     입력: document (Document) — document.file, document.file_type 사용
     출력: {
@@ -58,7 +58,14 @@ def run_ocr(document):
         "confidence": float,  # 0~1, 핵심 항목(기한·금액·기관명) 기준 신뢰도
     }
     """
-    return {'text': DUMMY_OCR_TEXT, 'confidence': 0.92}
+    mode = getattr(settings, 'OCR_MODE', 'dummy')
+    if mode == 'dummy':
+        return {'text': DUMMY_OCR_TEXT, 'confidence': 0.92}
+    if mode == 'clova':
+        from .ocr import run_clova_ocr
+
+        return run_clova_ocr(document)
+    raise ValueError('지원하지 않는 OCR_MODE입니다.')
 
 
 def mask_personal_info(text):
