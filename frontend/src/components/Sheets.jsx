@@ -9,8 +9,9 @@ import { useState } from 'react'
 import { Sheet, Badge } from './ui.jsx'
 
 /** 공식 근거 자료 카드: 기관, 제목, 확인일, 기준일, 원문 링크 */
-export function SourceCard({ id, doc }) {
-  const s = getSource(doc, id)
+/** 근거 자료 카드. id로 문서의 출처를 찾거나, 챗봇 답변처럼 출처 객체(source)를 바로 받는다. */
+export function SourceCard({ id, doc, source }) {
+  const s = source ?? getSource(doc, id)
   if (!s) return null
   return (
     <div className="source-card">
@@ -127,13 +128,17 @@ function EvidenceSheet({ docId, itemId }) {
 }
 
 /** 챗봇 답변 근거 자료 목록 시트 */
-function SourceSheet({ ids, docId }) {
+/** 답변 근거 시트. ids는 문서 출처 키, items는 서버 챗봇 답변에 담겨 온 출처 */
+function SourceSheet({ ids = [], items = [], docId }) {
   const { setSheet, data } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
   return (
     <Sheet title="답변 근거" onClose={() => setSheet(null)}>
       {ids.map((id) => (
         <SourceCard key={id} id={id} doc={doc} />
+      ))}
+      {items.map((item, i) => (
+        <SourceCard key={`${item.url}-${i}`} source={item} />
       ))}
     </Sheet>
   )

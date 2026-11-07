@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck } from 'lucide-react'
-import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc } from '../store.js'
+import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, isVisibleSchedule } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
 
@@ -60,6 +60,13 @@ export default function Result({ docId }) {
   const label = (code) => (code === 'ko' ? '한국어(쉬운 말)' : LANGS.find((l) => l.code === code)?.label)
   const openTerm = (term) => setSheet({ type: 'term', payload: { term } })
   const openEvidence = (itemId) => setSheet({ type: 'evidence', payload: { docId, itemId } })
+
+  // 서버 문서의 마감일(같은 날짜는 하나로)과, 지금 계정에 보이는 일정 중 그 마감일에 등록된 것
+  const deadlineDates = doc.source === 'api' ? [...new Set((doc.deadlines ?? []).map((x) => x?.date).filter(Boolean))] : []
+  const docSchedules = data.schedules.filter((x) => x.docId === docId && isVisibleSchedule(x, data.user))
+  const registered = deadlineDates.map((date) => docSchedules.find((x) => x.date === date)).filter(Boolean)
+  // 모두 등록됐으면 아직 끝나지 않은 가장 가까운 일정을 보여준다
+  const nextRegistered = [...registered].sort((a, b) => Number(a.done) - Number(b.done) || a.date.localeCompare(b.date))[0]
 
   return (
     <>
@@ -212,20 +219,18 @@ export default function Result({ docId }) {
           <MessageCircle size={18} /> 질문하기
         </button>
         {/* 유저 플로우 n34: 절차 정보가 충분하면 체크리스트, 아니면 담당기관 안내 */}
-        {doc.source === 'api' && doc.deadlines?.length > 0 ? (
-          // 서버 문서는 체크리스트(A6) 연결 전까지 마감일 일정 등록으로 바로 이어준다
-          (() => {
-            const existing = data.schedules.find((x) => x.docId === docId && doc.deadlines.some((dl) => dl.date === x.date))
-            return existing ? (
-              <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: existing.id })}>
-                <CalendarCheck size={18} /> 등록된 일정 보기
-              </button>
-            ) : (
-              <button className="btn btn-primary" onClick={() => nav('scheduleNew', { docId })}>
-                <CalendarPlus size={18} /> 마감일 일정 등록
-              </button>
-            )
-          })()
+        {doc.source === 'api' && deadlineDates.length > 0 ? (
+          // 서버 문서는 체크리스트(A6) 연결 전까지 마감일 일정 등록으로 바로 이어준다.
+          // 마감일이 여러 개면 모두 등록됐을 때만 "등록된 일정 보기", 하나라도 남았으면 등록으로 보낸다
+          registered.length === deadlineDates.length ? (
+            <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: nextRegistered.id })}>
+              <CalendarCheck size={18} /> 등록된 일정 보기
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={() => nav('scheduleNew', { docId })}>
+              <CalendarPlus size={18} /> {registered.length ? '남은 마감일 등록' : '마감일 일정 등록'}
+            </button>
+          )
         ) : doc.checklist.length > 0 ? (
           <button className="btn btn-primary" onClick={() => nav('checklist', { docId })}>
             <ListChecks size={18} /> 할 일 체크리스트

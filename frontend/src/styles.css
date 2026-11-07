@@ -2181,6 +2181,100 @@ ol {
   background: #c3ccd3;
 }
 
+/* 챗봇 서버 연동: 불일치 답변, 이력 불러오기, 실패한 질문 */
+.is-mismatch .bubble {
+  background: var(--amber-soft);
+  border-color: var(--amber);
+}
+.mismatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--amber);
+}
+.mini-agency-text {
+  margin: 0 0 4px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.chat-blocked {
+  margin-top: 16px;
+}
+.chat-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 4px 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.chat-retry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--slate-soft);
+}
+.chat-retry p {
+  margin: 0;
+  font-size: 14px;
+}
+.chat-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 16px;
+  padding: 10px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--line);
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+.chat-more:disabled {
+  color: var(--muted);
+}
+.chat-slow {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+  white-space: normal;
+}
+.msg.is-failed {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.is-failed .bubble {
+  opacity: 0.6;
+}
+.msg-error {
+  max-width: 86%;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--seal-soft);
+  color: var(--seal);
+  font-size: 13.5px;
+}
+.msg-error p {
+  margin: 0 0 8px;
+}
+.suggestions .chip:disabled {
+  opacity: 0.5;
+}
+.chat-note {
+  margin: 16px 4px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
 /* ── 일정 ── */
 .sched-list {
   display: grid;
