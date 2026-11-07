@@ -25,14 +25,18 @@ log = logging.getLogger(__name__)
 
 
 def _has_current_chunks(document_id: int, content_hash: str, dim: int) -> bool:
-    """현재 본문 해시로 만든 청크가 있고 모두 현재 임베딩 차원인지."""
+    """현재 본문 해시 + 현재 임베딩 차원으로 만든 청크가 있는지.
+
+    청크 묶음은 자료 하나 단위로 한 트랜잭션에 저장되므로, 차원이 맞는 청크가 하나라도 있으면 묶음 전체가 있다.
+    임베딩 모델을 바꾼 뒤 남은 옛 차원 청크(같은 해시)는 삭제하지 않으므로 '모두 맞는지'로 보면 매번 다시 만들게 된다.
+    """
     from sources.models import SourceChunk
 
-    embeddings = list(
+    embeddings = (
         SourceChunk.objects.filter(source_document_id=document_id, source_content_hash=content_hash)
         .values_list("embedding", flat=True)
     )
-    return bool(embeddings) and all(isinstance(e, list) and len(e) == dim for e in embeddings)
+    return any(isinstance(e, list) and len(e) == dim for e in embeddings)
 
 
 def _complete_reprocessing(document_id: int, content_hash: str) -> bool:

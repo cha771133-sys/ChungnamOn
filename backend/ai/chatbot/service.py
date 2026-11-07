@@ -18,6 +18,9 @@ from .retriever import SearchResult, search
 
 log = logging.getLogger(__name__)
 
+# 공식/참고 자료를 나눌 때 먼저 검색하는 양 (top_k의 몇 배)
+SPLIT_SEARCH_FACTOR = 4
+
 
 class GroundingStatus(str, Enum):
     GROUNDED = "GROUNDED"      # 근거 기반: 공식 자료가 답을 뒷받침함
@@ -211,12 +214,15 @@ def answer_with_results(
 
     regions = regions_for(doc)
     query = _search_query(doc, message, lang, history_msgs)
-    results = search(query, regions=regions)
+    k = get_settings().top_k
     if official_ids is None:
-        official, reference = results, []
+        official, reference = search(query, regions=regions), []
     else:
-        official = [r for r in results if r.source_document_id in official_ids]
-        reference = [r for r in results if r.source_document_id not in official_ids]
+        # 상위 k개를 먼저 자르면 연결 안 된 자료가 칸을 다 차지해 공식 자료가 밀려날 수 있음.
+        # 넉넉히 검색해서 나눈 뒤 그룹마다 k개로 자름
+        results = search(query, regions=regions, top_k=k * SPLIT_SEARCH_FACTOR)
+        official = [r for r in results if r.source_document_id in official_ids][:k]
+        reference = [r for r in results if r.source_document_id not in official_ids][:k]
     # 검색어에는 질문 내용이 들어 있어서 로그에 남기지 않음
     log.info("챗봇 검색: 지역=%s 공식=%d 참고=%d", regions, len(official), len(reference))
 

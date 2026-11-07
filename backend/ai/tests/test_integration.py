@@ -128,11 +128,21 @@ class BuildSourceChunksTests(AIEnvMixin, TestCase):
         from ai.chatbot import build_source_chunks
         from sources.models import SourceChunk
 
+        from ai.chatbot.retriever import search
+
         doc = self.source("a")
         SourceChunk.objects.filter(source_document=doc).update(embedding=[0.1] * 768)
         self.assertEqual(build_source_chunks()["documents"], 1)
         dims = sorted(len(e) for e in SourceChunk.objects.filter(source_document=doc).values_list("embedding", flat=True))
         self.assertEqual(dims, [768, 1024])  # 이전 임베딩은 보존, 검색은 차원이 맞는 것만
+
+        # 다시 실행해도 옛 차원 청크 때문에 또 만들지 않음 (CodeRabbit: 반복 실행 시 중복 생성)
+        for _ in range(2):
+            with mock.patch("ai.chatbot.indexing.embed_passages") as embed:
+                self.assertEqual(build_source_chunks(), {**STATS0, "skipped": 1})
+            embed.assert_not_called()
+        self.assertEqual(SourceChunk.objects.filter(source_document=doc).count(), 2)
+        self.assertEqual(len(search("주민세", regions=["아산시"], top_k=10, min_score=-1)), 1)  # 중복 없이 1개
 
     def test_reprocessing_completed_with_hash_check_but_not_activated(self):
         from ai.chatbot import build_source_chunks
@@ -348,6 +358,22 @@ class ChatAnswerTests(AIEnvMixin, TestCase):
         self.assertIn("[공식 자료]\n(검색된 공식 자료 없음)", prompt)
         self.assertIn("R1 | 연결 안 된 자료", prompt)
         self.assertEqual(hint["source_ids"], [])
+
+    def test_official_source_not_pushed_out_by_unlinked_results(self):
+        """연결 안 된 자료가 상위 top_k를 다 차지해도 연결된 공식 자료가 [공식 자료]에 들어감 (CodeRabbit)."""
+        from ai.chatbot.config import get_settings
+
+        k = get_settings().top_k
+        # 질문과 똑같은 본문이라 점수가 더 높은 '연결 안 된' 자료 k개 + 덜 비슷한 '연결된' 자료 1개
+        question = "주민세 납부 기간이 언제예요?"
+        for i in range(k):
+            self.source(f"other{i}", title=f"연결 안 된 자료 {i}", text=question)
+        linked = self.source("linked", title="연결된 자료", text="# 주민세\n아산시 주민세 납부 안내입니다. " + "세무과 문의. " * 5)
+        prompt, hint, _ = self._prompt(self.official(linked))
+        official_part, reference_part = prompt.split("[참고 자료 — 공식 출처로 표시 불가]")
+        self.assertIn("S1 | 연결된 자료", official_part)
+        self.assertEqual(hint["source_ids"], ["S1"])
+        self.assertLessEqual(reference_part.count("| 연결 안 된 자료"), k)  # 참고 자료도 k개까지만
 
     def test_reference_numbers_are_never_sources(self):
         linked = self.source("linked", title="연결된 자료")
