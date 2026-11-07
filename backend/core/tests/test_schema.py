@@ -125,6 +125,7 @@ class OpenAPITests(APISimpleTestCase):
                     self.assertEqual(set(error['properties']), {'code', 'message', 'details'})
 
     def test_profile_patch_documents_only_editable_fields(self):
+        """프로필 수정 필드·오류 형식과 입력·응답의 국적 ZZ 설명을 문서화한다."""
         operation = self.schema['paths']['/api/auth/me/']['patch']
         request = self.dereference(operation['requestBody']['content']['application/json']['schema'])
         self.assertEqual(set(request['properties']), {'language', 'nationality', 'visaType'})

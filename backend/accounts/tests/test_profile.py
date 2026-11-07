@@ -89,6 +89,7 @@ class ProfileTests(APITestCase):
         })
 
     def test_other_nationality_completes_initial_setup_and_is_preserved(self):
+        """기타 국적 ZZ로 최초 설정을 완료하고 저장·조회에서 같은 값을 유지한다."""
         response = self.patch_profile({**PROFILE, 'nationality': 'ZZ'})
         self.assertEqual(response.status_code, 200)
         expected = {
@@ -100,6 +101,7 @@ class ProfileTests(APITestCase):
         self.assertEqual(UserProfile.objects.get(user=self.user).nationality, 'ZZ')
 
     def test_completed_profile_can_switch_between_other_and_country_code(self):
+        """완료된 프로필의 국적을 국가 코드와 ZZ 사이에서 부분 수정할 수 있다."""
         self.complete_profile()
         for nationality in ('ZZ', 'VN'):
             with self.subTest(nationality=nationality):
@@ -115,6 +117,7 @@ class ProfileTests(APITestCase):
         self.assertEqual(UserProfile.objects.count(), 1)
 
     def test_invalid_codes_are_rejected_before_setup(self):
+        """소문자 zz를 포함한 잘못된 코드를 거절하고 프로필을 생성하지 않는다."""
         for field, value in (
             ('language', 'xx'), ('nationality', 'Vietnam'), ('nationality', 'vn'),
             ('nationality', 'zz'), ('nationality', '1!'), ('visaType', 'invalid'),

@@ -75,6 +75,7 @@ class AuthIntegrationTests(APITestCase):
 
     @override_settings(DOCUMENTS_PROCESS_SYNC=True, DOCUMENTS_STEP_DELAY=0)
     def test_registration_profile_document_rotation_and_logout_flow(self):
+        """회원가입부터 JWT 갱신·로그아웃까지 국적 ZZ와 소유자 권한을 보존한다."""
         # 공개 인증 API는 만료된 Access 헤더와 무관하게 본문의 인증 정보를 사용한다.
         self.client.credentials(HTTP_AUTHORIZATION='Bearer stale-access')
         credentials = {'email': 'new@example.com', 'password': 'Bamboo!River8042'}
