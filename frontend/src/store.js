@@ -1,11 +1,31 @@
 import { createContext, useContext } from 'react'
 import { SOURCES } from './data/mock.js'
 import { tokenStore } from './lib/api'
+import { nearestDeadline } from './lib/documentAdapter.js'
 
 export const Ctx = createContext(null)
 export const useApp = () => useContext(Ctx)
 
 export const CONTENT_LANGS = ['vi', 'en', 'ko']
+
+/**
+ * 문서의 대표 마감일. 서버 문서는 저장된 값이 아니라 마감일 목록으로 볼 때마다 다시 계산한다
+ * (날짜가 바뀌어 지난 마감일이 생기면 다음 마감일로 넘어가도록).
+ */
+export function docDeadline(doc) {
+  if (doc?.source === 'api' && Array.isArray(doc.deadlines)) return nearestDeadline(doc.deadlines)
+  return doc?.deadline ?? null
+}
+
+/** 외부 링크는 http·https 주소만 연다. 그 밖의 값(javascript: 등)이면 null */
+export function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value ?? ''))
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null
+  } catch {
+    return null
+  }
+}
 
 /** 기기 기준 오늘 0시. 앱을 켜 둔 채 날짜가 바뀌어도 맞도록 부를 때마다 새로 계산한다. */
 export function startOfToday() {

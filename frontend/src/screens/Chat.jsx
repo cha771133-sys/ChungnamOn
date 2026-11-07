@@ -14,6 +14,9 @@ const MAX_QUESTION = 2000
 /** 이 시간이 지나도 답이 없으면 "공식 자료를 찾는 중" 안내를 보여준다 */
 const SLOW_AFTER = 12000
 
+/** 기기에 저장된 문서 상태(done·failed·processing)를 서버 상태 이름으로 맞춘다 */
+const LOCAL_STATUS = { done: 'DONE', failed: 'FAILED', processing: 'PROCESSING' }
+
 /** 움직임 줄이기 설정이면 글자 스트리밍 효과를 쓰지 않는다 */
 function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
@@ -147,7 +150,7 @@ function ServerChat({ docId }) {
       .finally(() => aliveRef.current && setLoadingMore(false))
   }
 
-  const status = meta?.status ?? (local?.status === 'done' ? 'DONE' : local ? 'PROCESSING' : null)
+  const status = meta?.status ?? (local ? (LOCAL_STATUS[local.status] ?? 'PROCESSING') : null)
   const lowConfidence = meta?.lowConfidence ?? local?.lowConfidence ?? false
   const blocked = notReady || lowConfidence || (status != null && status !== 'DONE')
   const busy = Boolean(pending) || Boolean(reveal)

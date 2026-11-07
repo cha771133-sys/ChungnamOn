@@ -73,7 +73,7 @@ const STARTERS = {
 export function starterQuestions(lang, doc) {
   const [todo, deadline, papers, contact] = STARTERS[lang] ?? STARTERS.en
   const list = [todo]
-  if (!doc || doc.deadline) list.push(deadline)
+  if (!doc || doc.deadline || doc.deadlines?.length) list.push(deadline)
   if (!doc || doc.requiredDocs?.length) list.push(papers)
   list.push(contact)
   return list

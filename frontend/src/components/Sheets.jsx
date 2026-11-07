@@ -1,5 +1,5 @@
 import { Check, ExternalLink, Share, PlusSquare, Download, Building2 } from 'lucide-react'
-import { useApp, fmtDate, pick, getSource, removeDocLocally } from '../store.js'
+import { useApp, fmtDate, pick, getSource, removeDocLocally, safeHttpUrl } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { t, uiLang } from '../i18n.js'
 import { updateMe, hasSession } from '../lib/auth'
@@ -28,9 +28,11 @@ export function SourceCard({ id, doc, source }) {
         </div>
       </dl>
       {!s.publishedAt && <p className="hint">자료에 기준일이 없어 최신 정보인지 판단하기 어려워요.</p>}
-      <a className="link-btn" href={s.url} target="_blank" rel="noreferrer">
-        원문 페이지 열기 <ExternalLink size={14} />
-      </a>
+      {safeHttpUrl(s.url) && (
+        <a className="link-btn" href={safeHttpUrl(s.url)} target="_blank" rel="noreferrer">
+          원문 페이지 열기 <ExternalLink size={14} />
+        </a>
+      )}
     </div>
   )
 }

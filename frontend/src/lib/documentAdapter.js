@@ -77,7 +77,7 @@ export function adaptResult(raw, meta) {
     maskedCount: raw.maskedCount ?? 0,
     lowConfidence: Boolean(raw.lowConfidence),
     sender: { name: agency.name || '확인되지 않음' },
-    deadline: raw.deadlines?.[0]?.date ?? null,
+    deadline: nearestDeadline(raw.deadlines),
     deadlines: raw.deadlines ?? [],
     task: { [lang]: summary[0] ?? '' },
     requiredDocs: raw.requiredDocs ?? [],
@@ -106,6 +106,29 @@ export function adaptResult(raw, meta) {
     callScript: null,
     suggestedQuestions: [],
   }
+}
+
+/** YYYY-MM-DD 형식이면서 실제로 있는 날짜인지 (2026-13-01, 2026-02-30 등은 제외) */
+export function isCalendarDate(value) {
+  if (typeof value !== 'string') return false
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!m) return false
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const date = new Date(y, mo - 1, d)
+  return date.getFullYear() === y && date.getMonth() === mo - 1 && date.getDate() === d
+}
+
+/**
+ * 대표 마감일: 서버가 준 순서와 상관없이 오늘 이후 가장 가까운 날짜, 모두 지났으면 가장 최근에 지난 날짜.
+ */
+export function nearestDeadline(deadlines) {
+  const dates = (deadlines ?? [])
+    .map((d) => d?.date)
+    .filter(isCalendarDate)
+    .sort()
+  if (!dates.length) return null
+  const today = localToday()
+  return dates.find((d) => d >= today) ?? dates[dates.length - 1]
 }
 
 /** 서버 상태를 화면 상태로 바꾼다. */

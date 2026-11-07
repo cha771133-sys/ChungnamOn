@@ -5,6 +5,7 @@ import { TopBar, TabBar, Toggle, Empty } from '../components/ui.jsx'
 import { useServerSchedules } from '../lib/useServerSchedules.js'
 import { createSchedule, deleteSchedule, getSchedule, updateSchedule, ScheduleExistsError } from '../lib/schedules'
 import { localScheduleId, mergeServerSchedules, serverScheduleId } from '../lib/scheduleAdapter.js'
+import { isCalendarDate } from '../lib/documentAdapter.js'
 import { parseApiError } from '../lib/api'
 
 /** 일정 카드 (목록·달력 공통) */
@@ -207,15 +208,18 @@ export function ScheduleNew({ docId }) {
   const doc = data.docs.find((d) => d.id === docId)
   const isServer = doc?.source === 'api'
   // 서버 문서는 마감일이 여러 개일 수 있다 (같은 날짜는 하나로)
+  // 서버가 준 순서와 상관없이 날짜순으로 보여주고, 가장 가까운 마감일을 기본으로 고른다
   const options = isServer
-    ? [...new Map((doc.deadlines ?? []).filter((x) => x?.date).map((x) => [x.date, x])).values()]
+    ? [...new Map((doc.deadlines ?? []).filter((x) => isCalendarDate(x?.date)).map((x) => [x.date, x])).values()].sort((a, b) => a.date.localeCompare(b.date))
     : doc?.deadline
       ? [{ label: '', date: doc.deadline }]
       : []
   // 이미 등록한 마감일 (지금 계정에 보이는 일정 기준). 기본 선택은 아직 등록하지 않은 가장 가까운 마감일
   const registeredDates = new Set(data.schedules.filter((s) => s.docId === docId && isVisibleSchedule(s, data.user)).map((s) => s.date))
   const openOptions = options.filter((o) => !registeredDates.has(o.date))
-  const firstUpcoming = openOptions.find((o) => dday(o.date) >= 0) ?? openOptions[0] ?? options.find((o) => dday(o.date) >= 0) ?? options[0]
+  // 오늘 이후 가장 가까운 날짜, 모두 지났으면 가장 최근에 지난 날짜 (대표 마감일과 같은 규칙)
+  const pickDefault = (list) => list.find((o) => dday(o.date) >= 0) ?? list[list.length - 1]
+  const firstUpcoming = pickDefault(openOptions) ?? pickDefault(options)
   const [date, setDate] = useState(firstUpcoming?.date ?? null)
   const [title, setTitle] = useState(doc && !isServer ? pick(doc.task, 'ko') || doc.title : '')
   const [remind, setRemind] = useState({ d7: true, d1: true })
