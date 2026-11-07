@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import APIException, NotAuthenticated
 
 from accounts.models import UserProfile
+from analytics.services.chat_events import observe_chat_answer
 from documents.models import Document, InterpretationResult
 from sources.models import SourceDocument
 from sources.services.errors import CollectionError
@@ -189,4 +190,6 @@ def _submit_question(user, document_id, data):
             raise DocumentNotReady()
         if _official_sources(interpretation, for_update=True) != sources:
             raise ChatServiceUnavailable()
-        return ChatMessage.objects.create(document=current, question=question, **answer)
+        message = ChatMessage.objects.create(document=current, question=question, **answer)
+        observe_chat_answer(message)
+        return message

@@ -57,6 +57,8 @@ INSTALLED_APPS = [
     'documents',
     'sources',
     'chatbot',
+    'notifications',
+    'analytics',
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -105,6 +107,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'analytics.middleware.ResultProvidedMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -222,3 +225,9 @@ CSRF_TRUSTED_ORIGINS = [
 CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
 # 문서 처리 파이프라인의 공식 자료 대조(verify). dummy(기본) | rag
 DOCUMENTS_VERIFY_MODE = os.environ.get('DOCUMENTS_VERIFY_MODE', 'dummy')
+
+# 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
+FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
+
+# B10: 운영 보관 기간 미확정. 자동 삭제를 실행하지 않으며 새 환경변수를 요구하지 않는다.
+KPI_EVENT_RETENTION_DAYS = None

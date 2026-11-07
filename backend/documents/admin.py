@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from chatbot.models import ChatMessage
 
-from .models import Document, InterpretationResult
+from .models import Document, InterpretationResult, Schedule
 
 
 @admin.register(Document)
@@ -21,3 +21,19 @@ class DocumentAdmin(admin.ModelAdmin):
 class InterpretationResultAdmin(admin.ModelAdmin):
     list_display = ('id', 'document', 'doc_type', 'title', 'language', 'created_at')
     list_select_related = ('document',)
+
+
+@admin.register(Schedule)
+class ScheduleAdmin(admin.ModelAdmin):
+    """조회 전용. 삭제 권한은 문서·사용자 삭제의 CASCADE가 막히지 않도록 기본값을 유지한다."""
+
+    list_display = ('id', 'owner', 'document', 'title', 'date', 'done', 'done_at', 'created_at')
+    list_filter = ('done', 'date')
+    list_select_related = ('owner', 'document')
+    readonly_fields = ('owner', 'document', 'title', 'date', 'done', 'done_at', 'created_at', 'updated_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

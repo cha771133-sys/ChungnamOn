@@ -79,3 +79,35 @@ class InterpretationResult(models.Model):
 
     def __str__(self):
         return f'{self.document_id} {self.title}'
+
+
+class Schedule(models.Model):
+    """해석 결과의 마감일 하나를 사용자가 등록한 일정. notifications 마감 알림의 대상이 된다."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='schedules',
+    )
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='schedules')
+    # 업무명
+    title = models.CharField(max_length=200)
+    # 마감일 (한국 날짜)
+    date = models.DateField()
+    done = models.BooleanField(default=False)
+    done_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['date', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner', 'document', 'date', 'title'],
+                name='unique_schedule_per_document_date_title',
+            ),
+        ]
+        indexes = [models.Index(fields=['owner', 'date'], name='schedule_owner_date_idx')]
+
+    def __str__(self):
+        return f'{self.id} {self.date} {self.title}'

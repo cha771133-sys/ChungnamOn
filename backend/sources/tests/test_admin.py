@@ -125,6 +125,7 @@ class SourcesAdminTests(TestCase):
             'title': '수정된 공식자료 제목', 'agency': self.document.agency,
             'region': self.document.region, 'category': self.document.category,
             'status': SourceDocument.Status.INACTIVE, 'published_at': '',
+            'expected_version': self.document.version,
             'source_url': 'https://example.com/tampered', 'content_hash': '변조',
             'collected_at': '2026-01-01 00:00:00',
             'chunks-TOTAL_FORMS': '1', 'chunks-INITIAL_FORMS': '1',

@@ -14,7 +14,19 @@ export const LANGS = [
   { code: 'ko', label: '한국어', ko: '한국어', flag: '🇰🇷' },
 ]
 
-export const NATIONALITIES = ['베트남', '중국', '우즈베키스탄', '네팔', '캄보디아', '필리핀', '태국', '인도네시아', '몽골', '기타']
+// 서버에는 영문 대문자 두 자리 코드로 저장한다 (기타는 ISO 미지정 코드 ZZ)
+export const NATIONALITIES = [
+  { code: 'VN', ko: '베트남' },
+  { code: 'CN', ko: '중국' },
+  { code: 'UZ', ko: '우즈베키스탄' },
+  { code: 'NP', ko: '네팔' },
+  { code: 'KH', ko: '캄보디아' },
+  { code: 'PH', ko: '필리핀' },
+  { code: 'TH', ko: '태국' },
+  { code: 'ID', ko: '인도네시아' },
+  { code: 'MN', ko: '몽골' },
+  { code: 'ZZ', ko: '기타' },
+]
 
 export const VISAS = [
   { code: 'E-9', label: 'E-9 비전문취업' },

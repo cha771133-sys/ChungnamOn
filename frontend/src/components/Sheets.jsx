@@ -1,10 +1,17 @@
 import { Check, ExternalLink, Share, PlusSquare, Download, Building2 } from 'lucide-react'
-import { useApp, fmtDate, pick } from '../store.js'
-import { LANGS, SOURCES } from '../data/mock.js'
+import { useApp, fmtDate, pick, getSource, removeDocLocally, safeHttpUrl } from '../store.js'
+import { LANGS } from '../data/mock.js'
+import { t, uiLang } from '../i18n.js'
+import { updateMe, hasSession } from '../lib/auth'
+import { deleteDocument } from '../lib/documents'
+import { parseApiError } from '../lib/api'
+import { useState } from 'react'
 import { Sheet, Badge } from './ui.jsx'
 
-export function SourceCard({ id }) {
-  const s = SOURCES[id]
+/** 공식 근거 자료 카드: 기관, 제목, 확인일, 기준일, 원문 링크 */
+/** 근거 자료 카드. id로 문서의 출처를 찾거나, 챗봇 답변처럼 출처 객체(source)를 바로 받는다. */
+export function SourceCard({ id, doc, source }) {
+  const s = source ?? getSource(doc, id)
   if (!s) return null
   return (
     <div className="source-card">
@@ -21,23 +28,27 @@ export function SourceCard({ id }) {
         </div>
       </dl>
       {!s.publishedAt && <p className="hint">자료에 기준일이 없어 최신 정보인지 판단하기 어려워요.</p>}
-      <a className="link-btn" href={s.url} target="_blank" rel="noreferrer">
-        원문 페이지 열기 <ExternalLink size={14} />
-      </a>
+      {safeHttpUrl(s.url) && (
+        <a className="link-btn" href={safeHttpUrl(s.url)} target="_blank" rel="noreferrer">
+          원문 페이지 열기 <ExternalLink size={14} />
+        </a>
+      )}
     </div>
   )
 }
 
+/** 안내 언어 선택 시트. 로그인 상태면 서버 프로필에도 저장한다. */
 function LangSheet() {
   const { data, update, setSheet, showToast } = useApp()
+  const lang = data.profile.language
   const choose = (code) => {
     update((d) => ({ profile: { ...d.profile, language: code } }))
+    if (hasSession() && data.onboarded) updateMe({ language: code }).catch(() => showToast(t(code, 'errUnknown')))
     setSheet(null)
-    const L = LANGS.find((l) => l.code === code)
-    showToast(`안내 언어를 ${L.ko}(으)로 바꿨어요`)
+    showToast(t(code, 'langChanged'))
   }
   return (
-    <Sheet title="안내 언어" onClose={() => setSheet(null)}>
+    <Sheet title={t(data.profile.language, 'langSheetTitle')} onClose={() => setSheet(null)}>
       <ul className="option-list">
         {LANGS.map((l) => (
           <li key={l.code}>
@@ -52,22 +63,26 @@ function LangSheet() {
           </li>
         ))}
       </ul>
-      <p className="hint">데모에는 베트남어, 영어, 한국어 해석 데이터만 들어 있어요. 다른 언어는 영어로 보여드려요.</p>
+      {uiLang(lang) !== lang && <p className="hint">{t(lang, 'langFallback')}</p>}
     </Sheet>
   )
 }
 
+/** 행정용어 풀이 시트 */
 function TermSheet({ term }) {
   const { setSheet, contentLang } = useApp()
+  // 서버 문서는 해석한 언어 하나로만 풀이가 오므로, 선택 언어가 없으면 있는 풀이를 보여준다
+  const local = pick(term.explain, contentLang) ?? Object.values(term.explain).find(Boolean)
   return (
     <Sheet title="행정용어 풀이" onClose={() => setSheet(null)}>
       <p className="term-word">{term.word}</p>
-      {contentLang !== 'ko' && <p className="term-explain">{pick(term.explain, contentLang)}</p>}
-      <p className="term-explain-ko">{term.explain.ko}</p>
+      {local && local !== term.explain.ko && <p className="term-explain">{local}</p>}
+      {term.explain.ko && <p className="term-explain-ko">{term.explain.ko}</p>}
     </Sheet>
   )
 }
 
+/** 교차 검증 항목의 문서 내용·공식 자료 비교와 근거를 보여주는 시트 */
 function EvidenceSheet({ docId, itemId }) {
   const { data, setSheet, nav } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
@@ -99,7 +114,7 @@ function EvidenceSheet({ docId, itemId }) {
         <>
           <h3 className="sheet-sub">근거 자료</h3>
           {item.sources.map((s) => (
-            <SourceCard key={s} id={s} />
+            <SourceCard key={s} id={s} doc={doc} />
           ))}
         </>
       ) : (
@@ -114,17 +129,24 @@ function EvidenceSheet({ docId, itemId }) {
   )
 }
 
-function SourceSheet({ ids }) {
-  const { setSheet } = useApp()
+/** 챗봇 답변 근거 자료 목록 시트 */
+/** 답변 근거 시트. ids는 문서 출처 키, items는 서버 챗봇 답변에 담겨 온 출처 */
+function SourceSheet({ ids = [], items = [], docId }) {
+  const { setSheet, data } = useApp()
+  const doc = data.docs.find((d) => d.id === docId)
   return (
     <Sheet title="답변 근거" onClose={() => setSheet(null)}>
       {ids.map((id) => (
-        <SourceCard key={id} id={id} />
+        <SourceCard key={id} id={id} doc={doc} />
+      ))}
+      {items.map((item, i) => (
+        <SourceCard key={`${item.url}-${i}`} source={item} />
       ))}
     </Sheet>
   )
 }
 
+/** PWA 홈 화면 설치 안내 시트 (안드로이드 설치 버튼, iOS 2단계 안내) */
 function InstallSheet() {
   const { installEvt, setInstallEvt, setSheet, update, isIOS, showToast } = useApp()
   const close = () => {
@@ -166,6 +188,58 @@ function InstallSheet() {
   )
 }
 
+/**
+ * 문서 삭제 확인 시트. 삭제하면 해석 결과·대화·원본 파일·일정까지 서버에서 함께 지워진다.
+ * 분석 중인 문서는 서버가 409로 막으므로 안내만 한다.
+ */
+function DeleteDocSheet({ docId }) {
+  const { data, update, setSheet, showToast, tab } = useApp()
+  const [busy, setBusy] = useState(false)
+  const doc = data.docs.find((d) => d.id === docId)
+  if (!doc) return null
+
+  const remove = async () => {
+    setBusy(true)
+    try {
+      await deleteDocument(doc.serverId)
+      update((d) => removeDocLocally(d, docId))
+      setSheet(null)
+      showToast('문서를 삭제했어요')
+      tab('docs')
+    } catch (err) {
+      const info = parseApiError(err)
+      if (info.status === 404) {
+        // 이미 지워진 문서는 로컬에서도 정리한다
+        update((d) => removeDocLocally(d, docId))
+        setSheet(null)
+        tab('docs')
+        return
+      }
+      setSheet(null)
+      showToast(info.status === 409 ? '분석이 끝난 뒤에 삭제할 수 있어요' : '삭제하지 못했어요. 다시 시도하세요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Sheet title="문서를 삭제할까요?" onClose={() => setSheet(null)}>
+      <p className="lead">
+        <strong>{doc.title}</strong>
+        <br />
+        해석 결과, 질문한 대화, 등록한 일정, 원본 파일이 모두 지워지고 되돌릴 수 없어요.
+      </p>
+      <button className="btn btn-danger btn-block btn-lg" onClick={remove} disabled={busy}>
+        {busy ? '삭제하는 중...' : '삭제하기'}
+      </button>
+      <button className="btn btn-ghost btn-block" onClick={() => setSheet(null)} disabled={busy}>
+        취소
+      </button>
+    </Sheet>
+  )
+}
+
+/** 현재 열린 시트 종류에 맞는 바텀시트를 그린다. */
 export default function SheetHost() {
   const { sheet } = useApp()
   switch (sheet.type) {
@@ -179,6 +253,8 @@ export default function SheetHost() {
       return <SourceSheet {...sheet.payload} />
     case 'install':
       return <InstallSheet />
+    case 'deleteDoc':
+      return <DeleteDocSheet {...sheet.payload} />
     default:
       return null
   }

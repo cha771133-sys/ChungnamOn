@@ -1,16 +1,21 @@
 import { useState } from 'react'
-import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2 } from 'lucide-react'
-import { useApp, dday, ddayLabel, fmtDate, pick, addDays } from '../store.js'
-import { LANGS, SOURCES } from '../data/mock.js'
+import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck } from 'lucide-react'
+import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, isVisibleSchedule, docDeadline } from '../store.js'
+import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
 
 /* 원문 속 행정용어는 버튼으로, 가린 개인정보(●)는 마스킹 표시로 바꿔 렌더링 */
 function RichText({ text, terms = [], onTerm }) {
   const words = terms.map((t) => t.word).sort((a, b) => b.length - a.length)
-  const re = words.length ? new RegExp(`(${words.join('|')})`, 'g') : null
+  // 서버 용어에는 괄호 등 정규식 특수문자가 들어 있을 수 있어 그대로 찾도록 이스케이프한다
+  const escape = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // 빈 문자열이 섞이면 모든 위치에 일치해 원문이 글자 단위로 쪼개지므로 제외한다
+  const valid = words.filter((w) => typeof w === 'string' && w.length > 0)
+  const re = valid.length ? new RegExp(`(${valid.map(escape).join('|')})`, 'g') : null
+  // 목업은 ●, 서버는 *로 개인정보를 가린다
   const renderMask = (part, key) =>
-    part.split(/(●+)/).map((p, i) =>
-      p.startsWith('●') ? (
+    part.split(/(●+|\*{3,})/).map((p, i) =>
+      /^(●|\*{3})/.test(p) ? (
         <span key={`${key}-${i}`} className="mask" aria-label="가려진 개인정보">
           {p}
         </span>
@@ -34,11 +39,15 @@ function RichText({ text, terms = [], onTerm }) {
   ))
 }
 
+/** 문서 해석 결과 화면: 요약, 핵심 정보, 공식 자료 대조, 번역·원문, 행정용어 */
 export default function Result({ docId }) {
   const { data, back, nav, setSheet, contentLang, lang } = useApp()
-  const [view, setView] = useState(contentLang)
+  const found = data.docs.find((d) => d.id === docId)
+  // 다른 계정이 올린 서버 문서는 이 계정에 보여주지 않는다
+  const doc = found && isVisibleDoc(found, data.user) ? found : null
+  // 서버 문서는 해석할 때의 프로필 언어 하나로만 번역이 오므로 그 언어로 보여준다
+  const [view, setView] = useState(doc?.contentLang ?? contentLang)
   const [showOriginal, setShowOriginal] = useState(false)
-  const doc = data.docs.find((d) => d.id === docId)
   if (!doc) return null
 
   const v = doc.verification
@@ -46,15 +55,33 @@ export default function Result({ docId }) {
   const hasMis = v.some((x) => x.status === 'MISMATCH')
   const hasUn = v.some((x) => x.status === 'UNVERIFIED')
   const tone = hasMis ? 'amber' : hasUn ? 'slate' : 'green'
-  const n = doc.deadline ? dday(doc.deadline) : null
-  const viewOptions = contentLang === 'ko' ? ['ko'] : [contentLang, 'ko']
+  const deadline = docDeadline(doc)
+  const n = deadline ? dday(deadline) : null
+  const viewOptions = doc.source === 'api' ? [doc.contentLang] : contentLang === 'ko' ? ['ko'] : [contentLang, 'ko']
   const label = (code) => (code === 'ko' ? '한국어(쉬운 말)' : LANGS.find((l) => l.code === code)?.label)
   const openTerm = (term) => setSheet({ type: 'term', payload: { term } })
   const openEvidence = (itemId) => setSheet({ type: 'evidence', payload: { docId, itemId } })
 
+  // 서버 문서의 마감일(같은 날짜는 하나로)과, 지금 계정에 보이는 일정 중 그 마감일에 등록된 것
+  const deadlineDates = doc.source === 'api' ? [...new Set((doc.deadlines ?? []).map((x) => x?.date).filter(Boolean))] : []
+  const docSchedules = data.schedules.filter((x) => x.docId === docId && isVisibleSchedule(x, data.user))
+  const registered = deadlineDates.map((date) => docSchedules.find((x) => x.date === date)).filter(Boolean)
+  // 모두 등록됐으면 아직 끝나지 않은 가장 가까운 일정을 보여준다
+  const nextRegistered = [...registered].sort((a, b) => Number(a.done) - Number(b.done) || a.date.localeCompare(b.date))[0]
+
   return (
     <>
-      <TopBar title="해석 결과" onBack={back} />
+      <TopBar
+        title="해석 결과"
+        onBack={back}
+        right={
+          doc.source === 'api' && (
+            <button className="icon-btn danger" onClick={() => setSheet({ type: 'deleteDoc', payload: { docId } })} aria-label="문서 삭제">
+              <Trash2 size={20} />
+            </button>
+          )
+        }
+      />
       <main className="screen has-actions">
         <header className="result-head">
           <div>
@@ -65,7 +92,13 @@ export default function Result({ docId }) {
           <Stamp tone={tone} top={`${matched}/${v.length}`} bottom={hasMis ? '불일치 있음' : hasUn ? '일부 미확인' : '공식 자료 일치'} />
         </header>
 
-        {!['vi', 'en', 'ko'].includes(lang) && <p className="hint">선택한 언어는 데모에서 영어로 보여드려요.</p>}
+        {doc.lowConfidence && (
+          <p className="callout tone-amber" role="alert">
+            글자가 흐려 일부 내용이 정확하지 않을 수 있어요. 기한과 금액은 원문과 꼭 함께 확인하세요.
+          </p>
+        )}
+
+        {doc.source !== 'api' && !['vi', 'en', 'ko'].includes(lang) && <p className="hint">선택한 언어는 데모에서 영어로 보여드려요.</p>}
 
         {viewOptions.length > 1 && (
           <div className="segmented" role="tablist" aria-label="보기 언어">
@@ -92,19 +125,23 @@ export default function Result({ docId }) {
           </div>
           <div className={`fact${n !== null && n <= 7 ? ' is-urgent' : ''}`}>
             <span className="fact-label">마감일</span>
-            {doc.deadline ? (
+            {deadline ? (
               <>
-                <strong>{fmtDate(doc.deadline)}</strong>
+                <strong>{fmtDate(deadline)}</strong>
                 <span className="fact-dday">{ddayLabel(n)}</span>
               </>
             ) : (
               <strong className="muted">확인되지 않음</strong>
             )}
           </div>
-          <div className="fact">
+          {/* 보낸 기관을 누르면 담당기관 안내(문서 연락처 + 공식 자료 연락처)로 이동 */}
+          <button className="fact fact-link" onClick={() => nav('agency', { docId })}>
             <span className="fact-label">보낸 기관</span>
             <strong>{doc.sender.name}</strong>
-          </div>
+            <span className="fact-more">
+              연락처 보기 <ChevronRight size={14} />
+            </span>
+          </button>
           <div className="fact">
             <span className="fact-label">준비서류</span>
             <strong>{doc.requiredDocs.length ? doc.requiredDocs.join(', ') : '확인되지 않음'}</strong>
@@ -124,7 +161,7 @@ export default function Result({ docId }) {
                     <strong>{item.docValue}</strong>
                     <span className="verify-src">
                       {item.sources.length
-                        ? `${SOURCES[item.sources[0]].agency} 자료, ${fmtDate(SOURCES[item.sources[0]].checkedAt)} 확인`
+                        ? `${getSource(doc, item.sources[0]).agency} 자료, ${fmtDate(getSource(doc, item.sources[0]).checkedAt)} 확인`
                         : '공식 자료를 찾지 못했어요'}
                     </span>
                   </span>
@@ -187,7 +224,19 @@ export default function Result({ docId }) {
           <MessageCircle size={18} /> 질문하기
         </button>
         {/* 유저 플로우 n34: 절차 정보가 충분하면 체크리스트, 아니면 담당기관 안내 */}
-        {doc.checklist.length > 0 ? (
+        {doc.source === 'api' && deadlineDates.length > 0 ? (
+          // 서버 문서는 체크리스트(A6) 연결 전까지 마감일 일정 등록으로 바로 이어준다.
+          // 마감일이 여러 개면 모두 등록됐을 때만 "등록된 일정 보기", 하나라도 남았으면 등록으로 보낸다
+          registered.length === deadlineDates.length ? (
+            <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: nextRegistered.id })}>
+              <CalendarCheck size={18} /> 등록된 일정 보기
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={() => nav('scheduleNew', { docId })}>
+              <CalendarPlus size={18} /> {registered.length ? '남은 마감일 등록' : '마감일 일정 등록'}
+            </button>
+          )
+        ) : doc.checklist.length > 0 ? (
           <button className="btn btn-primary" onClick={() => nav('checklist', { docId })}>
             <ListChecks size={18} /> 할 일 체크리스트
           </button>
