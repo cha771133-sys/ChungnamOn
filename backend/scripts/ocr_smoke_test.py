@@ -52,7 +52,6 @@ def save_response(data, out_dir, source):
     권한 값은 macOS·Linux에 적용된다. Windows에서는 사용자 폴더의 접근 권한을 따른다.
     """
     out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    out_dir.chmod(0o700)
     out_path = out_dir / f'{source.stem}_{time.strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:8]}.json'
     file_descriptor = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(file_descriptor, 'w', encoding='utf-8') as file:
