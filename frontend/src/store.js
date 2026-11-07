@@ -7,13 +7,17 @@ export const useApp = () => useContext(Ctx)
 
 export const CONTENT_LANGS = ['vi', 'en', 'ko']
 
-const today = new Date()
-today.setHours(0, 0, 0, 0)
-export const TODAY = today
+/** 기기 기준 오늘 0시. 앱을 켜 둔 채 날짜가 바뀌어도 맞도록 부를 때마다 새로 계산한다. */
+export function startOfToday() {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return d
+}
 
+/** 오늘부터 날짜(YYYY-MM-DD)까지 남은 일수. 지난 날짜는 음수 */
 export function dday(s) {
   const d = new Date(s + 'T00:00:00')
-  return Math.round((d - TODAY) / 86400000)
+  return Math.round((d - startOfToday()) / 86400000)
 }
 export function ddayLabel(n) {
   if (n === 0) return 'D-day'

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Bell, BellOff, ChevronRight, CalendarDays, List, FileText, ListChecks, Building2, Trash2, AlertTriangle, Check, RefreshCw } from 'lucide-react'
-import { useApp, dday, ddayLabel, fmtDate, pick, TODAY, isVisibleSchedule, scheduleDaysLeft, openDoc } from '../store.js'
+import { useApp, dday, ddayLabel, fmtDate, pick, startOfToday, isVisibleSchedule, scheduleDaysLeft, openDoc } from '../store.js'
 import { TopBar, TabBar, Toggle, Empty } from '../components/ui.jsx'
 import { useServerSchedules } from '../lib/useServerSchedules.js'
 import { createSchedule, deleteSchedule, getSchedule, updateSchedule, ScheduleExistsError } from '../lib/schedules'
@@ -34,8 +34,9 @@ function ScheduleCard({ s }) {
 /** 이번 달 달력 */
 function Month({ schedules }) {
   const [sel, setSel] = useState(null)
-  const y = TODAY.getFullYear()
-  const m = TODAY.getMonth()
+  const today = startOfToday()
+  const y = today.getFullYear()
+  const m = today.getMonth()
   const first = new Date(y, m, 1).getDay()
   const days = new Date(y, m + 1, 0).getDate()
   const key = (d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
@@ -55,7 +56,7 @@ function Month({ schedules }) {
         {cells.map((d, i) => {
           if (!d) return <span key={`e${i}`} />
           const items = schedules.filter((s) => s.date === key(d))
-          const isToday = d === TODAY.getDate()
+          const isToday = d === today.getDate()
           return (
             <button
               key={d}
@@ -211,7 +212,10 @@ export function ScheduleNew({ docId }) {
     : doc?.deadline
       ? [{ label: '', date: doc.deadline }]
       : []
-  const firstUpcoming = options.find((o) => dday(o.date) >= 0) ?? options[0]
+  // 이미 등록한 마감일 (지금 계정에 보이는 일정 기준). 기본 선택은 아직 등록하지 않은 가장 가까운 마감일
+  const registeredDates = new Set(data.schedules.filter((s) => s.docId === docId && isVisibleSchedule(s, data.user)).map((s) => s.date))
+  const openOptions = options.filter((o) => !registeredDates.has(o.date))
+  const firstUpcoming = openOptions.find((o) => dday(o.date) >= 0) ?? openOptions[0] ?? options.find((o) => dday(o.date) >= 0) ?? options[0]
   const [date, setDate] = useState(firstUpcoming?.date ?? null)
   const [title, setTitle] = useState(doc && !isServer ? pick(doc.task, 'ko') || doc.title : '')
   const [remind, setRemind] = useState({ d7: true, d1: true })
@@ -290,6 +294,7 @@ export function ScheduleNew({ docId }) {
                         <small>
                           {o.label ? `${o.label}, ` : ''}
                           {ddayLabel(dday(o.date))}
+                          {registeredDates.has(o.date) ? ', 등록됨' : ''}
                         </small>
                       </span>
                       {date === o.date && <Check size={20} />}
