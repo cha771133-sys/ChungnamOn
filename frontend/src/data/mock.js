@@ -14,7 +14,7 @@ export const LANGS = [
   { code: 'ko', label: '한국어', ko: '한국어', flag: '🇰🇷' },
 ]
 
-// 서버에는 영문 대문자 두 자리 코드로 저장한다 (기타는 ISO 미지정 코드 ZZ)
+// 서버에는 영문 대문자 두 자리 코드로 저장한다 (ZZ는 서비스 내부의 ‘기타’ 코드)
 export const NATIONALITIES = [
   { code: 'VN', ko: '베트남' },
   { code: 'CN', ko: '중국' },
