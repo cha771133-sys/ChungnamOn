@@ -7,6 +7,7 @@ import { fetchResult, fetchStatus, getDocument, uploadDocument } from '../lib/do
 import { fetchMe } from '../lib/auth'
 import { adaptResult, localDocId, localToday, serverDocId } from '../lib/documentAdapter.js'
 import { parseApiError, tokenStore } from '../lib/api'
+import { T } from '../i18n.js'
 
 const MAX = 20 * 1024 * 1024
 // 서버가 받는 형식과 맞춘다 (jpg, jpeg, png, pdf)
@@ -36,55 +37,55 @@ export function Upload() {
 
   return (
     <>
-      <TopBar title="문서 올리기" onBack={back} />
+      <TopBar title={T('문서 올리기')} onBack={back} />
       <main className="screen">
         <div className="privacy-note">
           <ShieldCheck size={20} />
-          <p>외국인등록번호와 주소는 자동으로 가려지고, 원본 파일은 30일 뒤 자동으로 삭제돼요.</p>
+          <p>{T('외국인등록번호와 주소는 자동으로 가려지고, 원본 파일은 30일 뒤 자동으로 삭제돼요.')}</p>
         </div>
 
         <div className="upload-options">
           <label className="upload-option is-primary">
             <input type="file" accept="image/jpeg,image/png" capture="environment" onChange={onFile} hidden />
             <Camera size={26} />
-            <strong>사진 찍기</strong>
-            <small>카메라로 문서를 바로 촬영해요</small>
+            <strong>{T('사진 찍기')}</strong>
+            <small>{T('카메라로 문서를 바로 촬영해요')}</small>
           </label>
           <label className="upload-option">
             <input type="file" accept="image/jpeg,image/png" onChange={onFile} hidden />
             <ImageIcon size={24} />
-            <strong>사진 선택</strong>
+            <strong>{T('사진 선택')}</strong>
           </label>
           <label className="upload-option">
             <input type="file" accept="application/pdf" onChange={onFile} hidden />
             <FileUp size={24} />
-            <strong>PDF 선택</strong>
+            <strong>{T('PDF 선택')}</strong>
           </label>
         </div>
         {error && (
           <p className="form-error" role="alert">
-            {error}
+            {T(error)}
           </p>
         )}
-        <p className="hint">jpg, png 또는 PDF, 최대 20MB. 한 번에 문서 1개씩 올려요.</p>
+        <p className="hint">{T('jpg, png 또는 PDF, 최대 20MB. 한 번에 문서 1개씩 올려요.')}</p>
 
         <section className="section">
-          <h2 className="h3">잘 찍는 방법</h2>
+          <h2 className="h3">{T('잘 찍는 방법')}</h2>
           <ul className="tips">
-            <li>밝은 곳에서 그림자 없이 찍어요.</li>
-            <li>문서를 평평하게 펴고 네 모서리가 모두 보이게 해요.</li>
-            <li>글자가 흐리면 정확하게 해석하기 어려워요.</li>
+            <li>{T('밝은 곳에서 그림자 없이 찍어요.')}</li>
+            <li>{T('문서를 평평하게 펴고 네 모서리가 모두 보이게 해요.')}</li>
+            <li>{T('글자가 흐리면 정확하게 해석하기 어려워요.')}</li>
           </ul>
         </section>
 
         <section className="demo-box">
-          <strong>시연용 (목업 데이터, 서버에 올리지 않아요)</strong>
+          <strong>{T('시연용 (목업 데이터, 서버에 올리지 않아요)')}</strong>
           <div className="demo-actions">
-            <button className="btn btn-outline" onClick={() => nav('analyzing', { fileName: '주민세_고지서.jpg', blur: false })}>
-              예시 고지서로 체험
+            <button className="btn btn-outline" onClick={() => nav('analyzing', { fileName: T('주민세_고지서.jpg'), blur: false })}>
+              {T('예시 고지서로 체험')}
             </button>
-            <button className="btn btn-outline" onClick={() => nav('analyzing', { fileName: '흐린_사진.jpg', blur: true })}>
-              흐린 사진으로 체험
+            <button className="btn btn-outline" onClick={() => nav('analyzing', { fileName: T('흐린_사진.jpg'), blur: true })}>
+              {T('흐린 사진으로 체험')}
             </button>
           </div>
         </section>
@@ -105,7 +106,7 @@ const GIVE_UP_AFTER = 5 * 60 * 1000
 const MAX_TRANSIENT_FAILURES = 5
 
 /** 진행 단계 표시 (목업·실제 분석 화면 공통) */
-function AnalyzingView({ fileName, step, children, title = '분석 중' }) {
+function AnalyzingView({ fileName, step, children, title = T('분석 중') }) {
   return (
     <>
       <TopBar title={title} />
@@ -124,7 +125,7 @@ function AnalyzingView({ fileName, step, children, title = '분석 중' }) {
           {STEPS.map((s, i) => (
             <li key={s} className={i < step ? 'is-done' : i === step ? 'is-active' : ''}>
               <span className="step-dot">{i < step ? <Check size={14} /> : i === step ? <Loader2 size={14} className="spin" /> : i + 1}</span>
-              {s}
+              {T(s)}
             </li>
           ))}
         </ol>
@@ -161,7 +162,7 @@ function DemoAnalyzing({ fileName, blur }) {
 
   return (
     <AnalyzingView fileName={fileName} step={step}>
-      <p className="hint">시연용 예시 문서로 분석 과정을 보여드려요.</p>
+      <p className="hint">{T('시연용 예시 문서로 분석 과정을 보여드려요.')}</p>
     </AnalyzingView>
   )
 }
@@ -201,30 +202,32 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
             ? Promise.resolve(ownerRef.current)
             : fetchMe().then((me) => {
                 // 조회하는 사이 로그아웃·계정 전환이 있었으면 이전 계정 정보를 저장하지 않는다
-                if (tokenStore.session() !== session) throw new Error('세션이 바뀌어 업로드를 중단했습니다.')
+                if (tokenStore.session() !== session) throw new Error(T('세션이 바뀌어 업로드를 중단했습니다.'))
                 ownerRef.current = me.id
                 update(() => ({ user: { id: me.id, email: me.email, session: tokenStore.marker() } }))
                 return me.id
               })
         // 시작한 세션을 함께 넘겨, 그사이 계정이 바뀌었으면 새 계정 토큰으로 업로드되지 않게 한다
-        uploadRef.current = ensureOwner.then(() => uploadDocument(file, session)).then(({ documentId }) => {
-          if (tokenStore.session() !== session) throw new Error('세션이 바뀌어 업로드 결과를 버렸습니다.')
-          const id = localDocId(documentId)
-          const placeholder = {
-            id,
-            serverId: documentId,
-            ownerId: ownerRef.current,
-            source: 'api',
-            docType: '문서',
-            title: name,
-            fileName: name,
-            status: 'processing',
-            uploadedAt: localToday(),
-            createdAt: new Date().toISOString(),
-          }
-          update((d) => ({ docs: [placeholder, ...d.docs.filter((x) => x.id !== id)] }))
-          return id
-        })
+        uploadRef.current = ensureOwner
+          .then(() => uploadDocument(file, session))
+          .then(({ documentId }) => {
+            if (tokenStore.session() !== session) throw new Error(T('세션이 바뀌어 업로드 결과를 버렸습니다.'))
+            const id = localDocId(documentId)
+            const placeholder = {
+              id,
+              serverId: documentId,
+              ownerId: ownerRef.current,
+              source: 'api',
+              docType: '문서',
+              title: name,
+              fileName: name,
+              status: 'processing',
+              uploadedAt: localToday(),
+              createdAt: new Date().toISOString(),
+            }
+            update((d) => ({ docs: [placeholder, ...d.docs.filter((x) => x.id !== id)] }))
+            return id
+          })
       }
       return uploadRef.current
     }
@@ -267,11 +270,7 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
         const transient = info.code === 'NETWORK_ERROR' || info.status >= 500
         // 일시 오류는 정해진 횟수까지 다시 확인하고, 그 밖의 오류는 바로 멈추고 알린다
         if (!transient || ++failures > MAX_TRANSIENT_FAILURES) {
-          setError(
-            transient
-              ? '서버와 연결이 불안정해요. 잠시 후 문서함에서 다시 확인하세요.'
-              : info.message || '분석 상태를 확인하지 못했어요.',
-          )
+          setError(transient ? '서버와 연결이 불안정해요. 잠시 후 문서함에서 다시 확인하세요.' : info.message || '분석 상태를 확인하지 못했어요.')
           return
         }
       }
@@ -302,20 +301,20 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
   if (error) {
     return (
       <>
-        <TopBar title="올리지 못했어요" onBack={() => replace('upload')} />
+        <TopBar title={T('올리지 못했어요')} onBack={() => replace('upload')} />
         <main className="screen center-screen">
           <div className="fail-icon">
             <AlertCircle size={36} />
           </div>
           <p className="lead" role="alert">
-            {error}
+            {T(error)}
           </p>
           <div className="sticky-actions stack">
             <button className="btn btn-primary btn-block btn-lg" onClick={() => replace('upload')}>
-              <RefreshCw size={18} /> 다시 올리기
+              <RefreshCw size={18} /> {T('다시 올리기')}
             </button>
             <button className="btn btn-ghost btn-block" onClick={() => tab('docs')}>
-              내 문서로 가기
+              {T('내 문서로 가기')}
             </button>
           </div>
         </main>
@@ -324,10 +323,12 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
   }
 
   return (
-    <AnalyzingView fileName={name} step={step} title={reopen ? '불러오는 중' : '분석 중'}>
-      <p className="hint">{reopen ? '해석 결과를 불러오고 있어요.' : slow ? '평소보다 오래 걸리고 있어요. 조금만 더 기다려 주세요.' : '보통 20~40초 걸려요. 화면을 닫아도 문서함에서 이어서 볼 수 있어요.'}</p>
+    <AnalyzingView fileName={name} step={step} title={reopen ? T('불러오는 중') : T('분석 중')}>
+      <p className="hint">
+        {reopen ? T('해석 결과를 불러오고 있어요.') : slow ? T('평소보다 오래 걸리고 있어요. 조금만 더 기다려 주세요.') : T('보통 20~40초 걸려요. 화면을 닫아도 문서함에서 이어서 볼 수 있어요.')}
+      </p>
       <button className="btn btn-ghost" onClick={() => tab('docs')}>
-        <FileText size={18} /> 기다리는 동안 문서함 보기
+        <FileText size={18} /> {T('기다리는 동안 문서함 보기')}
       </button>
     </AnalyzingView>
   )
@@ -341,7 +342,7 @@ export function OcrLow({ docId }) {
   const { replace, tab } = useApp()
   return (
     <>
-      <TopBar title="다시 올려 주세요" onBack={() => tab('home')} />
+      <TopBar title={T('다시 올려 주세요')} onBack={() => tab('home')} />
       <main className="screen">
         <div className="ocr-compare" aria-hidden="true">
           <figure>
@@ -350,7 +351,7 @@ export function OcrLow({ docId }) {
               <span className="paper-line w60" />
               <span className="paper-line w70" />
             </div>
-            <figcaption>지금 사진</figcaption>
+            <figcaption>{T('지금 사진')}</figcaption>
           </figure>
           <figure>
             <div className="paper small">
@@ -358,25 +359,25 @@ export function OcrLow({ docId }) {
               <span className="paper-line w60" />
               <span className="paper-line w70" />
             </div>
-            <figcaption>이렇게 찍어 주세요</figcaption>
+            <figcaption>{T('이렇게 찍어 주세요')}</figcaption>
           </figure>
         </div>
-        <h1 className="h2">글자가 잘 보이지 않아 정확하게 해석하기 어려워요</h1>
-        <p className="lead">기한, 금액, 기관명을 읽지 못했어요. 잘못된 안내를 막기 위해 결과를 보여드리지 않았어요.</p>
+        <h1 className="h2">{T('글자가 잘 보이지 않아 정확하게 해석하기 어려워요')}</h1>
+        <p className="lead">{T('기한, 금액, 기관명을 읽지 못했어요. 잘못된 안내를 막기 위해 결과를 보여드리지 않았어요.')}</p>
         <ul className="tips">
-          <li>밝은 곳에서 그림자 없이 찍어요.</li>
-          <li>문서와 휴대폰을 평행하게 맞춰요.</li>
+          <li>{T('밝은 곳에서 그림자 없이 찍어요.')}</li>
+          <li>{T('문서와 휴대폰을 평행하게 맞춰요.')}</li>
         </ul>
         <div className="sticky-actions stack">
           <button className="btn btn-primary btn-block btn-lg" onClick={() => replace('upload')}>
-            <Camera size={18} /> 다시 촬영하기
+            <Camera size={18} /> {T('다시 촬영하기')}
           </button>
           <button className="btn btn-ghost btn-block" onClick={() => replace('upload')}>
-            다른 파일 선택
+            {T('다른 파일 선택')}
           </button>
           {docId && (
             <button className="btn btn-ghost btn-block" onClick={() => replace('result', { docId })}>
-              그래도 결과 보기 (정확하지 않을 수 있어요)
+              {T('그래도 결과 보기 (정확하지 않을 수 있어요)')}
             </button>
           )}
         </div>
@@ -403,20 +404,20 @@ export function Failed({ docId }) {
 
   return (
     <>
-      <TopBar title="해석하지 못했어요" onBack={back} />
+      <TopBar title={T('해석하지 못했어요')} onBack={back} />
       <main className="screen center-screen">
         <div className="fail-icon">
           <AlertCircle size={36} />
         </div>
         <h1 className="h2">{doc?.title}</h1>
-        <p className="lead">{doc?.failReason || '처리 중 문제가 생겼어요.'}</p>
+        <p className="lead">{doc?.failReason || T('처리 중 문제가 생겼어요.')}</p>
         <div className="sticky-actions stack">
           <button className="btn btn-primary btn-block btn-lg" onClick={() => replace('upload')}>
-            <RefreshCw size={18} /> 다시 올리기
+            <RefreshCw size={18} /> {T('다시 올리기')}
           </button>
           {doc?.source === 'api' && (
             <button className="btn btn-ghost btn-block" onClick={() => setSheet({ type: 'deleteDoc', payload: { docId } })}>
-              이 문서 삭제
+              {T('이 문서 삭제')}
             </button>
           )}
         </div>

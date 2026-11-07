@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AUTH_EXPIRED_EVENT, SESSION_CHANGED_EVENT, tokenStore } from './lib/api'
 import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
-import { t } from './i18n.js'
+import { t, setUiLang } from './i18n.js'
 import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
 import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
 import { WifiOff } from 'lucide-react'
@@ -16,6 +16,7 @@ import Agency from './screens/Agency.jsx'
 import Chat from './screens/Chat.jsx'
 import { Schedule, ScheduleNew, ScheduleDetail } from './screens/Schedule.jsx'
 import Settings from './screens/Settings.jsx'
+import { T } from './i18n.js'
 
 const KEY = 'chungnamon-demo-v1'
 
@@ -187,8 +188,7 @@ export default function App() {
     top()
   }
   const update = (fn) => setData((d) => ({ ...d, ...fn(d) }))
-  const updateDoc = (docId, fn) =>
-    setData((d) => ({ ...d, docs: d.docs.map((doc) => (doc.id === docId ? { ...doc, ...fn(doc) } : doc)) }))
+  const updateDoc = (docId, fn) => setData((d) => ({ ...d, docs: d.docs.map((doc) => (doc.id === docId ? { ...doc, ...fn(doc) } : doc)) }))
   const showToast = (msg) => {
     setToast(msg)
     clearTimeout(window.__toastTimer)
@@ -196,6 +196,8 @@ export default function App() {
   }
 
   const lang = data.profile.language
+  // 화면 문구 T()·날짜 형식이 쓰는 안내 언어. 하위 화면을 그리기 전에 맞춘다
+  setUiLang(lang)
   const contentLang = CONTENT_LANGS.includes(lang) ? lang : 'en'
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
@@ -225,7 +227,7 @@ export default function App() {
       apiLogout().catch(() => {})
       setData(fresh())
       setStack([{ name: 'language', params: {} }])
-      showToast('데모 데이터를 처음 상태로 되돌렸어요')
+      showToast(T('데모 데이터를 처음 상태로 되돌렸어요'))
     },
   }
 
@@ -236,7 +238,7 @@ export default function App() {
       <div className="app">
         {!online && (
           <div className="offline" role="status">
-            <WifiOff size={16} /> 오프라인 상태예요. 저장된 문서는 계속 볼 수 있어요.
+            <WifiOff size={16} /> {T('오프라인 상태예요. 저장된 문서는 계속 볼 수 있어요.')}
           </div>
         )}
         <Screen key={stack.length + cur.name + JSON.stringify(cur.params)} {...cur.params} />

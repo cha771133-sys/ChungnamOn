@@ -7,6 +7,7 @@ import { deleteDocument } from '../lib/documents'
 import { parseApiError } from '../lib/api'
 import { useState } from 'react'
 import { Sheet, Badge } from './ui.jsx'
+import { T } from '../i18n.js'
 
 /** 공식 근거 자료 카드: 기관, 제목, 확인일, 기준일, 원문 링크 */
 /** 근거 자료 카드. id로 문서의 출처를 찾거나, 챗봇 답변처럼 출처 객체(source)를 바로 받는다. */
@@ -19,18 +20,18 @@ export function SourceCard({ id, doc, source }) {
       <strong>{s.title}</strong>
       <dl className="source-meta">
         <div>
-          <dt>확인일</dt>
+          <dt>{T('확인일')}</dt>
           <dd>{fmtDate(s.checkedAt)}</dd>
         </div>
         <div>
-          <dt>자료 기준일</dt>
-          <dd>{s.publishedAt ? fmtDate(s.publishedAt) : '자료에 표시 없음'}</dd>
+          <dt>{T('자료 기준일')}</dt>
+          <dd>{s.publishedAt ? fmtDate(s.publishedAt) : T('자료에 표시 없음')}</dd>
         </div>
       </dl>
-      {!s.publishedAt && <p className="hint">자료에 기준일이 없어 최신 정보인지 판단하기 어려워요.</p>}
+      {!s.publishedAt && <p className="hint">{T('자료에 기준일이 없어 최신 정보인지 판단하기 어려워요.')}</p>}
       {safeHttpUrl(s.url) && (
         <a className="link-btn" href={safeHttpUrl(s.url)} target="_blank" rel="noreferrer">
-          원문 페이지 열기 <ExternalLink size={14} />
+          {T('원문 페이지 열기')} <ExternalLink size={14} />
         </a>
       )}
     </div>
@@ -53,7 +54,9 @@ function LangSheet() {
         {LANGS.map((l) => (
           <li key={l.code}>
             <button className={`option${data.profile.language === l.code ? ' is-selected' : ''}`} onClick={() => choose(l.code)}>
-              <span className="flag" aria-hidden="true">{l.flag}</span>
+              <span className="flag" aria-hidden="true">
+                {l.flag}
+              </span>
               <span className="option-text">
                 <strong>{l.label}</strong>
                 <small>{l.ko}</small>
@@ -74,7 +77,7 @@ function TermSheet({ term }) {
   // 서버 문서는 해석한 언어 하나로만 풀이가 오므로, 선택 언어가 없으면 있는 풀이를 보여준다
   const local = pick(term.explain, contentLang) ?? Object.values(term.explain).find(Boolean)
   return (
-    <Sheet title="행정용어 풀이" onClose={() => setSheet(null)}>
+    <Sheet title={T('행정용어 풀이')} onClose={() => setSheet(null)}>
       <p className="term-word">{term.word}</p>
       {local && local !== term.explain.ko && <p className="term-explain">{local}</p>}
       {term.explain.ko && <p className="term-explain-ko">{term.explain.ko}</p>}
@@ -93,36 +96,36 @@ function EvidenceSheet({ docId, itemId }) {
     nav('agency', { docId })
   }
   return (
-    <Sheet title={item.label} onClose={() => setSheet(null)}>
+    <Sheet title={T(item.label)} onClose={() => setSheet(null)}>
       <div className="evidence-status">
         <Badge status={item.status} />
       </div>
       <div className={`compare${item.status === 'MISMATCH' ? ' is-split' : ''}`}>
         <div>
-          <span className="compare-label">문서에 적힌 내용</span>
+          <span className="compare-label">{T('문서에 적힌 내용')}</span>
           <strong>{item.docValue}</strong>
         </div>
         {item.officialValue && (
           <div>
-            <span className="compare-label">공식 자료</span>
+            <span className="compare-label">{T('공식 자료')}</span>
             <strong>{item.officialValue}</strong>
           </div>
         )}
       </div>
-      {item.reason && <p className={`callout tone-${item.status === 'MISMATCH' ? 'amber' : 'slate'}`}>{item.reason}</p>}
+      {item.reason && <p className={`callout tone-${item.status === 'MISMATCH' ? 'amber' : 'slate'}`}>{T(item.reason)}</p>}
       {item.sources.length > 0 ? (
         <>
-          <h3 className="sheet-sub">근거 자료</h3>
+          <h3 className="sheet-sub">{T('근거 자료')}</h3>
           {item.sources.map((s) => (
             <SourceCard key={s} id={s} doc={doc} />
           ))}
         </>
       ) : (
-        <p className="hint">연결된 공식 자료가 없어요.</p>
+        <p className="hint">{T('연결된 공식 자료가 없어요.')}</p>
       )}
       {item.status !== 'MATCHED' && (
         <button className="btn btn-primary btn-block" onClick={goAgency}>
-          <Building2 size={18} /> 담당기관에 확인하기
+          <Building2 size={18} /> {T('담당기관에 확인하기')}
         </button>
       )}
     </Sheet>
@@ -135,7 +138,7 @@ function SourceSheet({ ids = [], items = [], docId }) {
   const { setSheet, data } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
   return (
-    <Sheet title="답변 근거" onClose={() => setSheet(null)}>
+    <Sheet title={T('답변 근거')} onClose={() => setSheet(null)}>
       {ids.map((id) => (
         <SourceCard key={id} id={id} doc={doc} />
       ))}
@@ -158,31 +161,35 @@ function InstallSheet() {
     const { outcome } = await installEvt.userChoice
     setInstallEvt(null)
     setSheet(null)
-    if (outcome === 'accepted') showToast('홈 화면에 설치했어요')
+    if (outcome === 'accepted') showToast(T('홈 화면에 설치했어요'))
   }
   return (
-    <Sheet title="홈 화면에 추가하기" onClose={close}>
-      <p className="lead">홈 화면에 추가하면 앱처럼 바로 열고, 마감 알림도 받을 수 있어요.</p>
+    <Sheet title={T('홈 화면에 추가하기')} onClose={close}>
+      <p className="lead">{T('홈 화면에 추가하면 앱처럼 바로 열고, 마감 알림도 받을 수 있어요.')}</p>
       {installEvt ? (
         <button className="btn btn-primary btn-block" onClick={install}>
-          <Download size={18} /> 설치하기
+          <Download size={18} /> {T('설치하기')}
         </button>
       ) : isIOS ? (
         <ol className="ios-steps">
           <li>
-            <span className="ios-icon"><Share size={20} /></span>
-            Safari 아래쪽의 공유 버튼을 누르세요.
+            <span className="ios-icon">
+              <Share size={20} />
+            </span>
+            {T('Safari 아래쪽의 공유 버튼을 누르세요.')}
           </li>
           <li>
-            <span className="ios-icon"><PlusSquare size={20} /></span>
-            ‘홈 화면에 추가’를 선택하세요.
+            <span className="ios-icon">
+              <PlusSquare size={20} />
+            </span>
+            {T('‘홈 화면에 추가’를 선택하세요.')}
           </li>
         </ol>
       ) : (
-        <p className="hint">브라우저 메뉴에서 ‘앱 설치’ 또는 ‘홈 화면에 추가’를 선택하세요. 설치 버튼은 빌드 버전(npm run preview)이나 배포 주소에서 나타나요.</p>
+        <p className="hint">{T('브라우저 메뉴에서 ‘앱 설치’ 또는 ‘홈 화면에 추가’를 선택하세요. 설치 버튼은 빌드 버전(npm run preview)이나 배포 주소에서 나타나요.')}</p>
       )}
       <button className="btn btn-ghost btn-block" onClick={close}>
-        나중에
+        {T('나중에')}
       </button>
     </Sheet>
   )
@@ -204,7 +211,7 @@ function DeleteDocSheet({ docId }) {
       await deleteDocument(doc.serverId)
       update((d) => removeDocLocally(d, docId))
       setSheet(null)
-      showToast('문서를 삭제했어요')
+      showToast(T('문서를 삭제했어요'))
       tab('docs')
     } catch (err) {
       const info = parseApiError(err)
@@ -216,24 +223,24 @@ function DeleteDocSheet({ docId }) {
         return
       }
       setSheet(null)
-      showToast(info.status === 409 ? '분석이 끝난 뒤에 삭제할 수 있어요' : '삭제하지 못했어요. 다시 시도하세요')
+      showToast(info.status === 409 ? T('분석이 끝난 뒤에 삭제할 수 있어요') : T('삭제하지 못했어요. 다시 시도하세요'))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <Sheet title="문서를 삭제할까요?" onClose={() => setSheet(null)}>
+    <Sheet title={T('문서를 삭제할까요?')} onClose={() => setSheet(null)}>
       <p className="lead">
         <strong>{doc.title}</strong>
         <br />
-        해석 결과, 질문한 대화, 등록한 일정, 원본 파일이 모두 지워지고 되돌릴 수 없어요.
+        {T('해석 결과, 질문한 대화, 등록한 일정, 원본 파일이 모두 지워지고 되돌릴 수 없어요.')}
       </p>
       <button className="btn btn-danger btn-block btn-lg" onClick={remove} disabled={busy}>
-        {busy ? '삭제하는 중...' : '삭제하기'}
+        {busy ? T('삭제하는 중...') : T('삭제하기')}
       </button>
       <button className="btn btn-ghost btn-block" onClick={() => setSheet(null)} disabled={busy}>
-        취소
+        {T('취소')}
       </button>
     </Sheet>
   )
@@ -259,4 +266,3 @@ export default function SheetHost() {
       return null
   }
 }
-
