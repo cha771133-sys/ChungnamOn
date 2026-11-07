@@ -43,9 +43,22 @@ def generate_answer(question, interpretation, history, language, official_source
     """이 함수만 실제 AI 어댑터로 교체한다. 입력과 출력 계약은 README 참고.
 
     실제 어댑터는 제한된 연결/읽기 timeout을 적용하고 오류 시 AIClientError를 발생시킨다.
-    이 단계에서는 네트워크 요청/SDK/자격증명을 사용하지 않는다.
+    dummy 모드는 네트워크 요청/SDK/자격증명을 사용하지 않는다.
+
+    rag 모드: backend/ai/chatbot RAG 모듈(ai.chatbot.integration.chat_answer)을 호출한다.
+    timeout은 AI_REQUEST_TIMEOUT(기본 120초)을 연결/읽기에 적용한다. 출처는 official_sources 안의
+    sourceDocumentId만 내며, 그 밖의 자료만 근거로 쓴 답변은 UNVERIFIED로 낸다.
     """
-    if getattr(settings, 'CHATBOT_AI_MODE', MODE) != 'dummy':
+    mode = getattr(settings, 'CHATBOT_AI_MODE', MODE)
+    if mode == 'rag':
+        try:
+            from ai.chatbot.integration import chat_answer
+
+            return chat_answer(question, interpretation, history, language, official_sources)
+        except Exception:
+            # 외부 오류 문자열에 질문·문서가 섞일 수 있으므로 원문을 버린다.
+            raise AIClientError() from None
+    if mode != 'dummy':
         raise AIClientError()
     if language not in DUMMY_ANSWERS:
         raise AIClientError()

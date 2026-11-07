@@ -221,8 +221,10 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 
-# P2-13: 로컬 더미만 제공한다. 지원하지 않는 실제 모드는 503으로 차단한다.
+# P2-13: 기본은 로컬 더미. rag는 backend/ai/chatbot RAG 모듈, 그 밖의 값은 503으로 차단한다.
 CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
+# 문서 처리 파이프라인의 공식 자료 대조(verify). dummy(기본) | rag
+DOCUMENTS_VERIFY_MODE = os.environ.get('DOCUMENTS_VERIFY_MODE', 'dummy')
 
 # 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
