@@ -135,7 +135,7 @@ export function Schedule() {
             <RefreshCw size={18} />
             <span>
               {T('{v0} 눌러서 다시 시도하세요.', {
-                v0: error,
+                v0: T(error),
               })}
             </span>
           </button>
@@ -287,7 +287,7 @@ export function ScheduleNew({ docId }) {
         return
       }
       const info = parseApiError(err)
-      setError(info.code === 'NETWORK_ERROR' ? T('서버에 연결하지 못했어요. 다시 시도하세요.') : info.fields.date || info.fields.documentId || info.message || T('일정을 등록하지 못했어요.'))
+      setError(info.code === 'NETWORK_ERROR' ? '서버에 연결하지 못했어요. 다시 시도하세요.' : info.fields.date || info.fields.documentId || info.message || '일정을 등록하지 못했어요.')
     } finally {
       setBusy(false)
     }
@@ -369,7 +369,7 @@ export function ScheduleNew({ docId }) {
             </div>
             {error && (
               <p className="form-error" role="alert">
-                {error}
+                {T(error)}
               </p>
             )}
             <p className="hint">{T('일정 등록은 실제 납부나 신청을 뜻하지 않아요.')}</p>
@@ -398,7 +398,7 @@ export function ScheduleDetail({ scheduleId }) {
     if (s || serverId == null) return
     getSchedule(serverId)
       .then((item) => update((d) => ({ schedules: mergeServerSchedules(d.schedules, [item], { ownerId: d.user?.id, complete: false }) })))
-      .catch(() => setLoadError(T('일정을 불러오지 못했어요.')))
+      .catch(() => setLoadError('일정을 불러오지 못했어요.'))
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [scheduleId])
 
@@ -407,7 +407,7 @@ export function ScheduleDetail({ scheduleId }) {
       <>
         <TopBar title={T('일정 상세')} onBack={back} />
         <main className="screen center-screen">
-          <p className="lead">{loadError || T('일정을 불러오는 중이에요...')}</p>
+          <p className="lead">{T(loadError || '일정을 불러오는 중이에요...')}</p>
         </main>
       </>
     )

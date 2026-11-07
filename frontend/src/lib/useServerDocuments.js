@@ -4,7 +4,6 @@ import { listDocuments } from './documents'
 import { mergeServerList } from './documentAdapter.js'
 import { parseApiError, tokenStore } from './api'
 import { hasSession } from './auth'
-import { T } from '../i18n.js'
 
 /**
  * 서버의 내 문서 목록을 페이지 단위로 불러와 로컬 문서 목록에 합친다.
@@ -46,7 +45,7 @@ export function useServerDocuments(status) {
       .catch((err) => {
         if (!alive) return
         const info = parseApiError(err)
-        setError(info.code === 'NETWORK_ERROR' ? T('서버에 연결하지 못했어요.') : T('문서 목록을 불러오지 못했어요.'))
+        setError(info.code === 'NETWORK_ERROR' ? '서버에 연결하지 못했어요.' : '문서 목록을 불러오지 못했어요.')
       })
       .finally(() => alive && setLoading(false))
     return () => {

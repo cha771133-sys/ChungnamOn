@@ -149,7 +149,7 @@ export default function Result({ docId }) {
           </button>
           <div className="fact">
             <span className="fact-label">{T('준비서류')}</span>
-            <strong>{doc.requiredDocs.length ? doc.requiredDocs.join(', ') : T('확인되지 않음')}</strong>
+            <strong>{doc.requiredDocs.length ? doc.requiredDocs.map((d) => T(d)).join(', ') : T('확인되지 않음')}</strong>
           </div>
         </section>
 

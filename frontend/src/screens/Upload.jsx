@@ -24,11 +24,11 @@ export function Upload() {
     e.target.value = ''
     if (!f) return
     if (f.size > MAX) {
-      setError(T('파일이 20MB보다 커요. 더 작은 파일을 선택하세요.'))
+      setError('파일이 20MB보다 커요. 더 작은 파일을 선택하세요.')
       return
     }
     if (!ALLOWED.test(f.name) && !ALLOWED_TYPES.includes(f.type)) {
-      setError(T('jpg, png, pdf 파일만 올릴 수 있어요.'))
+      setError('jpg, png, pdf 파일만 올릴 수 있어요.')
       return
     }
     setError('')
@@ -64,7 +64,7 @@ export function Upload() {
         </div>
         {error && (
           <p className="form-error" role="alert">
-            {error}
+            {T(error)}
           </p>
         )}
         <p className="hint">{T('jpg, png 또는 PDF, 최대 20MB. 한 번에 문서 1개씩 올려요.')}</p>
@@ -218,7 +218,7 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
               serverId: documentId,
               ownerId: ownerRef.current,
               source: 'api',
-              docType: T('문서'),
+              docType: '문서',
               title: name,
               fileName: name,
               status: 'processing',
@@ -270,12 +270,12 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
         const transient = info.code === 'NETWORK_ERROR' || info.status >= 500
         // 일시 오류는 정해진 횟수까지 다시 확인하고, 그 밖의 오류는 바로 멈추고 알린다
         if (!transient || ++failures > MAX_TRANSIENT_FAILURES) {
-          setError(transient ? T('서버와 연결이 불안정해요. 잠시 후 문서함에서 다시 확인하세요.') : info.message || T('분석 상태를 확인하지 못했어요.'))
+          setError(transient ? '서버와 연결이 불안정해요. 잠시 후 문서함에서 다시 확인하세요.' : info.message || '분석 상태를 확인하지 못했어요.')
           return
         }
       }
       if (Date.now() - started > GIVE_UP_AFTER) {
-        setError(T('분석이 너무 오래 걸리고 있어요. 잠시 후 문서함에서 다시 확인하거나 다시 올려 주세요.'))
+        setError('분석이 너무 오래 걸리고 있어요. 잠시 후 문서함에서 다시 확인하거나 다시 올려 주세요.')
         return
       }
       timer = setTimeout(() => poll(id), POLL_INTERVAL)
@@ -286,8 +286,8 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
       .catch((err) => {
         if (!alive) return
         const info = parseApiError(err)
-        if (info.code === 'NETWORK_ERROR') setError(T('서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 올려 주세요.'))
-        else setError(info.fields.file || info.message || T('문서를 올리지 못했어요.'))
+        if (info.code === 'NETWORK_ERROR') setError('서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 올려 주세요.')
+        else setError(info.fields.file || info.message || '문서를 올리지 못했어요.')
       })
 
     return () => {
@@ -307,7 +307,7 @@ function LiveAnalyzing({ file, fileName, docId, reopen }) {
             <AlertCircle size={36} />
           </div>
           <p className="lead" role="alert">
-            {error}
+            {T(error)}
           </p>
           <div className="sticky-actions stack">
             <button className="btn btn-primary btn-block btn-lg" onClick={() => replace('upload')}>

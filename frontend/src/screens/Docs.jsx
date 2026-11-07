@@ -66,7 +66,7 @@ function DocList({ status, showDemo }) {
           <RefreshCw size={18} />
           <span>
             {T('{v0} 눌러서 다시 시도하세요.', {
-              v0: error,
+              v0: T(error),
             })}
           </span>
         </button>

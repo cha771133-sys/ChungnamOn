@@ -91,11 +91,11 @@ export default function Checklist({ docId }) {
                         <strong>{T(it.text)}</strong>
                         {!it.custom && <Badge status={it.state} />}
                       </div>
-                      {it.detail && <p>{it.detail}</p>}
+                      {it.detail && <p>{T(it.detail)}</p>}
                       {it.docs && (
                         <p className="check-meta">
                           {T('준비서류: {v0}', {
-                            v0: it.docs.join(', '),
+                            v0: it.docs.map((d) => T(d)).join(', '),
                           })}
                         </p>
                       )}

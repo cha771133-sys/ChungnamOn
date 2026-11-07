@@ -12,25 +12,18 @@ import { T } from '../i18n.js'
 export default function Settings() {
   const { data, update, openLang, setSheet, showToast, resetDemo, isStandalone, tab } = useApp()
   const L = LANGS.find((l) => l.code === data.profile.language)
-  const [server, setServer] = useState('')
+  const [server, setServer] = useState(null)
   const [saving, setSaving] = useState(false)
 
   /** 서버 상태 확인 (GET /api/health/) */
   const checkServer = async () => {
-    setServer(T('확인 중...'))
+    // 언어를 바꿔도 다시 번역되도록 원문 키와 값만 저장하고 표시할 때 번역한다
+    setServer({ key: '확인 중...' })
     try {
       const { data: res } = await api.get('/api/health/')
-      setServer(
-        T('연결 성공: {v0}', {
-          v0: res.status,
-        }),
-      )
+      setServer({ key: '연결 성공: {v0}', vars: { v0: res.status } })
     } catch (e) {
-      setServer(
-        T('연결 실패: {v0}', {
-          v0: e.message,
-        }),
-      )
+      setServer({ key: '연결 실패: {v0}', vars: { v0: e.message } })
     }
   }
 
@@ -141,7 +134,7 @@ export default function Settings() {
           <button className="settings-row" onClick={checkServer}>
             <Server size={18} />
             <span>{T('서버 연결 확인')}</span>
-            <small role="status">{server}</small>
+            <small role="status">{server && T(server.key, server.vars)}</small>
           </button>
           <button className="settings-row" onClick={resetDemo}>
             <RotateCcw size={18} />

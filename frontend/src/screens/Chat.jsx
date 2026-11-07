@@ -184,7 +184,7 @@ function ServerChat({ docId }) {
       .catch((err) => {
         if (!fresh() || err instanceof StaleSessionError) return
         if (isChatTimeout(err)) {
-          setFailed({ question: q, action: 'reload', text: T('답변이 오래 걸려 기다리지 못했어요. 답변이 저장됐을 수 있으니 대화를 다시 불러오세요.') })
+          setFailed({ question: q, action: 'reload', text: '답변이 오래 걸려 기다리지 못했어요. 답변이 저장됐을 수 있으니 대화를 다시 불러오세요.' })
           return
         }
         const info = parseApiError(err)
@@ -193,11 +193,11 @@ function ServerChat({ docId }) {
           setInput(q)
         } else if (info.status === 404) setNotFound(true)
         else if (info.status === 400) {
-          setFailed({ question: q, action: 'edit', text: info.fields.message || info.message || T('질문을 확인해 주세요.') })
+          setFailed({ question: q, action: 'edit', text: info.fields.message || info.message || '질문을 확인해 주세요.' })
         } else if (info.code === 'NETWORK_ERROR') {
-          setFailed({ question: q, action: 'retry', text: T('서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 보내세요.') })
+          setFailed({ question: q, action: 'retry', text: '서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 보내세요.' })
         } else {
-          setFailed({ question: q, action: 'retry', text: T('답변을 만들지 못했어요. 잠시 후 다시 보내세요.') })
+          setFailed({ question: q, action: 'retry', text: '답변을 만들지 못했어요. 잠시 후 다시 보내세요.' })
         }
       })
       .finally(() => aliveRef.current && setPending(null))
@@ -214,7 +214,7 @@ function ServerChat({ docId }) {
       setFailed(null)
       loadHistory()
         .then(() => showToast(T('대화를 다시 불러왔어요')))
-        .catch(() => setFailed({ question, action: 'reload', text: T('대화를 불러오지 못했어요. 잠시 후 다시 시도하세요.') }))
+        .catch(() => setFailed({ question, action: 'reload', text: '대화를 불러오지 못했어요. 잠시 후 다시 시도하세요.' }))
     }
   }
 
@@ -350,7 +350,7 @@ function ServerChat({ docId }) {
             <li className="msg is-user is-failed">
               <div className="bubble">{failed.question}</div>
               <div className="msg-error" role="alert">
-                <p>{failed.text}</p>
+                <p>{T(failed.text)}</p>
                 <button className="btn btn-small btn-outline" onClick={resolveFailed}>
                   <RefreshCw size={14} /> {failed.action === 'retry' ? T('다시 보내기') : failed.action === 'edit' ? T('질문 고치기') : T('대화 다시 불러오기')}
                 </button>
