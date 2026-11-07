@@ -16,6 +16,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 from dotenv import load_dotenv
@@ -41,14 +42,35 @@ def call_clova(invoke_url, secret, path, file_format):
         }],
     }
     headers = {'Content-Type': 'application/json', 'X-OCR-SECRET': secret}
-    return requests.post(invoke_url, headers=headers, json=body, timeout=TIMEOUT)
+    # 리디렉션을 따라가면 다른 서버로 Secret Key와 문서가 전송될 수 있다.
+    return requests.post(invoke_url, headers=headers, json=body, timeout=TIMEOUT, allow_redirects=False)
 
 
 def save_response(data, out_dir, source):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f'{source.stem}_{time.strftime("%Y%m%d_%H%M%S")}.json'
-    out_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    """응답을 새 파일로 저장한다. 기존 파일을 덮어쓰지 않고, 소유자만 읽도록 권한을 지정한다.
+
+    권한 값은 macOS·Linux에 적용된다. Windows에서는 사용자 폴더의 접근 권한을 따른다.
+    """
+    out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    out_dir.chmod(0o700)
+    out_path = out_dir / f'{source.stem}_{time.strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:8]}.json'
+    file_descriptor = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(file_descriptor, 'w', encoding='utf-8') as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
     return out_path
+
+
+def validate_images(data):
+    """응답·images·이미지·단어 항목의 형식을 확인하고 images를 돌려준다."""
+    if not isinstance(data, dict) or not isinstance(data.get('images'), list):
+        sys.exit('응답 형식이 올바르지 않습니다.')
+    for image in data['images']:
+        if not isinstance(image, dict) or not isinstance(image.get('fields', []), list):
+            sys.exit('응답 형식이 올바르지 않습니다.')
+        for field in image.get('fields', []):
+            if not isinstance(field, dict) or not isinstance(field.get('inferConfidence'), (int, float)):
+                sys.exit('응답 형식이 올바르지 않습니다.')
+    return data['images']
 
 
 def restore_lines(fields):
@@ -65,7 +87,8 @@ def restore_lines(fields):
 
 
 def print_image(index, image):
-    fields = image.get('fields', [])
+    """이미지 하나의 인식 결과와 단어별 신뢰도를 출력한다."""
+    fields =image.get('fields', [])
     print(f'\n===== images[{index}] =====')
     print(f"inferResult: {image.get('inferResult')}  message: {image.get('message')}")
     print(f"convertedImageInfo: {image.get('convertedImageInfo')}")
@@ -87,6 +110,7 @@ def print_image(index, image):
 
 
 def main():
+    """파일 하나로 CLOVA를 호출하고 응답을 저장·출력한다."""
     # 콘솔에서 표시할 수 없는 글자가 있어도 중단하지 않는다.
     sys.stdout.reconfigure(errors='replace')
 
@@ -100,6 +124,9 @@ def main():
     secret = os.environ.get('CLOVA_OCR_SECRET')
     if not invoke_url or not secret:
         sys.exit('backend/.env에 CLOVA_OCR_INVOKE_URL과 CLOVA_OCR_SECRET을 넣어 주세요.')
+    # http로 보내면 원본 문서와 Secret Key가 암호화되지 않은 채 전송된다.
+    if urlsplit(invoke_url).scheme.lower() != 'https':
+        sys.exit('CLOVA_OCR_INVOKE_URL은 HTTPS 주소여야 합니다.')
 
     if not args.file.is_file():
         sys.exit(f'파일을 찾을 수 없습니다: {args.file}')
@@ -114,6 +141,8 @@ def main():
         sys.exit(f'CLOVA 호출 실패: {type(error).__name__}')
 
     print(f'HTTP 상태: {response.status_code}')
+    if 300 <= response.status_code < 400:
+        sys.exit('리디렉션 응답은 따라가지 않습니다.')
     try:
         data = response.json()
     except ValueError:
@@ -123,7 +152,7 @@ def main():
     if not response.ok:
         sys.exit(f'CLOVA 오류 응답: {json.dumps(data, ensure_ascii=False)}')
 
-    images = data.get('images', [])
+    images = validate_images(data)
     print(f'images 개수: {len(images)}')
     for index, image in enumerate(images):
         print_image(index, image)

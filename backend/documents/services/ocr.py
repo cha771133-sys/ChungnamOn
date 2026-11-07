@@ -12,6 +12,7 @@ import re
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 from django.conf import settings
@@ -45,12 +46,35 @@ class OCRError(Exception):
     """OCR 실패. 메시지에 OCR 원문, Secret Key, Invoke URL을 넣지 않는다."""
 
 
+def _validate_images(images):
+    """images 항목·fields·inferConfidence 형식과 인식 결과를 확인한다."""
+    invalid = OCRError('CLOVA 응답 형식이 올바르지 않습니다.')
+    if not isinstance(images, list) or not images:
+        raise invalid
+    for image in images:
+        if not isinstance(image, dict):
+            raise invalid
+        # 일부 페이지만 실패해도 기한·금액을 놓칠 수 있어 문서 전체를 실패로 본다.
+        # 응답 값은 문서 내용일 수 있어 오류 메시지에 넣지 않는다.
+        if image.get('inferResult') != 'SUCCESS':
+            raise OCRError('CLOVA 인식에 실패했습니다.')
+        fields = image.get('fields', [])
+        if not isinstance(fields, list):
+            raise invalid
+        for field in fields:
+            if not isinstance(field, dict) or not isinstance(field.get('inferConfidence'), (int, float)):
+                raise invalid
+
+
 def call_clova(file_bytes, file_format):
     """파일을 CLOVA로 보내고 응답의 images 목록을 돌려준다."""
     invoke_url = getattr(settings, 'CLOVA_OCR_INVOKE_URL', '')
     secret = getattr(settings, 'CLOVA_OCR_SECRET', '')
     if not invoke_url or not secret:
         raise OCRError('CLOVA OCR 설정이 없습니다.')
+    # http로 보내면 원본 문서와 Secret Key가 암호화되지 않은 채 전송된다.
+    if urlsplit(invoke_url).scheme.lower() != 'https':
+        raise OCRError('CLOVA OCR 주소는 HTTPS여야 합니다.')
 
     body = {
         'version': CLOVA_VERSION,
@@ -66,25 +90,23 @@ def call_clova(file_bytes, file_format):
     headers = {'Content-Type': 'application/json', 'X-OCR-SECRET': secret}
 
     try:
-        response = requests.post(invoke_url, headers=headers, json=body, timeout=CLOVA_TIMEOUT)
+        # 리디렉션을 따라가면 다른 서버로 Secret Key와 문서가 전송될 수 있다.
+        response = requests.post(
+            invoke_url, headers=headers, json=body, timeout=CLOVA_TIMEOUT, allow_redirects=False,
+        )
     except requests.RequestException as error:
         # requests의 오류 문구에는 Invoke URL이 들어갈 수 있어 오류 종류만 남긴다.
         raise OCRError(f'CLOVA 호출 실패: {type(error).__name__}') from None
 
-    if not response.ok:
+    # response.ok는 3xx도 성공으로 보므로 리디렉션을 오류로 처리하도록 2xx를 직접 확인한다.
+    if not 200 <= response.status_code < 300:
         raise OCRError(f'CLOVA 오류 응답: HTTP {response.status_code}')
 
     try:
         images = response.json()['images']
     except (ValueError, KeyError, TypeError):
         raise OCRError('CLOVA 응답 형식이 올바르지 않습니다.') from None
-    if not isinstance(images, list) or not images:
-        raise OCRError('CLOVA 응답 형식이 올바르지 않습니다.')
-
-    # 일부 페이지만 실패해도 기한·금액을 놓칠 수 있어 문서 전체를 실패로 본다.
-    for image in images:
-        if image.get('inferResult') != 'SUCCESS':
-            raise OCRError(f"CLOVA 인식 실패: {image.get('inferResult')}")
+    _validate_images(images)
     return images
 
 
@@ -102,6 +124,7 @@ def _split_lines(fields):
 
 
 def _line_text(line):
+    """한 줄의 단어들을 공백으로 이어 글자로 만든다."""
     return ' '.join(field.get('inferText', '') for field in line)
 
 
@@ -165,6 +188,7 @@ def calculate_confidence(images):
 
 
 def _file_format(document):
+    """CLOVA 요청의 format 값을 정한다."""
     if document.file_type == Document.FileType.PDF:
         return 'pdf'
     # IMAGE는 jpg와 png를 구분하지 않아 확장자로 판단한다.
@@ -175,6 +199,7 @@ def _file_format(document):
 
 
 def _read_file(document):
+    """문서 파일을 읽는다. 읽지 못하면 경로를 숨긴 OCRError를 던진다."""
     try:
         with document.file.open('rb') as file:
             return file.read()

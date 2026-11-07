@@ -45,7 +45,8 @@ def page(*fields, result='SUCCESS', index=0):
 
 
 def clova_response(images=None, status=200, content=None):
-    response = requests.Response()
+    """requests.post가 돌려줄 가짜 응답을 만든다."""
+    response =requests.Response()
     response.status_code = status
     if content is None:
         content = json.dumps({'version': 'V2', 'images': images or []}).encode()
@@ -99,6 +100,7 @@ class BuildTextTests(SimpleTestCase):
 
 class NormalizeRegistrationNumberTests(SimpleTestCase):
     def test_joins_split_numbers_and_masking_finds_them(self):
+        """쪼개진 번호가 이어지고 마스킹 정규식에 걸린다."""
         for text in (
             '900101 - 5123456',
             '900101- 5123456',
@@ -121,6 +123,7 @@ class NormalizeRegistrationNumberTests(SimpleTestCase):
         )
 
     def test_keeps_other_numbers(self):
+        """납부번호·계좌번호·전화번호는 바꾸지 않는다."""
         for text in (
             '4420012026080001234',
             '0020261112345678',
@@ -201,6 +204,7 @@ class CalculateConfidenceTests(SimpleTestCase):
         self.assertEqual(calculate_confidence(images), 0.0)
 
     def test_uses_only_found_categories(self):
+        """일부 분류가 없으면 찾은 분류만으로 계산한다."""
         for fields, expected in (
             ([field('6,250원', 0.8, line_break=True)], 0.8),
             ([field('아산시청', 0.75, line_break=True)], 0.75),
@@ -263,6 +267,7 @@ class RunClovaOcrTests(ClovaTestCase):
         kwargs = self.post.call_args.kwargs
         self.assertEqual(kwargs['headers']['X-OCR-SECRET'], SECRET)
         self.assertEqual(kwargs['timeout'], ocr.CLOVA_TIMEOUT)
+        self.assertIs(kwargs['allow_redirects'], False)
         body = self.sent_body()
         self.assertEqual(body['version'], 'V2')
         self.assertTrue(body['requestId'])
@@ -279,6 +284,7 @@ class RunClovaOcrTests(ClovaTestCase):
         self.assertEqual(self.sent_body()['images'][0]['name'], ocr.CLOVA_IMAGE_NAME)
 
     def test_format_follows_file(self):
+        """파일 종류에 맞는 format을 보낸다."""
         for name, file_type, expected in (
             ('notice.jpg', Document.FileType.IMAGE, 'jpg'),
             ('notice.JPEG', Document.FileType.IMAGE, 'jpeg'),
@@ -311,6 +317,7 @@ class RunClovaOcrTests(ClovaTestCase):
         self.assertEqual(result['confidence'], 0.8)
 
     def test_recognition_failure_raises(self):
+        """inferResult가 SUCCESS가 아니면 실패한다."""
         for result in ('FAILURE', 'ERROR'):
             with self.subTest(result=result):
                 self.post.return_value = clova_response([page(result=result)])
@@ -325,6 +332,7 @@ class RunClovaOcrTests(ClovaTestCase):
             run_clova_ocr(self.create_document('notice.pdf', Document.FileType.PDF))
 
     def test_empty_text_raises(self):
+        """인식한 글자가 없으면 실패한다."""
         for images in ([page()], [page(field('  ', line_break=True))]):
             with self.subTest(images=images):
                 self.post.return_value = clova_response(images)
@@ -333,8 +341,8 @@ class RunClovaOcrTests(ClovaTestCase):
                     run_clova_ocr(self.create_document())
 
     def test_http_error_raises(self):
-        # 본문이 정상 형식이어도 HTTP 상태만으로 실패해야 한다.
-        for status in (400, 401, 403, 500, 503):
+        """본문이 정상 형식이어도 HTTP 상태만으로 실패한다. 리디렉션도 오류로 처리한다."""
+        for status in (301, 302, 307, 308, 400, 401, 403, 500, 503):
             with self.subTest(status=status):
                 self.post.return_value = clova_response([NOTICE_PAGE], status=status)
 
@@ -342,6 +350,7 @@ class RunClovaOcrTests(ClovaTestCase):
                     run_clova_ocr(self.create_document())
 
     def test_network_error_raises(self):
+        """timeout과 연결 오류는 OCRError가 된다."""
         for error in (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout, requests.ConnectionError):
             with self.subTest(error=error.__name__):
                 self.post.side_effect = error()
@@ -350,6 +359,7 @@ class RunClovaOcrTests(ClovaTestCase):
                     run_clova_ocr(self.create_document())
 
     def test_invalid_response_raises(self):
+        """JSON이 아니거나 images가 없는 응답은 실패한다."""
         for content in (b'not json', b'{}', b'[]', b'{"images": []}', b'{"images": null}'):
             with self.subTest(content=content):
                 self.post.return_value = clova_response(content=content)
@@ -357,7 +367,38 @@ class RunClovaOcrTests(ClovaTestCase):
                 with self.assertRaises(OCRError):
                     run_clova_ocr(self.create_document())
 
+    def test_malformed_images_raise_ocr_error(self):
+        """images 항목·fields·inferConfidence 형식이 틀리면 OCRError로 통일한다."""
+        success = {'inferResult': 'SUCCESS'}
+        for images in (
+            ['문자열'],
+            [None],
+            [{**success, 'fields': None}],
+            [{**success, 'fields': '문자열'}],
+            [{**success, 'fields': ['문자열']}],
+            [{**success, 'fields': [field('글자', None)]}],
+            [{**success, 'fields': [field('글자', '0.9')]}],
+            [{**success, 'fields': [{'inferText': '글자'}]}],
+        ):
+            with self.subTest(images=images):
+                self.post.return_value = clova_response(images)
+
+                with self.assertRaises(OCRError):
+                    run_clova_ocr(self.create_document())
+
+    def test_rejects_non_https_url_without_calling_clova(self):
+        """HTTPS가 아닌 Invoke URL로는 문서와 키를 보내지 않는다."""
+        for url in ('http://clova.invalid/general', 'clova.invalid/general', 'ftp://clova.invalid/general'):
+            with self.subTest(url=url), override_settings(CLOVA_OCR_INVOKE_URL=url):
+                with self.assertRaises(OCRError) as caught:
+                    run_clova_ocr(self.create_document())
+
+                self.assertNotIn(url, str(caught.exception))
+
+        self.post.assert_not_called()
+
     def test_missing_settings_raise_without_calling_clova(self):
+        """설정이 없으면 CLOVA를 호출하지 않는다."""
         for name in ('CLOVA_OCR_INVOKE_URL', 'CLOVA_OCR_SECRET'):
             with self.subTest(name=name), override_settings(**{name: ''}):
                 with self.assertRaises(OCRError):
@@ -392,6 +433,7 @@ class PipelineIntegrationTests(ClovaTestCase):
         return document
 
     def process_expecting_failure(self, document):
+        """처리 실패를 기다려 문서와 traceback까지 포함한 로그 내용을 돌려준다."""
         with self.assertLogs(pipeline.logger, 'ERROR') as logs:
             process_document(document.id)
         document.refresh_from_db()
@@ -446,6 +488,7 @@ class PipelineIntegrationTests(ClovaTestCase):
         self.assertTrue(document.low_confidence)
 
     def test_failures_mark_document_failed_without_leaking(self):
+        """실패하면 FAILED(step=OCR)가 되고 로그에 URL·키·응답 값이 남지 않는다."""
         original_text = '비밀원문'
         cases = {
             'timeout': {'side_effect': requests.Timeout(f'timed out: {INVOKE_URL}')},
@@ -456,6 +499,8 @@ class PipelineIntegrationTests(ClovaTestCase):
             'infer': {'return_value': clova_response([
                 page(field(original_text, line_break=True), result='FAILURE'),
             ])},
+            'infer_result_value': {'return_value': clova_response([page(result=original_text)])},
+            'confidence_value': {'return_value': clova_response([page(field('글자', original_text))])},
         }
         for name, behavior in cases.items():
             with self.subTest(name=name):
