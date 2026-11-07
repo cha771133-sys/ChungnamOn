@@ -14,7 +14,7 @@ Django 교체 자리 어댑터 (integration.py)
     verify_interpretation(...)  : documents.services.pipeline.verify (DOCUMENTS_VERIFY_MODE=rag)
 
 청크·임베딩 생성 (indexing.py, manage.py shell에서)
-    build_source_chunks(source_ids=None, rebuild=False)
+    build_source_chunks(source_ids=None)
 """
 from .chunker import prepare_chunks
 from .embedder import embed_passages

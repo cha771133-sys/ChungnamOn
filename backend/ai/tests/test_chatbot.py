@@ -171,11 +171,13 @@ class PgVectorSearchTests(unittest.TestCase):
         c.execute("DROP TABLE IF EXISTS ai_test_chunk, ai_test_doc")
         c.execute(
             """CREATE TABLE ai_test_doc (id serial primary key, source_url text, title text, agency text,
-               region text, published_at date, collected_at timestamptz default now(), status text)"""
+               region text, published_at date, collected_at timestamptz default now(), status text,
+               review_status text default 'APPROVED', ai_reprocessing_required boolean default false,
+               content_hash text)"""
         )
         c.execute(
             """CREATE TABLE ai_test_chunk (id serial primary key, source_document_id int references ai_test_doc(id),
-               chunk_text text, chunk_order int, embedding vector(384))"""
+               chunk_text text, chunk_order int, embedding vector(384), source_content_hash text)"""
         )
         rows = [
             ("u1", "아산 주민세", "아산시청", "아산시", "ACTIVE", "아산시 주민세 납부 기간은 8월 16일부터 31일"),
@@ -184,13 +186,16 @@ class PgVectorSearchTests(unittest.TestCase):
             ("u4", "폐기 자료", "충남도청", "충남", "DISCARDED", "아산시 주민세 납부 기간은 8월 16일부터 31일"),
         ]
         for url, title, agency, region, status, text in rows:
+            digest = f"h-{url}"  # 승인 본문 해시 (청크 생성 당시 해시와 같아야 검색됨)
             did = c.execute(
-                "INSERT INTO ai_test_doc (source_url,title,agency,region,status) VALUES (%s,%s,%s,%s,%s) RETURNING id",
-                (url, title, agency, region, status),
+                "INSERT INTO ai_test_doc (source_url,title,agency,region,status,content_hash)"
+                " VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                (url, title, agency, region, status, digest),
             ).fetchone()[0]
             c.execute(
-                "INSERT INTO ai_test_chunk (source_document_id,chunk_text,chunk_order,embedding) VALUES (%s,%s,0,%s::vector)",
-                (did, text, to_pgvector(embed_passages([text])[0])),
+                "INSERT INTO ai_test_chunk (source_document_id,chunk_text,chunk_order,embedding,source_content_hash)"
+                " VALUES (%s,%s,0,%s::vector,%s)",
+                (did, text, to_pgvector(embed_passages([text])[0]), digest),
             )
 
         os.environ.update(AI_RETRIEVER="db", AI_SOURCE_DOCUMENT_TABLE="ai_test_doc", AI_SOURCE_CHUNK_TABLE="ai_test_chunk")

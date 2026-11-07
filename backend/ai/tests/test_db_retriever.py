@@ -37,14 +37,18 @@ class DbRetrieverOnSourcesModelTests(TestCase):
         reset_settings()
         self.addCleanup(reset_settings)
 
-        def add(url, title, region, status, text, embed=True):
+        def add(url, title, region, status, text, embed=True, review="APPROVED", reprocessing=False,
+                chunk_hash=None):
+            digest = f"hash-{url}"
             d = SourceDocument.objects.create(
                 source_url=url, title=title, agency="테스트청", region=region, category="세금",
-                status=status, collected_at=timezone.now(),
+                status=status, collected_at=timezone.now(), content_text=text, content_hash=digest,
+                review_status=review, ai_reprocessing_required=reprocessing,
             )
             SourceChunk.objects.create(
                 source_document=d, chunk_order=0, chunk_text=text,
                 embedding=embed_passages([text])[0] if embed else None,
+                source_content_hash=digest if chunk_hash is None else chunk_hash,
             )
 
         add("https://a.test/asan", "아산 주민세", "아산시", "ACTIVE", "아산시 주민세 납부 기간은 8월 16일부터 31일")
@@ -52,6 +56,12 @@ class DbRetrieverOnSourcesModelTests(TestCase):
         add("https://a.test/pending", "확인 대기", "아산시", "PENDING", "아산시 주민세 납부 기간은 8월 16일부터 31일")
         add("https://a.test/noemb", "임베딩 없음", "아산시", "ACTIVE", "아산시 주민세 납부 기간", embed=False)
         add("https://a.test/nat", "전국 납부 방법", "전국", "ACTIVE", "지방세는 가상계좌와 위택스로 납부")
+        # 팀원 승인 계약(ai_eligible·is_current)상 검색하면 안 되는 자료
+        same = "아산시 주민세 납부 기간은 8월 16일부터 31일"
+        add("https://a.test/unreviewed", "검토 전", "아산시", "ACTIVE", same, review="PENDING_REVIEW")
+        add("https://a.test/reproc", "재처리 대기", "아산시", "ACTIVE", same, reprocessing=True)
+        add("https://a.test/legacy", "해시 없는 옛 청크", "아산시", "ACTIVE", same, chunk_hash="")
+        add("https://a.test/stale", "이전 본문 청크", "아산시", "ACTIVE", same, chunk_hash="old-hash")
 
     def test_filters_status_region_and_null_embedding(self):
         from ai.chatbot.retriever import search
@@ -59,7 +69,8 @@ class DbRetrieverOnSourcesModelTests(TestCase):
         titles = [r.title for r in search("아산시 주민세 납부 기간", regions=["아산시", "충남", "전국"], top_k=10)]
         self.assertEqual(titles[0], "아산 주민세")
         self.assertIn("전국 납부 방법", titles)
-        for excluded in ("천안 주민세", "확인 대기", "임베딩 없음"):
+        for excluded in ("천안 주민세", "확인 대기", "임베딩 없음", "검토 전", "재처리 대기", "해시 없는 옛 청크",
+                         "이전 본문 청크"):
             self.assertNotIn(excluded, titles)
 
     def test_generate_answer_uses_db(self):

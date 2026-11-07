@@ -99,9 +99,14 @@ class DbRetriever:
     - Postgres + pgvector: SQL에서 코사인 거리로 바로 정렬
     - 그 밖(SQLite, pgvector 없는 Postgres): 후보 청크를 읽어서 numpy로 계산 (청크 수천 개까지는 충분히 빠름)
 
-    테이블 (sources 앱 모델, P1-6):
-      sources_sourcedocument: id, source_url, title, agency, region, published_at, collected_at, status('ACTIVE'만 검색)
-      sources_sourcechunk   : id, source_document_id, chunk_text, chunk_order, embedding(JSON 숫자 배열, null이면 제외)
+    테이블 (sources 앱 모델, P1-6·P3-17):
+      sources_sourcedocument: id, source_url, title, agency, region, published_at, collected_at,
+                              status, review_status, ai_reprocessing_required, content_hash
+      sources_sourcechunk   : id, source_document_id, chunk_text, chunk_order, embedding, source_content_hash
+
+    검색 대상 (sources/REFRESH.md 'AI 경계' 계약 = SourceDocument.ai_eligible + SourceChunk.is_current):
+      - 자료: 공식 링크 있음, ACTIVE, 관리자 승인(APPROVED), AI 재처리 대기 아님
+      - 청크: 생성 당시 원문 해시가 자료의 현재 승인 본문 해시와 같음 (이전 본문 청크는 보존되지만 안 씀)
     """
 
     COLS = "c.id, c.chunk_text, {score}, d.source_url, d.title, d.agency, d.region, d.published_at, d.collected_at, d.id"
@@ -132,12 +137,15 @@ class DbRetriever:
         return bool(row and str(row[0]).startswith("vector"))
 
     def _where(self, regions):
-        # 임베딩이 아직 없는 청크(null)는 검색 대상에서 뺀다
+        # ai_eligible·is_current와 같은 조건. 임베딩이 아직 없는 청크(null)도 뺀다
         sql = (
             f"FROM {self.chunk_t} c JOIN {self.doc_t} d ON d.id = c.source_document_id "
-            "WHERE d.status = 'ACTIVE' AND c.embedding IS NOT NULL"
+            "WHERE d.status = 'ACTIVE' AND d.review_status = 'APPROVED' AND d.ai_reprocessing_required = %s"
+            " AND d.source_url IS NOT NULL AND d.source_url <> ''"
+            " AND c.source_content_hash <> '' AND c.source_content_hash = d.content_hash"
+            " AND c.embedding IS NOT NULL"
         )
-        params: list = []
+        params: list = [False]
         if regions:
             sql += " AND d.region IN (" + ", ".join(["%s"] * len(regions)) + ")"
             params += list(regions)

@@ -6,6 +6,7 @@
 샘플 URL은 sources 앱 공식 URL 검사를 통과하도록 테스트 안에서만 공식 도메인으로 바꾼다.
 LLM 출력은 매번 달라질 수 있어서 형식·출처 범위만 검사하고 답변은 출력해서 사람이 본다.
 """
+import hashlib
 import os
 import unittest
 from pathlib import Path
@@ -53,6 +54,7 @@ class OllamaLiveTests(TestCase):
                 source_url=f"https://{HOSTS[region]}/sample/{path.stem}", title=meta["title"],
                 agency=meta["agency"], region="충청남도" if region == "충남" else region,
                 category=meta.get("category", ""), status="ACTIVE", content_text=body, collected_at=timezone.now(),
+                content_hash=hashlib.sha256(body.encode()).hexdigest(), review_status="APPROVED",
             )
         self.stats = build_source_chunks()
 

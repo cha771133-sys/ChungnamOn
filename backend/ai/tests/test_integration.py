@@ -47,7 +47,10 @@ class AIEnvMixin:
         self.addCleanup(reset_settings)
 
     def source(self, path, *, region="아산시", status="ACTIVE", collected=True, host="www.asan.go.kr",
-               text=ASAN_TEXT, title=None, index=True):
+               text=ASAN_TEXT, title=None, index=True, review="APPROVED", reprocessing=False):
+        """AI가 쓸 수 있는(승인·재처리 완료) 공식자료를 기본으로 만든다. index=True면 청크·임베딩까지."""
+        import hashlib
+
         from django.utils import timezone
 
         from ai.chatbot import build_source_chunks
@@ -56,64 +59,128 @@ class AIEnvMixin:
         doc = SourceDocument.objects.create(
             source_url=f"https://{host}/{path}", title=title or f"자료 {path}", agency="아산시청", region=region,
             category="지방세", status=status, content_text=text,
+            content_hash=hashlib.sha256(text.encode()).hexdigest() if text else "",
+            review_status=review, ai_reprocessing_required=reprocessing,
             collected_at=timezone.now() if collected else None,
         )
         if index:
             build_source_chunks([doc.pk])
         return doc
 
+    def set_body(self, doc, text):
+        """관리자 승인으로 본문이 바뀐 것처럼 본문·해시를 바꾼다."""
+        import hashlib
+
+        doc.content_text, doc.content_hash = text, hashlib.sha256(text.encode()).hexdigest()
+        doc.save(update_fields=["content_text", "content_hash"])
+
+
+STATS0 = {"documents": 0, "chunks": 0, "skipped": 0, "completed": 0, "changed": 0}
+
 
 @unittest.skipUnless(DJANGO, "manage.py test로 실행")
 class BuildSourceChunksTests(AIEnvMixin, TestCase):
-    def test_only_active_documents_with_body(self):
+    def test_targets_only_approved_documents_with_body(self):
         from ai.chatbot import build_source_chunks
         from sources.models import SourceChunk
 
         doc = self.source("a", index=False)
-        others = [self.source("b", status="INACTIVE", index=False), self.source("p", status="PENDING", index=False),
+        others = [self.source("b", status="INACTIVE", index=False),
+                  self.source("r", review="PENDING_REVIEW", index=False),
+                  self.source("j", review="REJECTED", index=False),
                   self.source("c", text="", index=False)]
 
-        self.assertEqual(build_source_chunks(), {"documents": 1, "chunks": 1, "skipped": 0})
+        self.assertEqual(build_source_chunks(), {**STATS0, "documents": 1, "chunks": 1})
         chunk = SourceChunk.objects.get(source_document=doc)
         self.assertEqual(len(chunk.embedding), 1024)
+        self.assertEqual(chunk.source_content_hash, doc.content_hash)  # 읽은 본문 해시 기록
+        self.assertTrue(chunk.is_current)
         self.assertIn("[자료 a]", chunk.chunk_text)
         self.assertFalse(SourceChunk.objects.filter(source_document__in=others).exists())
 
-    def test_unchanged_skipped_changed_rebuilt(self):
+    def test_unchanged_skipped_changed_appended_without_deleting_old(self):
         from ai.chatbot import build_source_chunks
+        from ai.chatbot.retriever import search
         from sources.models import SourceChunk
 
         doc = self.source("a")
-        first_id = SourceChunk.objects.get(source_document=doc).pk
+        old = SourceChunk.objects.get(source_document=doc)
         with mock.patch("ai.chatbot.indexing.embed_passages") as embed:
-            self.assertEqual(build_source_chunks(), {"documents": 0, "chunks": 0, "skipped": 1})
-        embed.assert_not_called()  # 본문이 그대로면 임베딩 API도 안 부름
-        self.assertEqual(SourceChunk.objects.get(source_document=doc).pk, first_id)
+            self.assertEqual(build_source_chunks(), {**STATS0, "skipped": 1})
+        embed.assert_not_called()  # 승인 본문이 그대로면 임베딩 API도 안 부름
 
-        doc.content_text = "# 새 본문\n" + "바뀐 납부 안내 " * 200
-        doc.save(update_fields=["content_text"])
+        self.set_body(doc, "# 새 본문\n" + "바뀐 납부 안내 " * 200)
         stats = build_source_chunks()
         self.assertEqual(stats["documents"], 1)
         self.assertGreater(stats["chunks"], 1)
-        texts = list(SourceChunk.objects.filter(source_document=doc).values_list("chunk_text", flat=True))
-        self.assertEqual(len(texts), stats["chunks"])
-        self.assertTrue(all("바뀐 납부 안내" in t for t in texts))
+        # 이전 청크는 그대로 남고 ID·순서도 재사용하지 않음
+        old.refresh_from_db()
+        self.assertEqual((old.chunk_order, old.source_content_hash != doc.content_hash), (0, True))
+        new = SourceChunk.objects.filter(source_document=doc, source_content_hash=doc.content_hash)
+        self.assertEqual(new.count(), stats["chunks"])
+        self.assertEqual(min(new.values_list("chunk_order", flat=True)), 1)
+        self.assertTrue(all("바뀐 납부 안내" in t for t in new.values_list("chunk_text", flat=True)))
+        # 검색은 현재 본문 청크만
+        texts = [r.text for r in search("납부 안내", regions=["아산시"], top_k=50, min_score=-1)]
+        self.assertTrue(texts and all("바뀐 납부 안내" in t for t in texts))
 
-    def test_wrong_dimension_or_missing_embedding_is_rebuilt(self):
+    def test_wrong_dimension_gets_new_chunks(self):
         from ai.chatbot import build_source_chunks
         from sources.models import SourceChunk
 
         doc = self.source("a")
-        for bad in ([0.1] * 768, None):
-            SourceChunk.objects.filter(source_document=doc).update(embedding=bad)
-            self.assertEqual(build_source_chunks()["documents"], 1)
-            self.assertEqual(len(SourceChunk.objects.get(source_document=doc).embedding), 1024)
+        SourceChunk.objects.filter(source_document=doc).update(embedding=[0.1] * 768)
+        self.assertEqual(build_source_chunks()["documents"], 1)
+        dims = sorted(len(e) for e in SourceChunk.objects.filter(source_document=doc).values_list("embedding", flat=True))
+        self.assertEqual(dims, [768, 1024])  # 이전 임베딩은 보존, 검색은 차원이 맞는 것만
 
-    def test_rebuild_forces(self):
+    def test_reprocessing_completed_with_hash_check_but_not_activated(self):
         from ai.chatbot import build_source_chunks
+        from ai.chatbot.retriever import search
 
-        self.source("a")
-        self.assertEqual(build_source_chunks(rebuild=True)["documents"], 1)
+        doc = self.source("a", status="PENDING", reprocessing=True, index=False)
+        version = doc.version
+        self.assertEqual(build_source_chunks(), {**STATS0, "documents": 1, "chunks": 1, "completed": 1})
+        doc.refresh_from_db()
+        self.assertFalse(doc.ai_reprocessing_required)
+        self.assertEqual(doc.version, version + 1)  # 먼저 연 관리자 화면이 덮어쓰지 못하게
+        self.assertEqual(doc.status, "PENDING")  # ACTIVE 전환은 관리자 몫
+        self.assertEqual(search("주민세", regions=["아산시"], min_score=-1), [])
+        doc.status = "ACTIVE"
+        doc.save(update_fields=["status"])
+        self.assertTrue(doc.ai_eligible)
+        self.assertEqual(len(search("주민세", regions=["아산시"], min_score=-1)), 1)
+
+    def test_already_chunked_reprocessing_is_just_completed(self):
+        from ai.chatbot import build_source_chunks
+        from sources.models import SourceDocument
+
+        doc = self.source("a")
+        SourceDocument.objects.filter(pk=doc.pk).update(ai_reprocessing_required=True, status="PENDING")
+        with mock.patch("ai.chatbot.indexing.embed_passages") as embed:
+            self.assertEqual(build_source_chunks(), {**STATS0, "skipped": 1, "completed": 1})
+        embed.assert_not_called()
+        doc.refresh_from_db()
+        self.assertFalse(doc.ai_reprocessing_required)
+
+    def test_body_changed_during_embedding_is_not_saved(self):
+        import hashlib
+
+        from ai.chatbot import build_source_chunks
+        from ai.chatbot.embedder import embed_passages as real_embed
+        from sources.models import SourceChunk, SourceDocument
+
+        doc = self.source("a", status="PENDING", reprocessing=True, index=False)
+
+        def approve_new_body_meanwhile(chunks):
+            SourceDocument.objects.filter(pk=doc.pk).update(content_hash=hashlib.sha256(b"new").hexdigest())
+            return real_embed(chunks)
+
+        with mock.patch("ai.chatbot.indexing.embed_passages", side_effect=approve_new_body_meanwhile):
+            self.assertEqual(build_source_chunks(), {**STATS0, "changed": 1})
+        self.assertFalse(SourceChunk.objects.filter(source_document=doc).exists())
+        doc.refresh_from_db()
+        self.assertTrue(doc.ai_reprocessing_required)  # 완료로 표시하지 않음
 
 
 @unittest.skipUnless(DJANGO, "manage.py test로 실행")
@@ -125,6 +192,8 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         province = self.source("province", region="충청남도", host="www.chungnam.go.kr")
         excluded = [
             self.source("pending", status="PENDING"),
+            self.source("review", review="PENDING_REVIEW"),
+            self.source("reproc", status="PENDING", reprocessing=True, index=False),
             self.source("nocheck", collected=False),
             self.source("cheonan", region="천안시"),
             self.source("unofficial", host="example.com"),

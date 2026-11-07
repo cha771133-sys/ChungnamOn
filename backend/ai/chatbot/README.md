@@ -30,13 +30,20 @@ FE Chat.jsx ──POST /api/chat/──▶ chatbot 앱
 - 그래서 **챗봇이 GROUNDED를 내려면 verify도 rag여야 함** (dummy verify에는 ID가 없음)
 - 오류(검색·LLM·timeout)는 `AIClientError` → 503. 오류 원문은 버림
 
-청크·임베딩 생성 (수집기는 안 건드림, 수집 후 실행):
+청크·임베딩 생성 (수집기는 안 건드림, 관리자 승인 후 실행):
 ```bash
 python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks())"
-python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks([3, 5], rebuild=True))"  # 본문·임베딩 모델 바뀐 자료
+python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks([3, 5]))"  # 특정 자료만
 ```
-ACTIVE이고 본문이 있는 자료만. 본문이 그대로이고 임베딩 차원이 `AI_EMBED_DIM`과 같으면 건너뜀(임베딩 API도 안 부름).
-본문이 바뀌었거나 차원이 다른(임베딩 모델을 바꾼) 청크는 다시 만듦.
+`sources/REFRESH.md`의 'AI 경계' 계약을 따름:
+- 대상: 관리자 승인(`APPROVED`)·공식 링크 있음·`INACTIVE` 아님·본문 있음 (승인 후 재처리 대기라 `PENDING`인 자료 포함)
+- 현재 승인 본문 해시로 만든 청크가 있고 임베딩 차원이 `AI_EMBED_DIM`과 같으면 건너뜀(임베딩 API도 안 부름)
+- 새 청크는 기존 청크 **뒤 순서에 추가**하고 `source_content_hash`에 읽은 본문 해시를 기록. 이전 청크는 삭제·ID 재사용 안 함
+- 저장 직전 본문 해시를 다시 확인. 임베딩하는 동안 새 본문이 승인됐으면 저장하지 않음(`changed`)
+- 재처리 대기 자료는 완료 시 `ai_reprocessing_required`를 해제하고 `version`을 올림. **`ACTIVE` 전환은 관리자가 Admin에서**
+
+검색(`DbRetriever`)·verify 후보도 같은 계약: `ai_eligible`(ACTIVE·승인·재처리 완료·공식 링크) 자료의
+`source_content_hash`가 현재 본문 해시와 같은 청크만 씀. 승인 전 자료와 이전 본문 청크는 검색되지 않음.
 
 verify(rag)는 검색·임베딩·LLM 오류가 나면 문서 처리를 실패시키지 않고 `UNVERIFIED`, `sources=[]`를 돌려줌.
 

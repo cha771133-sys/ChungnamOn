@@ -95,16 +95,23 @@ def _verify_query(doc: dict) -> str:
 
 
 def _official_documents(ids):
-    """검색된 ID 중 ACTIVE·확인일 있음·공식 HTTPS URL인 자료만 {id: SourceDocument} 로."""
+    """검색된 ID 중 AI 근거로 쓸 수 있는 자료만 {id: SourceDocument} 로.
+
+    SourceDocument.ai_eligible(공식 링크·ACTIVE·관리자 승인·재처리 완료) + 확인일 있음 + 공식 HTTPS URL.
+    """
     from sources.models import SourceDocument
     from sources.services.errors import CollectionError
     from sources.services.source_registry import validate_source_url
 
     docs = SourceDocument.objects.filter(
         pk__in=ids, status=SourceDocument.Status.ACTIVE, collected_at__isnull=False,
-    ).only("id", "title", "source_url", "collected_at")
+        review_status=SourceDocument.ReviewStatus.APPROVED, ai_reprocessing_required=False,
+        source_url__isnull=False,
+    ).only("id", "title", "source_url", "collected_at", "status", "review_status", "ai_reprocessing_required")
     out = {}
     for d in docs:
+        if not d.ai_eligible:
+            continue
         try:
             validate_source_url(d.source_url)
         except CollectionError:
