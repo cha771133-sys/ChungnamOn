@@ -224,6 +224,12 @@ CSRF_TRUSTED_ORIGINS = [
 # P2-13: 로컬 더미만 제공한다. 지원하지 않는 실제 모드는 503으로 차단한다.
 CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
 
+# 문서 OCR. dummy는 외부 호출 없이 더미 결과를 쓰고, clova는 CLOVA OCR을 호출한다.
+# .env에 OCR_MODE=처럼 값이 비어 있어도 dummy로 동작하도록 or를 쓴다.
+OCR_MODE = os.environ.get('OCR_MODE') or 'dummy'
+CLOVA_OCR_INVOKE_URL = os.environ.get('CLOVA_OCR_INVOKE_URL', '')
+CLOVA_OCR_SECRET = os.environ.get('CLOVA_OCR_SECRET', '')
+
 # 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
 
