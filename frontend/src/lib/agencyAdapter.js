@@ -42,7 +42,8 @@ export function agencyTitle(a) {
 export function buildCallScript(doc) {
   const asks = []
   const deadline = docDeadline(doc)
-  if (deadline) asks.push(`기한이 ${fmtDate(deadline)}이 맞는지`)
+  // 담당자에게 보여줄 문장이라 날짜도 한국어 형식으로 쓴다
+  if (deadline) asks.push(`기한이 ${fmtDate(deadline, 'ko')}이 맞는지`)
   else asks.push('언제까지 처리해야 하는지')
   asks.push(doc.requiredDocs?.length ? `준비할 서류(${doc.requiredDocs.join(', ')})가 맞는지` : '어떤 서류를 준비해야 하는지')
   asks.push('어디에서 어떻게 처리하면 되는지')

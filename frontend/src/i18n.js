@@ -1,3 +1,5 @@
+import { UI } from './ui-strings.js'
+
 // ─────────────────────────────────────────────
 // 온보딩 다국어 문구 (데모: 베트남어·영어·한국어)
 // 그 밖의 언어를 고르면 영어로 보여줍니다.
@@ -10,14 +12,44 @@ export function uiLang(lang) {
   return UI_LANGS.includes(lang) ? lang : 'en'
 }
 
+// ─────────────────────────────────────────────
+// 홈 이후 화면 문구: 한국어 원문을 키로 쓰고 ui-strings.js에서 번역을 찾는다.
+// 번역이 없는 문구(기관명·문서 제목 같은 데이터 포함)는 한국어 그대로 보여준다.
+// ─────────────────────────────────────────────
+
+let current = 'ko'
+
+/** 화면 문구에 쓸 안내 언어를 정한다. App이 그릴 때마다 부른다. */
+export function setUiLang(lang) {
+  current = uiLang(lang)
+}
+
+/** 지금 화면 문구에 쓰는 언어 (vi·en·ko) */
+export function getUiLang() {
+  return current
+}
+
+/**
+ * 한국어 원문을 지금 안내 언어로 바꾼다. {v0} 같은 자리에는 vars 값을 넣는다.
+ * @param {string} ko 한국어 원문 (번역 사전의 키)
+ * @param {Record<string, unknown>} [vars]
+ */
+export function T(ko, vars) {
+  if (typeof ko !== 'string') return ko
+  const entry = current === 'ko' ? null : UI[ko]
+  const text = entry ? (entry[current] ?? entry.en ?? ko) : ko
+  if (!vars) return text
+  return text.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k] ?? '') : m))
+}
+
 /** 선택 언어로 번역된 문구를 돌려준다. 키가 없으면 키 이름을 그대로 보여준다. */
 export function t(lang, key) {
-  const entry = T[key]
+  const entry = ONBOARDING[key]
   if (!entry) return key
   return entry[uiLang(lang)] ?? entry.en
 }
 
-const T = {
+const ONBOARDING = {
   // 언어 선택
   langTitle: { ko: '사용할 언어를 선택하세요', vi: 'Chọn ngôn ngữ của bạn', en: 'Choose your language' },
   langSub: { ko: '나중에 언제든 바꿀 수 있어요.', vi: 'Bạn có thể thay đổi bất cứ lúc nào.', en: 'You can change this anytime.' },

@@ -4,6 +4,7 @@ import { listSchedules } from './schedules'
 import { mergeServerSchedules } from './scheduleAdapter.js'
 import { parseApiError, tokenStore } from './api'
 import { hasSession } from './auth'
+import { T } from '../i18n.js'
 
 // 일정은 문서보다 훨씬 적으므로 전부 받아 화면에서 나눠 보여준다 (최대 페이지 수 제한)
 const MAX_PAGES = 10
@@ -42,7 +43,7 @@ export function useServerSchedules() {
       .catch((err) => {
         if (!alive) return
         const info = parseApiError(err)
-        setError(info.code === 'NETWORK_ERROR' ? '서버에 연결하지 못했어요.' : '일정을 불러오지 못했어요.')
+        setError(info.code === 'NETWORK_ERROR' ? T('서버에 연결하지 못했어요.') : T('일정을 불러오지 못했어요.'))
       })
       .finally(() => alive && setLoading(false))
     return () => {
