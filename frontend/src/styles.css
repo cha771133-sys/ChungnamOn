@@ -1688,6 +1688,19 @@ ol {
   background: var(--surface);
   border: 1px solid var(--line);
 }
+.fact-link {
+  text-align: left;
+  cursor: pointer;
+}
+.fact-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--teal);
+}
 .fact-label {
   font-size: 12.5px;
   font-weight: 700;
@@ -2011,6 +2024,71 @@ ol {
   font-size: 18px;
   font-weight: 600;
   line-height: 1.6;
+}
+
+/* 공식 자료에서 찾은 담당기관 (서버 문서) */
+.official {
+  margin-top: 16px;
+}
+.official-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 800;
+}
+.official-empty,
+.official-none {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--slate-soft);
+  color: var(--muted);
+  font-size: 14px;
+}
+.official-empty p,
+.official-none p {
+  margin: 0;
+}
+.official-none {
+  justify-content: flex-start;
+}
+.official-list {
+  display: grid;
+  gap: 8px;
+}
+.official-card {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 14px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--line);
+  background: var(--surface);
+}
+.official-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+.official-meta {
+  font-size: 13px;
+  color: var(--muted);
+}
+.official-card .btn small {
+  font-weight: 500;
+  opacity: 0.8;
+}
+.official-note {
+  margin: 8px 2px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.official-note.is-top {
+  margin: 0 2px 8px;
 }
 
 /* ── 챗봇 ── */

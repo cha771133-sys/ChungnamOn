@@ -207,8 +207,9 @@ export function ScheduleNew({ docId }) {
   const doc = data.docs.find((d) => d.id === docId)
   const isServer = doc?.source === 'api'
   // 서버 문서는 마감일이 여러 개일 수 있다 (같은 날짜는 하나로)
+  // 서버가 준 순서와 상관없이 날짜순으로 보여주고, 가장 가까운 마감일을 기본으로 고른다
   const options = isServer
-    ? [...new Map((doc.deadlines ?? []).filter((x) => x?.date).map((x) => [x.date, x])).values()]
+    ? [...new Map((doc.deadlines ?? []).filter((x) => x?.date).map((x) => [x.date, x])).values()].sort((a, b) => a.date.localeCompare(b.date))
     : doc?.deadline
       ? [{ label: '', date: doc.deadline }]
       : []

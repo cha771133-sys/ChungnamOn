@@ -77,7 +77,7 @@ export function adaptResult(raw, meta) {
     maskedCount: raw.maskedCount ?? 0,
     lowConfidence: Boolean(raw.lowConfidence),
     sender: { name: agency.name || '확인되지 않음' },
-    deadline: raw.deadlines?.[0]?.date ?? null,
+    deadline: nearestDeadline(raw.deadlines),
     deadlines: raw.deadlines ?? [],
     task: { [lang]: summary[0] ?? '' },
     requiredDocs: raw.requiredDocs ?? [],
@@ -106,6 +106,19 @@ export function adaptResult(raw, meta) {
     callScript: null,
     suggestedQuestions: [],
   }
+}
+
+/**
+ * 대표 마감일: 서버가 준 순서와 상관없이 오늘 이후 가장 가까운 날짜, 모두 지났으면 가장 최근에 지난 날짜.
+ */
+export function nearestDeadline(deadlines) {
+  const dates = (deadlines ?? [])
+    .map((d) => d?.date)
+    .filter((d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort()
+  if (!dates.length) return null
+  const today = localToday()
+  return dates.find((d) => d >= today) ?? dates[dates.length - 1]
 }
 
 /** 서버 상태를 화면 상태로 바꾼다. */

@@ -133,10 +133,14 @@ export default function Result({ docId }) {
               <strong className="muted">확인되지 않음</strong>
             )}
           </div>
-          <div className="fact">
+          {/* 보낸 기관을 누르면 담당기관 안내(문서 연락처 + 공식 자료 연락처)로 이동 */}
+          <button className="fact fact-link" onClick={() => nav('agency', { docId })}>
             <span className="fact-label">보낸 기관</span>
             <strong>{doc.sender.name}</strong>
-          </div>
+            <span className="fact-more">
+              연락처 보기 <ChevronRight size={14} />
+            </span>
+          </button>
           <div className="fact">
             <span className="fact-label">준비서류</span>
             <strong>{doc.requiredDocs.length ? doc.requiredDocs.join(', ') : '확인되지 않음'}</strong>
