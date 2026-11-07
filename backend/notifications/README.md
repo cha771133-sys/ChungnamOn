@@ -1,21 +1,24 @@
 # P3-14 알림 기반 및 연동 계약
 
-**부분 구현이다. 자동 마감 알림 서비스는 아직 동작하지 않는다.** 기준 `dev`의 `007f4ba`에서
-`documents.Schedule`이 없으며, GitHub 전체 이슈·PR과 원격 브랜치에도 P2-11 구현이 없었다.
-Schedule을 새로 설계하거나 A 담당 코드를 가져오지 않았다. 추적: [#32](https://github.com/cha771133-sys/ChungnamOn/issues/32).
+**Schedule 연동을 포함한 마감 알림 구현이다.** 기준 일정 계약은
+[PR #47](https://github.com/cha771133-sys/ChungnamOn/pull/47)의 `documents.Schedule`이며, 이 모듈은
+별도 일정 모델을 만들지 않는다. 연동 추적 이슈: [#50](https://github.com/cha771133-sys/ChungnamOn/issues/50).
 
-| 구현됨 | 선행 작업 때문에 미구현 |
+| 구현됨 | 범위 밖 |
 | --- | --- |
-| 기본 비활성 수신 설정, 재활성화 시각 | 실제 Schedule 소유권·완료·마감일 기반 대상 조회 |
-| 다중 기기 등록·갱신·해제·계정 이전 | Schedule FK의 DeadlineReminder / ReminderDelivery |
-| Firebase Admin 발송 Adapter·안전한 오류 분류 | 이벤트·기기별 발송 이력, 작업 점유, 재실행 중복 방지 |
-| 한국 날짜 D-7/D-1 계산·당일 지연 정책 순수 함수 | 일정 수정·삭제 연동, 실제 알림 상태 조회 API |
-| JWT API, Swagger, 조회 전용 관리자, mock 테스트 | 정상 발송 명령, 집계·limit·dry-run 실제 대상 조회 |
+| 기본 비활성 수신 설정, 재활성화 시각, Schedule 소유권·완료·마감일 기반 대상 조회 | 일반 사용자 대상 발송 API·알림 이력 조회 API |
+| 다중 기기 등록·갱신·해제·계정 이전 | Railway Cron 배포와 실제 기기 수신 확인 |
+| Firebase Admin 발송 Adapter·안전한 오류 분류 | 일정별 사용자 설정(remind) |
+| Schedule FK의 DeadlineReminder / 기기별 ReminderDelivery | FCM 수신/읽음 확인 |
+| 한국 날짜 D-7/D-1 조회·당일 09:00 이후 지연 실행·중복 점유 |  |
+| JWT API, Swagger, 조회 전용 관리자, mock 테스트 |  |
 
-명령 `python manage.py send_deadline_reminders`는 현재 `SCHEDULE_INTEGRATION_UNAVAILABLE` 오류와
-종료 코드 1을 반환한다. `--dry-run`과 `--limit`도 동일하다. Firebase 호출·DB 변경·가짜 0건 성공은 없다.
-실제 발송 대상이 없는 경우와 아직 대상 조회를 구현하지 못한 경우를 혼동하지 않는다.
-`GET /api/notifications/reminders/`는 제공하지 않는다. 알림 설정 활성화는 현재 자동 발송을 뜻하지 않는다.
+명령 `python manage.py send_deadline_reminders`는 한국 날짜 기준 D-7/D-1의 미완료 Schedule만 조회한다.
+완료·당일·기한 경과·D-7/D-1 밖 일정은 대상이 아니다. `--dry-run`은 FCM 호출과 DB 변경 없이 대상 이벤트와
+점유 가능한 기기 수만 출력하고, `--limit`은 처리할 일정 알림 이벤트 수를 제한한다. 실제 발송 대상이 없는 경우는
+정상적으로 0건을 출력한다.
+`GET /api/notifications/reminders/`는 제공하지 않는다. 알림 설정 활성화만으로 즉시 발송되지는 않으며,
+Schedule·기기·예정 시각 조건을 함께 만족해야 한다.
 
 ## 인증 및 요청·응답
 
@@ -99,8 +102,8 @@ FCM 푸시 등록을 대신할 수 없다. 서버는 형식만 확인하며 실�
 외부 클릭 URL을 입력으로 받지 않는다. 현재 일정 화면은 모의 ID를 사용하므로 실제 DB 일정 라우팅도 후속 연동이 필요하다.
 기존 프론트 파일·SDK·Service Worker는 이번 작업에서 변경하지 않았다.
 
-Adapter는 일반 업무명인 “등록한 행정업무”, 남은 일수, 마감 날짜만 표시한다.
-원문 업무명·문서·해석·금액·신상정보는 전달받거나 본문에 넣지 않는다.
+Adapter의 잠금 화면 문구는 D-7 “등록한 일정의 마감일이 7일 남았습니다.”, D-1 “등록한 일정의 마감일이 내일입니다.”다.
+원문 업무명·일정 제목·문서·해석·금액·신상정보는 전달받거나 본문에 넣지 않는다.
 `data`는 `type=DEADLINE_REMINDER`, `scheduleId`, 선택 `documentId`, `daysBefore`, `deadlineDate`, 상대 `url`이다.
 향후 호출자는 반드시 DB에서 확인한 식별자를 전달해야 한다. 실제 수신·읽음·업무 완료·법적 기한 확정을 의미하지 않는다.
 
@@ -116,8 +119,8 @@ Railway 비밀 환경변수 `FIREBASE_SERVICE_ACCOUNT_JSON`에 서비스 계정 
 | --- | --- |
 | ACCEPTED | FCM 접수. provider_message_id 반환. 수신/읽음 아님 |
 | INVALID_DEVICE | UNREGISTERED. 현재 등록 세대만 비활성화 가능 |
-| CONFIGURATION_ERROR | 자격증명·프로젝트·VAPID/APNs 설정 오류. 기기 유지, 향후 작업자는 실행 중단 필요 |
-| RETRYABLE | 쿼터 거부. 추후 제한된 재시도 정책 적용 가능. 현재 재시도 없음 |
+| CONFIGURATION_ERROR | 자격증명·프로젝트·VAPID/APNs 설정 오류. 기기 유지, 나머지 발송 중단 및 종료 코드 1. 설정 복구 후 같은 한국 날짜에 재실행 가능 |
+| RETRYABLE | 쿼터 거부. 예정된 한국 날짜에 명령을 다시 실행하면 같은 기기 이벤트를 다시 점유할 수 있음 |
 | PERMANENT_ERROR | 잘못된 페이로드/인자. 기기를 임의로 무효화하지 않음 |
 | UNKNOWN | 네트워크·서비스 장애 등 결과 불확실. 자동 재전송 금지 |
 
@@ -125,12 +128,13 @@ Railway 비밀 환경변수 `FIREBASE_SERVICE_ACCOUNT_JSON`에 서비스 계정 
 Adapter는 DB 이력을 만들지 않는다. `record_device_result`는 현재 등록 세대의 마지막 정상 접수/무효화만 반영하는 내부 함수다.
 일반 사용자 발송 API나 웹 요청 발송 경로는 없다. 앱 자체 재시도는 없지만 SDK 내부 재시도가 있으므로
 한 번의 함수 호출도 외부 정확히 한 번 발송을 보장하지 않는다.
+명령은 설정 오류 또는 무효 기기 외의 발송 실패/결과 불명이 있으면 집계를 출력한 뒤 종료 코드 1로 끝난다.
 FID 원문은 전송에 필요해 DB에 저장한다. 해시는 암호화가 아니다. 원문은 일반 로그/API/관리자 화면에 표시하지 않는다.
 관리자는 활성 superuser의 조회만 허용하며 추가·수정·삭제·작업은 막는다. 운영 DB 접근·백업 권한과 암호화는 별도 관리한다.
 
 ## Railway Cron 준비
 
-**현재 명령은 차단되므로 Cron을 활성화하지 않는다.** 다음은 P2-11 및 실제 발송 이력·점유 구현 후 적용할 설정이다.
+**운영 Cron 활성화와 실제 기기 수신은 이 저장소 변경의 범위 밖이다.** 배포 전 다음 설정을 확인한다.
 
 1. 같은 저장소에서 별도 Cron Service를 만들고 Root Directory를 `backend`로 설정한다.
 2. 웹 서비스와 같은 PostgreSQL `DATABASE_URL`을 참조하고 `DJANGO_SECRET_KEY`, Firebase 자격증명을 별도 서비스에도 제공한다.
@@ -144,26 +148,50 @@ Railway는 UTC 기준이며 정확한 분 단위 실행을 보장하지 않는�
 단발 명령을 유지하며 앱 시작/Gunicorn 프로세스에서 스케줄러를 시작하지 않는다.
 Railway 프로젝트에 접근하지 않았고 실제 배포·Firebase 기기 수신은 검증하지 않았다.
 
-## P2-11 이후 남은 구현
+## Schedule 연동 정책
 
-A 담당과 Schedule의 실제 PK·소유권·업무명·마감일 타입·완료 상태·생성/수정 시각·문서·삭제 정책을 먼저 합의한다.
-그 후에만 정상 FK 마이그레이션을 추가한다. 현재 마이그레이션은 사용자 모델에만 의존하며 존재하지 않는 모델 참조가 없다.
+`notifications.0002_schedule_deadline_reminders`는 `documents.0003_schedule`과
+`notifications.0001_initial`에 의존한다. 새 모델이므로 기존 PushDevice/NotificationPreference 데이터를 임의의
+Schedule에 연결하는 데이터 마이그레이션은 없다. `DeadlineReminder(schedule, days_before)`와
+`ReminderDelivery(reminder, device)`의 고유 제약으로 D-7/D-1 이벤트와 기기별 발송을 구분한다.
 
-실제 일정 통합에서는 ORM으로 사용자/문서 소유권·미완료·유효 마감일·활성 동의/기기를 제한하고 배치 조회해야 한다.
-동의 및 일정 등록이 예정 시각 이전이고 같은 한국 날짜의 지연 실행만 허용한다.
-마감일 변경 전 미발송 이벤트는 취소하고 과거 이력은 보존한다. 기기가 없으면 성공으로 기록하지 않는다.
+대상은 Schedule·Document 소유자 일치, 미완료, 활성 수신 동의, 활성 기기, 한국 날짜 D-7/D-1 조건을 모두 만족해야
+한다. 일정/동의는 한국시간 09:00의 예정 시각 이전에 존재해야 하고 당일 지연 실행만 허용한다. 일정이 완료에서
+미완료로 바뀌어도 성공 발송 이력은 초기화하지 않는다. Schedule·Document·User 삭제는 FK CASCADE로 이벤트와
+이력을 함께 정리한다.
+리마인더/발송 이력은 별도 관리자에 등록하지 않아 기존 문서·일정 관리자의 CASCADE 삭제 권한을 막지 않는다.
 
-DB 고유 키 `(schedule, deadline_date, days_before)`와 `(reminder, device)`를 적용하고 짧은 트랜잭션에서
-PROCESSING으로 원자적 점유한 뒤 외부 요청은 트랜잭션 밖에서 수행한다.
-성공 기기는 재발송하지 않으며, SDK 접수 직후 기록 실패/작업 중 종료는 불확실 상태로 남겨 자동 회수·재발송하지 않는다.
-이 정책과 다중 기기 PARTIAL/FAILED, 무효 기기 처리, 실패 종료 코드/집계를 실제로 구현·검증해야 한다.
-SENT는 FCM 정상 접수만 뜻한다. 아직 이러한 이벤트 상태와 이력 API는 제공하지 않는다.
+한 기기 전송은 짧은 트랜잭션에서 `PROCESSING`으로 점유한 뒤 FCM을 트랜잭션 밖에서 호출한다. `SENT`는 FCM 정상
+접수일 뿐 수신/읽음이 아니며 같은 이벤트·기기에는 재발송하지 않는다. UNREGISTERED만 기기를 비활성화한다.
+명시적으로 쿼터 거부된 `RETRYABLE`은 예정된 한국 날짜의 재실행에서만 시도할 수 있지만, 결과 불명(`UNKNOWN`)과
+작업 중단의 `PROCESSING`은 중복 전송을 피하기 위해 자동 회수하지 않는다. FCM 접수와 DB 기록 사이에는 완전한
+원자성이 없으므로 정확히 한 번 전송은 보장할 수 없다.
+
+`RETRYABLE` 및 설정을 복구한 `CONFIGURATION_ERROR`는 **예정된 한국 날짜의 09:00 이후 재실행**에서만
+다시 점유한다. 하루 한 번 Cron만 사용하면 다음 날에 지난 이벤트를 재시도하지 않는다.
+외부 호출 직전 완료·삭제·수신 거부·기기 이전을 재확인하고, 발송 전 제외된 점유는 PENDING으로 돌린다.
+같은 사용자의 기기 재등록으로 스냅샷이 바뀌면 같은 실행에서 최신 조건으로 한 번 재점유한다. 완료·삭제·동의
+철회·계정 이전은 재점유에서도 제외된다. 두 번 연속 발송 전 검사를 통과하지 못하면 PENDING을 유지하고 실패
+종료하여 무한 반복과 조용한 누락을 피한다. 재실행은 위와 같이 예정된 한국 날짜에만 가능하다.
+재확인 직후 또는 FCM 호출 도중의 완료·삭제와 이미 접수된 푸시는 원자적으로 취소할 수 없다. 호출 도중 삭제된
+Schedule의 이벤트/이력을 결과 저장 때 다시 만들지 않는다.
+
+## #50 완료 체크리스트
+
+- [x] 기존 기기 등록·중복·해제·다중 기기·JWT·Swagger 회귀 검증
+- [x] Schedule FK와 `documents.0003_schedule` 의존성 및 기존 데이터 보존 마이그레이션 검증
+- [x] D-7/D-1·한국 날짜 경계·완료/당일/경과 제외·완료 취소 재평가
+- [x] 기기별 성공 중복 차단·독립 PostgreSQL 연결의 동시 명령 테스트 추가
+- [x] 쿼터 재시도·설정 오류 중단/복구·불확실 결과 재전송 차단
+- [x] Schedule·Document·User CASCADE와 완료/삭제/동의 변경/기기 이전·재등록 경합 검증
+- [x] 실제 Schedule ID 문자열 payload 및 잠금 화면 민감 정보 비노출 검증
+- [x] 전체 회귀·마이그레이션 일치·Swagger 검증 (실제 FCM 호출은 mock)
 
 ## 검증 및 출처
 
 자동화 테스트는 실제 Firebase 서버나 인증에 접근하지 않는다. PostgreSQL 행 잠금 테스트는 SQLite에서 명시적으로 skip한다.
-`python manage.py test notifications`로 API·기기 이전/교체·동의·DB 제약조건·시간 경계·Adapter 오류·명령 차단을 검증한다.
-기존 Schedule/Checklist 회귀는 해당 모델이 아직 없어 실행할 수 없다.
+`python manage.py test notifications`로 API·기기 이전/교체·동의·DB 제약조건·시간 경계·Adapter 오류·Schedule 명령을 검증한다.
+전체 `python manage.py test`로 기존 Schedule API와 JWT·Swagger를 함께 회귀 검증한다.
 
 - [Firebase 기기 대상 발송](https://firebase.google.com/docs/cloud-messaging/send/admin-sdk)
 - [Web FID 등록·VAPID·Service Worker](https://firebase.google.com/docs/cloud-messaging/web/get-started)

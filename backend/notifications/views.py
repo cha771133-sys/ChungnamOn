@@ -96,8 +96,8 @@ class DeviceDeactivateView(NotificationAPIView):
     patch=extend_schema(
         summary='본인 마감 알림 수신 동의 변경', tags=['알림'],
         description=(
-            'enabled는 JSON Boolean만 허용합니다. 재활성화 시각을 별도로 기록하여 향후 일정 연동에서 '
-            '지난 알림을 제외할 수 있습니다. 현재 Schedule 미구현으로 자동 마감 알림은 제공되지 않습니다.'
+            'enabled는 JSON Boolean만 허용합니다. 재활성화 시각을 기록하며 지난 알림은 소급 발송하지 않습니다. '
+            '미완료 일정의 D-7·D-1 한국시간 09:00 이후 명령 실행 시 활성 기기에 마감 알림을 발송합니다.'
         ),
         request=PreferenceUpdateSerializer, responses={200: PreferenceSerializer, **ERRORS},
     ),
