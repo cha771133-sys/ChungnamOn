@@ -1,6 +1,6 @@
 // 담당기관 조회(/api/sources/agencies/lookup/) 결과를 화면에서 쓰기 쉽게 정리한다.
 import { lookupAgency } from './agencies'
-import { fmtDate } from '../store.js'
+import { fmtDate, docDeadline } from '../store.js'
 
 /**
  * 문서에 적힌 기관명으로 공식 담당기관을 찾는다.
@@ -41,7 +41,8 @@ export function agencyTitle(a) {
  */
 export function buildCallScript(doc) {
   const asks = []
-  if (doc.deadline) asks.push(`기한이 ${fmtDate(doc.deadline)}이 맞는지`)
+  const deadline = docDeadline(doc)
+  if (deadline) asks.push(`기한이 ${fmtDate(deadline)}이 맞는지`)
   else asks.push('언제까지 처리해야 하는지')
   asks.push(doc.requiredDocs?.length ? `준비할 서류(${doc.requiredDocs.join(', ')})가 맞는지` : '어떤 서류를 준비해야 하는지')
   asks.push('어디에서 어떻게 처리하면 되는지')

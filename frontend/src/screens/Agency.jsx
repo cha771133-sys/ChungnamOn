@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Phone, AlertTriangle, Copy, ExternalLink, RefreshCw, SearchX } from 'lucide-react'
-import { useApp, fmtDate, getSource, isVisibleDoc } from '../store.js'
+import { useApp, fmtDate, getSource, isVisibleDoc, safeHttpUrl } from '../store.js'
 import { TopBar, Badge, Disclaimer } from '../components/ui.jsx'
 import { findOfficialAgency, phonesDiffer, PHONE_TYPE_LABEL, agencyTitle, buildCallScript } from '../lib/agencyAdapter.js'
 import { parseApiError, tokenStore } from '../lib/api'
@@ -242,8 +242,8 @@ function OfficialResult({ result, name, docPhone }) {
             ) : (
               <span className="official-meta">공식 자료에 전화번호가 없어요</span>
             )}
-            {ag.sourceUrl && (
-              <a className="link-btn" href={ag.sourceUrl} target="_blank" rel="noreferrer">
+            {safeHttpUrl(ag.sourceUrl) && (
+              <a className="link-btn" href={safeHttpUrl(ag.sourceUrl)} target="_blank" rel="noreferrer">
                 출처 페이지 열기 <ExternalLink size={14} />
               </a>
             )}

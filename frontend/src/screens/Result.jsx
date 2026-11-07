@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck } from 'lucide-react'
-import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, isVisibleSchedule } from '../store.js'
+import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, isVisibleSchedule, docDeadline } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
 
@@ -55,7 +55,8 @@ export default function Result({ docId }) {
   const hasMis = v.some((x) => x.status === 'MISMATCH')
   const hasUn = v.some((x) => x.status === 'UNVERIFIED')
   const tone = hasMis ? 'amber' : hasUn ? 'slate' : 'green'
-  const n = doc.deadline ? dday(doc.deadline) : null
+  const deadline = docDeadline(doc)
+  const n = deadline ? dday(deadline) : null
   const viewOptions = doc.source === 'api' ? [doc.contentLang] : contentLang === 'ko' ? ['ko'] : [contentLang, 'ko']
   const label = (code) => (code === 'ko' ? '한국어(쉬운 말)' : LANGS.find((l) => l.code === code)?.label)
   const openTerm = (term) => setSheet({ type: 'term', payload: { term } })
@@ -124,9 +125,9 @@ export default function Result({ docId }) {
           </div>
           <div className={`fact${n !== null && n <= 7 ? ' is-urgent' : ''}`}>
             <span className="fact-label">마감일</span>
-            {doc.deadline ? (
+            {deadline ? (
               <>
-                <strong>{fmtDate(doc.deadline)}</strong>
+                <strong>{fmtDate(deadline)}</strong>
                 <span className="fact-dday">{ddayLabel(n)}</span>
               </>
             ) : (
