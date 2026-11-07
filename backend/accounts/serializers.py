@@ -7,7 +7,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
 
-from .models import UserProfile
+from .models import NATIONALITY_HELP_TEXT, UserProfile
 
 User = get_user_model()
 DUPLICATE_EMAIL = '이미 사용 중인 이메일입니다.'
@@ -93,7 +93,10 @@ class TokenPairResponseSerializer(serializers.Serializer):
 
 class MeSerializer(serializers.ModelSerializer):
     language = serializers.CharField(source='profile.language', read_only=True, default=None, allow_null=True)
-    nationality = serializers.CharField(source='profile.nationality', read_only=True, default=None, allow_null=True)
+    nationality = serializers.CharField(
+        source='profile.nationality', read_only=True, default=None, allow_null=True,
+        help_text=NATIONALITY_HELP_TEXT,
+    )
     visaType = serializers.CharField(source='profile.visa_type', read_only=True, default=None, allow_null=True)
     onboardingCompleted = serializers.SerializerMethodField()
 

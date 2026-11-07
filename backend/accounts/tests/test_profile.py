@@ -88,10 +88,36 @@ class ProfileTests(APITestCase):
             'language': 'en', 'nationality': 'NP', 'visaType': 'D-2', 'onboardingCompleted': True,
         })
 
+    def test_other_nationality_completes_initial_setup_and_is_preserved(self):
+        response = self.patch_profile({**PROFILE, 'nationality': 'ZZ'})
+        self.assertEqual(response.status_code, 200)
+        expected = {
+            'id': self.user.id, 'email': self.user.email,
+            **PROFILE, 'nationality': 'ZZ', 'onboardingCompleted': True,
+        }
+        self.assertEqual(response.json(), expected)
+        self.assertEqual(self.client.get(ME).json(), expected)
+        self.assertEqual(UserProfile.objects.get(user=self.user).nationality, 'ZZ')
+
+    def test_completed_profile_can_switch_between_other_and_country_code(self):
+        self.complete_profile()
+        for nationality in ('ZZ', 'VN'):
+            with self.subTest(nationality=nationality):
+                response = self.patch_profile({'nationality': nationality})
+                self.assertEqual(response.status_code, 200)
+                expected = {
+                    'id': self.user.id, 'email': self.user.email,
+                    **PROFILE, 'nationality': nationality, 'onboardingCompleted': True,
+                }
+                self.assertEqual(response.json(), expected)
+                self.assertEqual(self.client.get(ME).json(), expected)
+                self.assertEqual(UserProfile.objects.get(user=self.user).nationality, nationality)
+        self.assertEqual(UserProfile.objects.count(), 1)
+
     def test_invalid_codes_are_rejected_before_setup(self):
         for field, value in (
             ('language', 'xx'), ('nationality', 'Vietnam'), ('nationality', 'vn'),
-            ('nationality', '1!'), ('visaType', 'invalid'),
+            ('nationality', 'zz'), ('nationality', '1!'), ('visaType', 'invalid'),
         ):
             with self.subTest(field=field, value=value):
                 response = self.patch_profile({**PROFILE, field: value})

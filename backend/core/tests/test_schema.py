@@ -135,6 +135,10 @@ class OpenAPITests(APISimpleTestCase):
         self.assertEqual(response['properties']['onboardingCompleted']['type'], 'boolean')
         for field in ('language', 'nationality', 'visaType'):
             self.assertTrue(response['properties'][field]['nullable'])
+        for properties in (request['properties'], response['properties']):
+            nationality = properties['nationality']
+            self.assertIn('ZZ', nationality['description'])
+            self.assertIn('기타', nationality['description'])
         for method in ('get', 'patch'):
             operation = self.schema['paths']['/api/auth/me/'][method]
             for code in (('401',) if method == 'get' else ('400', '401')):
