@@ -109,8 +109,6 @@ export const UI = {
   금: { en: 'Fri', vi: 'T6' },
   '기관에 확인할 것': { en: 'Ask the office about', vi: 'Cần hỏi cơ quan' },
   '기다리는 동안 문서함 보기': { en: 'View my documents while waiting', vi: 'Xem giấy tờ của tôi trong lúc chờ' },
-  '기본 1일 전 알림': { en: 'Default reminder 1 day before', vi: 'Nhắc mặc định trước 1 ngày' },
-  '기본 7일 전 알림': { en: 'Default reminder 7 days before', vi: 'Nhắc mặc định trước 7 ngày' },
   '기한 경과': { en: 'Overdue', vi: 'Quá hạn' },
   '기한, 금액, 기관명을 읽지 못했어요. 잘못된 안내를 막기 위해 결과를 보여드리지 않았어요.': {
     en: "We couldn't read the deadline, amount, or office name. To avoid wrong guidance, we didn't show results.",
@@ -179,10 +177,7 @@ export const UI = {
   '등록된 일정이 없어요': { en: 'No schedules yet', vi: 'Chưa có lịch nào' },
   '등록하는 중...': { en: 'Adding...', vi: 'Đang thêm...' },
   로그아웃: { en: 'Log out', vi: 'Đăng xuất' },
-  '마감 1일 전': { en: '1 day before', vi: 'Trước 1 ngày' },
-  '마감 1일 전 알림': { en: 'Reminder 1 day before', vi: 'Nhắc trước 1 ngày' },
-  '마감 7일 전': { en: '7 days before', vi: 'Trước 7 ngày' },
-  '마감 7일 전 알림': { en: 'Reminder 7 days before', vi: 'Nhắc trước 7 ngày' },
+  '마감 7일 전과 1일 전에 알려드려요.': { en: "We'll remind you 7 days and 1 day before the deadline.", vi: 'Chúng tôi sẽ nhắc bạn trước hạn 7 ngày và 1 ngày.' },
   '마감 알림 받기': { en: 'Get deadline reminders', vi: 'Nhận nhắc hạn' },
   마감일: { en: 'Deadline', vi: 'Hạn chót' },
   '마감일 (문서에서 확인한 날짜)': { en: 'Deadline (date found in the document)', vi: 'Hạn chót (ngày ghi trên giấy tờ)' },
@@ -238,7 +233,6 @@ export const UI = {
   '문의 전화번호': { en: 'Contact number', vi: 'Số điện thoại liên hệ' },
   '문장을 복사했어요': { en: 'Sentence copied', vi: 'Đã sao chép câu' },
   '미리 알림': { en: 'Reminders', vi: 'Nhắc trước' },
-  '미리 알림 설정은 이 기기에 저장돼요.': { en: 'Reminder settings are saved on this device.', vi: 'Cài đặt nhắc trước được lưu trên thiết bị này.' },
   미확인: { en: 'Unverified', vi: 'Chưa xác minh' },
   '미확인 답변': { en: 'Unverified answer', vi: 'Câu trả lời chưa xác minh' },
   민원서류: { en: 'Civil document', vi: 'Hồ sơ hành chính' },
@@ -321,16 +315,17 @@ export const UI = {
   안내문: { en: 'Notice', vi: 'Thông báo' },
   안녕하세요: { en: 'Hello', vi: 'Xin chào' },
   알림: { en: 'Notifications', vi: 'Thông báo' },
+  '알림 설정을 저장하지 못했어요. 다시 시도하세요': { en: "Couldn't save the notification setting. Try again", vi: 'Không lưu được cài đặt thông báo. Hãy thử lại' },
   '알림 수신 설정': { en: 'Notification settings', vi: 'Cài đặt nhận thông báo' },
   '알림은 이렇게 와요': { en: 'Notifications look like this', vi: 'Thông báo sẽ hiện như thế này' },
+  '알림은 켜져 있지만, 이 기기를 연결하는 기능이 준비 중이라 아직 알림이 오지 않아요.': {
+    en: "Notifications are on, but connecting this device is coming soon, so you won't receive them yet.",
+    vi: 'Thông báo đã bật, nhưng tính năng kết nối thiết bị này đang được chuẩn bị nên bạn chưa nhận được thông báo.',
+  },
   '알림이 꺼져 있어 마감일을 알려드릴 수 없어요.': { en: "Notifications are off, so we can't remind you of deadlines.", vi: 'Thông báo đang tắt nên không thể nhắc bạn về hạn chót.' },
   '알림이 꺼져 있어요. 설정에서 켜면 마감 7일 전과 1일 전에 알려드려요.': {
-    en: 'Notifications are off. Turn them on in Settings to get reminders 7 days and 1 day before deadlines.',
-    vi: 'Thông báo đang tắt. Bật trong Cài đặt để được nhắc trước hạn 7 ngày và 1 ngày.',
-  },
-  '앱 알림이 꺼져 있어 알림을 받을 수 없어요. 설정에서 켜세요.': {
-    en: "App notifications are off, so you can't receive them. Turn them on in Settings.",
-    vi: 'Thông báo ứng dụng đang tắt nên bạn không nhận được. Hãy bật trong Cài đặt.',
+    en: 'Notifications are off. Turn them on in Settings to get reminders 7 days and 1 day before.',
+    vi: 'Thông báo đang tắt. Bật trong Cài đặt để được nhắc trước 7 ngày và 1 ngày.',
   },
   '어느 번호가 맞는지 단정할 수 없어요. 먼저 문서에 적힌 번호로 연락해 보세요.': {
     en: "We can't tell which number is correct. Try the number on the document first.",
@@ -372,6 +367,7 @@ export const UI = {
   '완료로 표시': { en: 'Mark as done', vi: 'Đánh dấu xong' },
   '완료로 표시하기': { en: 'Mark as done', vi: 'Đánh dấu xong' },
   '완료로 표시했어요': { en: 'Marked as done', vi: 'Đã đánh dấu xong' },
+  '완료한 일정은 알림을 보내지 않아요.': { en: 'No reminders are sent for completed schedules.', vi: 'Không gửi nhắc cho lịch đã hoàn thành.' },
   '외국인 납부 방법': { en: 'How foreigners can pay', vi: 'Cách nộp cho người nước ngoài' },
   '외국인 주민의 위택스 이용 조건은 공식 자료로 확인되지 않았어요.': {
     en: "Conditions for foreign residents to use Wetax weren't confirmed by official sources.",
@@ -393,6 +389,10 @@ export const UI = {
   '원문 페이지 열기': { en: 'Open source page', vi: 'Mở trang gốc' },
   월: { en: 'Mon', vi: 'T2' },
   '은행 창구에서 본인 확인을 요청할 수 있어요.': { en: 'The bank counter may ask you to verify your identity.', vi: 'Quầy ngân hàng có thể yêu cầu xác minh danh tính.' },
+  '이 기기를 알림 받을 기기로 연결하는 기능은 준비 중이에요.': {
+    en: 'Connecting this device to receive notifications is coming soon.',
+    vi: 'Tính năng kết nối thiết bị này để nhận thông báo đang được chuẩn bị.',
+  },
   '이 문서 삭제': { en: 'Delete this document', vi: 'Xóa giấy tờ này' },
   '이 문서는 지금 질문할 수 없어요. 문서 해석이 끝났는지 확인한 뒤 다시 시도하세요.': {
     en: "You can't ask about this document right now. Make sure the analysis is finished and try again.",
@@ -473,6 +473,10 @@ export const UI = {
   '출처: {v0}, {v1} 확인': { en: 'Source: {v0}, checked {v1}', vi: 'Nguồn: {v0}, kiểm tra {v1}' },
   취소: { en: 'Cancel', vi: 'Hủy' },
   '카메라로 문서를 바로 촬영해요': { en: 'Take a photo of the document with your camera', vi: 'Chụp giấy tờ bằng camera' },
+  '켜 두면 완료하지 않은 일정의 마감 7일 전과 1일 전에 알려드려요.': {
+    en: 'When on, we remind you 7 days and 1 day before each unfinished deadline.',
+    vi: 'Khi bật, chúng tôi nhắc bạn trước 7 ngày và 1 ngày cho các lịch chưa hoàn thành.',
+  },
   토: { en: 'Sat', vi: 'T7' },
   통지서: { en: 'Notification', vi: 'Giấy thông báo' },
   '파일이 20MB보다 커요. 더 작은 파일을 선택하세요.': { en: 'The file is larger than 20 MB. Choose a smaller file.', vi: 'Tệp lớn hơn 20 MB. Hãy chọn tệp nhỏ hơn.' },

@@ -367,9 +367,9 @@ const D4 = {
 export const INITIAL_DOCS = [D3, D1, D4, D2]
 
 export const INITIAL_SCHEDULES = [
-  { id: 'sc1', docId: 'd1', title: '주민세 내기', date: '2026-11-30', done: false, remind: { d7: true, d1: true } },
-  { id: 'sc2', docId: 'd2', title: '11월분 건강보험료 내기', date: '2026-11-10', done: false, remind: { d7: true, d1: true } },
-  { id: 'sc3', docId: 'd2', title: '10월분 건강보험료 내기', date: '2026-10-25', done: false, remind: { d7: true, d1: true } },
+  { id: 'sc1', docId: 'd1', title: '주민세 내기', date: '2026-11-30', done: false },
+  { id: 'sc2', docId: 'd2', title: '11월분 건강보험료 내기', date: '2026-11-10', done: false },
+  { id: 'sc3', docId: 'd2', title: '10월분 건강보험료 내기', date: '2026-10-25', done: false },
 ]
 
 // 새로 업로드한 문서는 데모에서 주민세 고지서 데이터를 복제해 보여줍니다.

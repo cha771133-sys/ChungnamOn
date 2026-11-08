@@ -30,7 +30,6 @@ export function scheduleFromServer(item, ownerId, prev) {
     // 서버의 남은 일수는 받은 날에만 쓰고, 날이 바뀌면 기기에서 다시 계산한다
     fetchedOn: localToday(),
     agency: item.agency ?? null,
-    remind: prev?.remind ?? { d7: true, d1: true },
   }
 }
 

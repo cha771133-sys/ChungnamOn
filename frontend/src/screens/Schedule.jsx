@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Bell, BellOff, ChevronRight, CalendarDays, List, FileText, ListChecks, Building2, Trash2, AlertTriangle, Check, RefreshCw } from 'lucide-react'
 import { useApp, dday, ddayLabel, fmtDate, pick, startOfToday, isVisibleSchedule, scheduleDaysLeft, openDoc } from '../store.js'
-import { TopBar, TabBar, Toggle, Empty } from '../components/ui.jsx'
+import { TopBar, TabBar, Empty } from '../components/ui.jsx'
 import { useServerSchedules } from '../lib/useServerSchedules.js'
 import { createSchedule, deleteSchedule, getSchedule, updateSchedule, ScheduleExistsError } from '../lib/schedules'
 import { localScheduleId, mergeServerSchedules, serverScheduleId } from '../lib/scheduleAdapter.js'
@@ -226,6 +226,47 @@ export function Schedule() {
 }
 
 /** 일정 등록: 서버 문서는 해석 결과의 마감일 중 하나를 골라 서버에 등록, 시연용 문서는 로컬에 등록 */
+/**
+ * 미리 알림 안내. 알림은 일정마다가 아니라 계정 전체로 켜고 끄며(설정 화면),
+ * 켜져 있으면 서버가 완료하지 않은 일정의 마감 7일 전과 1일 전에 보낸다.
+ */
+function NotifyNote({ done = false }) {
+  const { data, tab } = useApp()
+  // 완료한 일정은 알림 설정과 상관없이 알림이 가지 않는다
+  if (done) {
+    return (
+      <p className="notify-note">
+        <Bell size={16} />
+        <span>{T('완료한 일정은 알림을 보내지 않아요.')}</span>
+      </p>
+    )
+  }
+  if (!data.notify.enabled) {
+    return (
+      <button className="notify-note is-off" onClick={() => tab('settings')}>
+        <BellOff size={16} />
+        <span>{T('알림이 꺼져 있어요. 설정에서 켜면 마감 7일 전과 1일 전에 알려드려요.')}</span>
+        <ChevronRight size={16} />
+      </button>
+    )
+  }
+  // 알림은 켜졌지만 알림 받을 기기가 아직 없으면 (Firebase 연동 전) 알림이 간다고 약속하지 않는다
+  if (!data.notify.deviceCount) {
+    return (
+      <p className="notify-note is-off">
+        <BellOff size={16} />
+        <span>{T('알림은 켜져 있지만, 이 기기를 연결하는 기능이 준비 중이라 아직 알림이 오지 않아요.')}</span>
+      </p>
+    )
+  }
+  return (
+    <p className="notify-note">
+      <Bell size={16} />
+      <span>{T('마감 7일 전과 1일 전에 알려드려요.')}</span>
+    </p>
+  )
+}
+
 /** 같은 날짜가 여러 번 오면 첫 항목만 남긴다 (서버 find_deadline_label도 첫 항목의 업무명을 쓴다) */
 function firstPerDate(list) {
   const seen = new Set()
@@ -251,7 +292,6 @@ export function ScheduleNew({ docId }) {
   const firstUpcoming = pickDefault(openOptions) ?? pickDefault(options)
   const [date, setDate] = useState(firstUpcoming?.date ?? null)
   const [title, setTitle] = useState(doc && !isServer ? pick(doc.task, 'ko') || doc.title : '')
-  const [remind, setRemind] = useState({ d7: true, d1: true })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   if (!doc) return null
@@ -264,7 +304,7 @@ export function ScheduleNew({ docId }) {
       replace('scheduleDetail', { scheduleId: exist.id })
       return
     }
-    const s = { id: 'sc' + Date.now(), docId, title: title.trim() || doc.title, date, done: false, remind }
+    const s = { id: 'sc' + Date.now(), docId, title: title.trim() || doc.title, date, done: false }
     update((d) => ({ schedules: [...d.schedules, s] }))
     showToast(T('일정을 등록했어요'))
     tab('schedule') // 유저 플로우 n35 → n37
@@ -276,7 +316,7 @@ export function ScheduleNew({ docId }) {
     try {
       const item = await createSchedule(doc.serverId, date, title.trim())
       update((d) => ({
-        schedules: mergeServerSchedules(d.schedules, [item], { ownerId: data.user?.id, complete: false }).map((s) => (s.id === localScheduleId(item.scheduleId) ? { ...s, remind } : s)),
+        schedules: mergeServerSchedules(d.schedules, [item], { ownerId: data.user?.id, complete: false }),
       }))
       showToast(T('일정을 등록했어요'))
       tab('schedule')
@@ -341,14 +381,7 @@ export function ScheduleNew({ docId }) {
             {n < 0 && <p className="callout tone-amber">{T('이미 기한이 지났어요. 등록할 수는 있지만 담당기관에 먼저 확인하세요.')}</p>}
             <div className="field">
               <span className="field-label">{T('미리 알림')}</span>
-              <div className="toggle-row">
-                <span>{T('마감 7일 전')}</span>
-                <Toggle checked={remind.d7} onChange={(v) => setRemind({ ...remind, d7: v })} label={T('마감 7일 전 알림')} />
-              </div>
-              <div className="toggle-row">
-                <span>{T('마감 1일 전')}</span>
-                <Toggle checked={remind.d1} onChange={(v) => setRemind({ ...remind, d1: v })} label={T('마감 1일 전 알림')} />
-              </div>
+              <NotifyNote />
             </div>
             <div className="linked">
               <span className="field-label">{T('함께 연결돼요')}</span>
@@ -533,16 +566,7 @@ export function ScheduleDetail({ scheduleId }) {
 
         <section className="section">
           <h2 className="list-head">{T('미리 알림')}</h2>
-          <div className="toggle-row">
-            <span>{T('마감 7일 전')}</span>
-            <Toggle checked={s.remind?.d7 ?? true} onChange={(v) => set({ remind: { ...s.remind, d7: v } })} label={T('마감 7일 전 알림')} />
-          </div>
-          <div className="toggle-row">
-            <span>{T('마감 1일 전')}</span>
-            <Toggle checked={s.remind?.d1 ?? true} onChange={(v) => set({ remind: { ...s.remind, d1: v } })} label={T('마감 1일 전 알림')} />
-          </div>
-          {!data.notify.enabled && <p className="hint">{T('앱 알림이 꺼져 있어 알림을 받을 수 없어요. 설정에서 켜세요.')}</p>}
-          {isServer && <p className="hint">{T('미리 알림 설정은 이 기기에 저장돼요.')}</p>}
+          <NotifyNote done={s.done} />
         </section>
       </main>
     </>

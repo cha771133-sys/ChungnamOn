@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
 import { api, parseApiError } from '../lib/api'
+import { refreshNotifyPreference, saveNotifyPreference } from '../lib/notifications'
 import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
 import { useApp, purgeServerData } from '../store.js'
 import { LANGS } from '../data/mock.js'
@@ -14,6 +15,15 @@ export default function Settings() {
   const L = LANGS.find((l) => l.code === data.profile.language)
   const [server, setServer] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [notifySaving, setNotifySaving] = useState(false)
+
+  // 설정 화면에 들어올 때마다 서버의 알림 설정으로 다시 맞춘다 (다른 곳에서 저장에 실패했어도 바로잡힘)
+  useEffect(() => {
+    if (!hasSession()) return
+    refreshNotifyPreference((pref) => update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))).catch(() => {})
+    // 화면에 들어올 때 한 번만
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** 서버 상태 확인 (GET /api/health/) */
   const checkServer = async () => {
@@ -57,8 +67,12 @@ export default function Settings() {
       setSaving(false)
     }
   }
-  /** 알림 켜기·끄기. 켤 때 브라우저 권한을 아직 묻지 않았으면 요청한다. */
+  /**
+   * 알림 켜기·끄기. 계정 설정이라 서버에 저장하고, 실패하면 원래 값으로 되돌린다.
+   * 켤 때 브라우저 알림 권한을 아직 묻지 않았으면 요청한다.
+   */
   const setNotify = async (enabled) => {
+    if (notifySaving) return
     if (enabled && 'Notification' in window && Notification.permission === 'default') {
       try {
         await Notification.requestPermission()
@@ -66,8 +80,21 @@ export default function Settings() {
         /* 무시 */
       }
     }
+    const before = data.notify.enabled
     update((d) => ({ notify: { ...d.notify, enabled } }))
+    if (!hasSession()) return
+    setNotifySaving(true)
+    // 저장 중 계정이 바뀌거나 더 새로운 변경이 생기면 지난 결과로 화면을 바꾸지 않는다
+    await saveNotifyPreference(enabled, {
+      onSaved: (pref) => update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } })),
+      onFailed: () => {
+        update((d) => ({ notify: { ...d.notify, enabled: before } }))
+        showToast(T('알림 설정을 저장하지 못했어요. 다시 시도하세요'))
+      },
+    })
+    setNotifySaving(false)
   }
+
   /** 서버의 Refresh Token을 무효화하고 로그인 화면으로 이동한다. */
   const logout = async () => {
     try {
@@ -102,16 +129,11 @@ export default function Settings() {
           <h2>{T('알림')}</h2>
           <div className="toggle-row">
             <span>{T('마감 알림 받기')}</span>
-            <Toggle checked={data.notify.enabled} onChange={setNotify} label={T('마감 알림 받기')} />
+            <Toggle checked={data.notify.enabled} onChange={setNotify} label={T('마감 알림 받기')} disabled={notifySaving} />
           </div>
-          <div className={`toggle-row${data.notify.enabled ? '' : ' is-disabled'}`}>
-            <span>{T('마감 7일 전')}</span>
-            <Toggle checked={data.notify.d7} onChange={(v) => update((d) => ({ notify: { ...d.notify, d7: v } }))} label={T('기본 7일 전 알림')} />
-          </div>
-          <div className={`toggle-row${data.notify.enabled ? '' : ' is-disabled'}`}>
-            <span>{T('마감 1일 전')}</span>
-            <Toggle checked={data.notify.d1} onChange={(v) => update((d) => ({ notify: { ...d.notify, d1: v } }))} label={T('기본 1일 전 알림')} />
-          </div>
+          <p className="hint">{T('켜 두면 완료하지 않은 일정의 마감 7일 전과 1일 전에 알려드려요.')}</p>
+          {/* 서버 설정은 켜졌지만 알림 받을 기기가 아직 없을 때 (Firebase 연동 전) */}
+          {data.notify.enabled && hasSession() && !data.notify.deviceCount && <p className="hint">{T('이 기기를 알림 받을 기기로 연결하는 기능은 준비 중이에요.')}</p>}
           <p className="hint">{T('iPhone은 홈 화면에 추가한 뒤에만 알림을 받을 수 있어요.')}</p>
         </section>
 

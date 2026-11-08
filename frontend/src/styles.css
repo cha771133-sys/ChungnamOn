@@ -786,6 +786,28 @@ ol {
   text-align: center;
 }
 
+.notify-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--slate-soft);
+  font-size: 14px;
+  text-align: left;
+}
+.notify-note span {
+  flex: 1;
+}
+.notify-note.is-off {
+  background: var(--amber-soft);
+  color: var(--ink);
+}
+.switch:disabled {
+  opacity: 0.6;
+}
 .switch {
   position: relative;
   width: 50px;
