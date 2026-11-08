@@ -75,6 +75,7 @@ class AuthIntegrationTests(APITestCase):
 
     @override_settings(DOCUMENTS_PROCESS_SYNC=True, DOCUMENTS_STEP_DELAY=0)
     def test_registration_profile_document_rotation_and_logout_flow(self):
+        """회원가입부터 JWT 갱신·로그아웃까지 국적 ZZ와 소유자 권한을 보존한다."""
         # 공개 인증 API는 만료된 Access 헤더와 무관하게 본문의 인증 정보를 사용한다.
         self.client.credentials(HTTP_AUTHORIZATION='Bearer stale-access')
         credentials = {'email': 'new@example.com', 'password': 'Bamboo!River8042'}
@@ -90,9 +91,10 @@ class AuthIntegrationTests(APITestCase):
         self.assertEqual(profile.status_code, 200)
         self.assertFalse(profile.json()['onboardingCompleted'])
         updated = self.client.patch('/api/auth/me/', {
-            'language': 'vi', 'nationality': 'VN', 'visaType': 'E-9',
+            'language': 'vi', 'nationality': 'ZZ', 'visaType': 'E-9',
         }, format='json')
         self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()['nationality'], 'ZZ')
         self.assertTrue(updated.json()['onboardingCompleted'])
         with TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
             with self.captureOnCommitCallbacks(execute=True):
@@ -121,4 +123,7 @@ class AuthIntegrationTests(APITestCase):
         revoked = self.client.post('/api/auth/token/refresh/', {'refresh': rotated.json()['refresh']}, format='json')
         self.assert_error(revoked, 401, 'AUTHENTICATION_FAILED')
         self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + rotated.json()['access'])
-        self.assertEqual(self.client.get('/api/auth/me/').status_code, 200)
+        profile = self.client.get('/api/auth/me/')
+        self.assertEqual(profile.status_code, 200)
+        self.assertEqual(profile.json()['nationality'], 'ZZ')
+        self.assertTrue(profile.json()['onboardingCompleted'])

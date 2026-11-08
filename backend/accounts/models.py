@@ -7,6 +7,12 @@ from django.db.models.functions import Lower, Trim
 from .managers import UserManager
 
 
+NATIONALITY_HELP_TEXT = (
+    '영문 대문자 두 자리 국적 코드(예: VN). '
+    'ZZ는 서비스 내부의 ‘기타’ 코드이며 특정 국가를 뜻하지 않습니다.'
+)
+
+
 class User(AbstractUser):
     username = None
     email = models.EmailField('이메일', unique=True)
@@ -55,6 +61,7 @@ class UserProfile(models.Model):
     language = models.CharField(max_length=2, choices=Language.choices, blank=True)
     nationality = models.CharField(
         max_length=2, blank=True,
+        help_text=NATIONALITY_HELP_TEXT,
         validators=[RegexValidator(r'\A[A-Z]{2}\Z', '국적은 영문 대문자 두 자리 코드로 입력하세요.')],
     )
     visa_type = models.CharField(max_length=3, choices=VisaType.choices, blank=True)

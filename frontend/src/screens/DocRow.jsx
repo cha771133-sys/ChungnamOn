@@ -1,5 +1,6 @@
 import { ChevronRight, Loader2, AlertCircle } from 'lucide-react'
 import { useApp, openDoc, fmtShort, needsCheck } from '../store.js'
+import { T } from '../i18n.js'
 
 export default function DocRow({ doc }) {
   const { nav, showToast } = useApp()
@@ -7,17 +8,17 @@ export default function DocRow({ doc }) {
   if (doc.status === 'processing')
     status = (
       <span className="doc-status is-processing">
-        <Loader2 size={14} className="spin" /> 분석 중
+        <Loader2 size={14} className="spin" /> {T('분석 중')}
       </span>
     )
   else if (doc.status === 'failed')
     status = (
       <span className="doc-status is-failed">
-        <AlertCircle size={14} /> 다시 올려야 해요
+        <AlertCircle size={14} /> {T('다시 올려야 해요')}
       </span>
     )
-  else if (needsCheck(doc)) status = <span className="doc-status is-check">확인 필요 항목 있음</span>
-  else status = <span className="doc-status is-done">해석 완료</span>
+  else if (needsCheck(doc)) status = <span className="doc-status is-check">{T('확인 필요 항목 있음')}</span>
+  else status = <span className="doc-status is-done">{T('해석 완료')}</span>
 
   return (
     <li>
@@ -28,10 +29,10 @@ export default function DocRow({ doc }) {
           <span />
         </span>
         <span className="doc-main">
-          <span className="doc-type">{doc.docType}</span>
+          <span className="doc-type">{T(doc.docType)}</span>
           <strong>{doc.title}</strong>
           <span className="doc-meta">
-            {fmtShort(doc.uploadedAt)} 올림 {status}
+            {T('{v0} 올림', { v0: fmtShort(doc.uploadedAt) })} {status}
           </span>
         </span>
         <ChevronRight size={20} className="chev" />

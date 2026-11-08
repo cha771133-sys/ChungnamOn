@@ -226,6 +226,12 @@ CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
 # 문서 처리 파이프라인의 공식 자료 대조(verify). dummy(기본) | rag
 DOCUMENTS_VERIFY_MODE = os.environ.get('DOCUMENTS_VERIFY_MODE', 'dummy')
 
+# 문서 OCR. dummy는 외부 호출 없이 더미 결과를 쓰고, clova는 CLOVA OCR을 호출한다.
+# .env에 OCR_MODE=처럼 값이 비어 있어도 dummy로 동작하도록 or를 쓴다.
+OCR_MODE = os.environ.get('OCR_MODE') or 'dummy'
+CLOVA_OCR_INVOKE_URL = os.environ.get('CLOVA_OCR_INVOKE_URL', '')
+CLOVA_OCR_SECRET = os.environ.get('CLOVA_OCR_SECRET', '')
+
 # 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
 

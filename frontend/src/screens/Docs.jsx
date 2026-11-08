@@ -4,6 +4,7 @@ import { useApp, isVisibleDoc } from '../store.js'
 import { TopBar, TabBar, Empty } from '../components/ui.jsx'
 import { useServerDocuments } from '../lib/useServerDocuments.js'
 import DocRow from './DocRow.jsx'
+import { T } from '../i18n.js'
 
 // 서버 상태 필터 (PR #44 목록 API의 status)
 const FILTERS = [
@@ -23,13 +24,13 @@ export default function Docs() {
   return (
     <>
       <TopBar
-        title="내 문서"
+        title={T('내 문서')}
         right={
           <>
-            <button className="icon-btn" onClick={() => setRefreshKey((k) => k + 1)} aria-label="새로고침">
+            <button className="icon-btn" onClick={() => setRefreshKey((k) => k + 1)} aria-label={T('새로고침')}>
               <RefreshCw size={20} />
             </button>
-            <button className="icon-btn" onClick={() => nav('upload')} aria-label="문서 올리기">
+            <button className="icon-btn" onClick={() => nav('upload')} aria-label={T('문서 올리기')}>
               <Plus size={22} />
             </button>
           </>
@@ -39,7 +40,7 @@ export default function Docs() {
         <div className="chips" role="tablist">
           {FILTERS.map(([k, label]) => (
             <button key={k} role="tab" aria-selected={filter === k} className={`chip${filter === k ? ' is-active' : ''}`} onClick={() => setFilter(k)}>
-              {label}
+              {T(label)}
             </button>
           ))}
         </div>
@@ -55,9 +56,7 @@ export default function Docs() {
 function DocList({ status, showDemo }) {
   const { data, nav } = useApp()
   const { ids, loading, error, hasMore, loadMore, retry, ready } = useServerDocuments(status)
-  const serverDocs = ids
-    .map((id) => data.docs.find((d) => d.id === id))
-    .filter((d) => d && isVisibleDoc(d, data.user))
+  const serverDocs = ids.map((id) => data.docs.find((d) => d.id === id)).filter((d) => d && isVisibleDoc(d, data.user))
   const demoDocs = showDemo ? data.docs.filter((d) => d.source !== 'api') : []
 
   return (
@@ -65,7 +64,11 @@ function DocList({ status, showDemo }) {
       {error && (
         <button className="banner tone-amber" onClick={retry}>
           <RefreshCw size={18} />
-          <span>{error} 눌러서 다시 시도하세요.</span>
+          <span>
+            {T('{v0} 눌러서 다시 시도하세요.', {
+              v0: T(error),
+            })}
+          </span>
         </button>
       )}
 
@@ -76,17 +79,17 @@ function DocList({ status, showDemo }) {
           ))}
         </ul>
       ) : loading || !ready ? (
-        <p className="hint list-loading">문서 목록을 불러오는 중이에요...</p>
+        <p className="hint list-loading">{T('문서 목록을 불러오는 중이에요...')}</p>
       ) : (
         !error && (
           <Empty
             icon={FileText}
-            title={status ? '해당하는 문서가 없어요' : '아직 올린 문서가 없어요'}
-            desc={status ? undefined : '받은 고지서나 안내문을 올리면 내 언어로 풀어 드려요.'}
+            title={status ? T('해당하는 문서가 없어요') : T('아직 올린 문서가 없어요')}
+            desc={status ? undefined : T('받은 고지서나 안내문을 올리면 내 언어로 풀어 드려요.')}
             action={
               !status && (
                 <button className="btn btn-primary" onClick={() => nav('upload')}>
-                  문서 올리기
+                  {T('문서 올리기')}
                 </button>
               )
             }
@@ -96,13 +99,13 @@ function DocList({ status, showDemo }) {
 
       {hasMore && !error && (
         <button className="btn btn-outline btn-block load-more" onClick={loadMore} disabled={loading}>
-          {loading ? '불러오는 중...' : '더 보기'}
+          {loading ? T('불러오는 중...') : T('더 보기')}
         </button>
       )}
 
       {demoDocs.length > 0 && (
         <section className="section">
-          <h2 className="list-head">시연용 예시 문서</h2>
+          <h2 className="list-head">{T('시연용 예시 문서')}</h2>
           <ul className="doc-list">
             {demoDocs.map((d) => (
               <DocRow key={d.id} doc={d} />

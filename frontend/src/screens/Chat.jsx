@@ -8,6 +8,7 @@ import { mergeChatItems, starterQuestions } from '../lib/chatAdapter.js'
 import { getDocument } from '../lib/documents'
 import { serverDocId } from '../lib/documentAdapter.js'
 import { parseApiError, StaleSessionError, tokenStore } from '../lib/api'
+import { T } from '../i18n.js'
 
 /** 서버 질문 최대 길이 */
 const MAX_QUESTION = 2000
@@ -146,7 +147,7 @@ function ServerChat({ docId }) {
         setMessages((prev) => mergeChatItems(prev, res.results))
         setNextPage(res.next ? nextPage + 1 : null)
       })
-      .catch(() => fresh() && showToast('이전 대화를 불러오지 못했어요'))
+      .catch(() => fresh() && showToast(T('이전 대화를 불러오지 못했어요')))
       .finally(() => aliveRef.current && setLoadingMore(false))
   }
 
@@ -154,17 +155,21 @@ function ServerChat({ docId }) {
   const lowConfidence = meta?.lowConfidence ?? local?.lowConfidence ?? false
   const blocked = notReady || lowConfidence || (status != null && status !== 'DONE')
   const busy = Boolean(pending) || Boolean(reveal)
-  const title = local?.title ?? meta?.title ?? '문서'
+  const title = local?.title ?? meta?.title ?? T('문서')
 
   const send = (text) => {
     const q = text.trim()
     if (!q || busy || blocked) return
     if (q.length > MAX_QUESTION) {
-      showToast(`질문은 ${MAX_QUESTION.toLocaleString()}자까지 쓸 수 있어요`)
+      showToast(
+        T('질문은 {v0}자까지 쓸 수 있어요', {
+          v0: MAX_QUESTION.toLocaleString(),
+        }),
+      )
       return
     }
     if (!online) {
-      showToast('인터넷에 연결되면 질문할 수 있어요')
+      showToast(T('인터넷에 연결되면 질문할 수 있어요'))
       return
     }
     setFailed(null)
@@ -208,7 +213,7 @@ function ServerChat({ docId }) {
     } else {
       setFailed(null)
       loadHistory()
-        .then(() => showToast('대화를 다시 불러왔어요'))
+        .then(() => showToast(T('대화를 다시 불러왔어요')))
         .catch(() => setFailed({ question, action: 'reload', text: '대화를 불러오지 못했어요. 잠시 후 다시 시도하세요.' }))
     }
   }
@@ -216,15 +221,15 @@ function ServerChat({ docId }) {
   if (notFound) {
     return (
       <>
-        <TopBar title="문서에 질문하기" onBack={back} />
+        <TopBar title={T('문서에 질문하기')} onBack={back} />
         <main className="screen">
           <Empty
             icon={FileX}
-            title="문서를 찾을 수 없어요"
-            desc="삭제됐거나 지금 로그인한 계정의 문서가 아니에요."
+            title={T('문서를 찾을 수 없어요')}
+            desc={T('삭제됐거나 지금 로그인한 계정의 문서가 아니에요.')}
             action={
               <button className="btn btn-primary" onClick={() => tab('docs')}>
-                내 문서로 가기
+                {T('내 문서로 가기')}
               </button>
             }
           />
@@ -254,23 +259,23 @@ function ServerChat({ docId }) {
 
   const blockedText =
     status === 'FAILED'
-      ? '분석하지 못한 문서라 질문할 수 없어요. 문서를 다시 올려 주세요.'
+      ? T('분석하지 못한 문서라 질문할 수 없어요. 문서를 다시 올려 주세요.')
       : lowConfidence
-        ? '글자가 흐려 내용을 확인하지 못한 문서라 질문할 수 없어요. 문서를 밝은 곳에서 다시 촬영해 올려 주세요.'
+        ? T('글자가 흐려 내용을 확인하지 못한 문서라 질문할 수 없어요. 문서를 밝은 곳에서 다시 촬영해 올려 주세요.')
         : notReady
-          ? '이 문서는 지금 질문할 수 없어요. 문서 해석이 끝났는지 확인한 뒤 다시 시도하세요.'
-          : '문서 분석이 끝나면 질문할 수 있어요.'
+          ? T('이 문서는 지금 질문할 수 없어요. 문서 해석이 끝났는지 확인한 뒤 다시 시도하세요.')
+          : T('문서 분석이 끝나면 질문할 수 있어요.')
 
-  const placeholder = blocked ? '이 문서에는 질문할 수 없어요' : !online ? '오프라인에서는 질문할 수 없어요' : '질문을 입력하세요'
+  const placeholder = blocked ? T('이 문서에는 질문할 수 없어요') : !online ? T('오프라인에서는 질문할 수 없어요') : T('질문을 입력하세요')
 
   return (
     <>
-      <TopBar title="문서에 질문하기" onBack={back} />
+      <TopBar title={T('문서에 질문하기')} onBack={back} />
       <main className="screen chat-screen">
         <button className="chat-doc" onClick={openSource}>
           <FileText size={18} />
           <span>
-            <small>질문하는 문서</small>
+            <small>{T('질문하는 문서')}</small>
             <strong>{title}</strong>
           </span>
         </button>
@@ -288,28 +293,26 @@ function ServerChat({ docId }) {
               <i />
               <i />
             </span>
-            이전 대화를 불러오는 중이에요
+            {T('이전 대화를 불러오는 중이에요')}
           </p>
         )}
 
         {historyState === 'error' && (
           <div className="chat-retry">
-            <p>이전 대화를 불러오지 못했어요.</p>
+            <p>{T('이전 대화를 불러오지 못했어요.')}</p>
             <button className="btn btn-small btn-outline" onClick={() => loadHistory().catch(() => {})}>
-              <RefreshCw size={14} /> 다시 불러오기
+              <RefreshCw size={14} /> {T('다시 불러오기')}
             </button>
           </div>
         )}
 
         {historyState === 'ready' && messages.length === 0 && !pending && !failed && !blocked && (
-          <p className="chat-intro">
-            이 문서의 내용, 준비서류, 절차, 기한을 물어보세요. 공식 자료에서 근거를 찾으면 출처와 함께, 찾지 못하면 미확인이라고 알려 드려요.
-          </p>
+          <p className="chat-intro">{T('이 문서의 내용, 준비서류, 절차, 기한을 물어보세요. 공식 자료에서 근거를 찾으면 출처와 함께, 찾지 못하면 미확인이라고 알려 드려요.')}</p>
         )}
 
         {nextPage && (
           <button className="chat-more" onClick={loadMore} disabled={loadingMore}>
-            <History size={16} /> {loadingMore ? '불러오는 중' : '이전 대화 더 보기'}
+            <History size={16} /> {loadingMore ? T('불러오는 중') : T('이전 대화 더 보기')}
           </button>
         )}
 
@@ -333,12 +336,12 @@ function ServerChat({ docId }) {
               </li>
               <li className="msg is-assistant">
                 <div className="bubble">
-                  <span className="typing" aria-label="답변 작성 중">
+                  <span className="typing" aria-label={T('답변 작성 중')}>
                     <i />
                     <i />
                     <i />
                   </span>
-                  {slow && <p className="chat-slow">공식 자료를 찾아보고 있어요. 최대 2분까지 걸릴 수 있어요.</p>}
+                  {slow && <p className="chat-slow">{T('공식 자료를 찾아보고 있어요. 최대 2분까지 걸릴 수 있어요.')}</p>}
                 </div>
               </li>
             </>
@@ -347,9 +350,9 @@ function ServerChat({ docId }) {
             <li className="msg is-user is-failed">
               <div className="bubble">{failed.question}</div>
               <div className="msg-error" role="alert">
-                <p>{failed.text}</p>
+                <p>{T(failed.text)}</p>
                 <button className="btn btn-small btn-outline" onClick={resolveFailed}>
-                  <RefreshCw size={14} /> {failed.action === 'retry' ? '다시 보내기' : failed.action === 'edit' ? '질문 고치기' : '대화 다시 불러오기'}
+                  <RefreshCw size={14} /> {failed.action === 'retry' ? T('다시 보내기') : failed.action === 'edit' ? T('질문 고치기') : T('대화 다시 불러오기')}
                 </button>
               </div>
             </li>
@@ -357,7 +360,7 @@ function ServerChat({ docId }) {
         </ul>
 
         {suggestions.length > 0 && (
-          <div className="suggestions" aria-label="추천 질문">
+          <div className="suggestions" aria-label={T('추천 질문')}>
             {suggestions.map((s) => (
               <button key={s} className="chip" onClick={() => send(s)} disabled={!online}>
                 {s}
@@ -366,7 +369,7 @@ function ServerChat({ docId }) {
           </div>
         )}
 
-        {messages.length > 0 && <p className="chat-note">AI 답변은 참고용이에요. 최종 확인은 담당기관에서 하세요.</p>}
+        {messages.length > 0 && <p className="chat-note">{T('AI 답변은 참고용이에요. 최종 확인은 담당기관에서 하세요.')}</p>}
         <div ref={endRef} />
       </main>
 
@@ -377,15 +380,8 @@ function ServerChat({ docId }) {
           send(input)
         }}
       >
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder={placeholder}
-          aria-label="질문 입력"
-          maxLength={MAX_QUESTION}
-          disabled={busy || blocked || !online}
-        />
-        <button className="send-btn" type="submit" disabled={!input.trim() || busy || blocked || !online} aria-label="보내기">
+        <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={placeholder} aria-label={T('질문 입력')} maxLength={MAX_QUESTION} disabled={busy || blocked || !online} />
+        <button className="send-btn" type="submit" disabled={!input.trim() || busy || blocked || !online} aria-label={T('보내기')}>
           <Send size={20} />
         </button>
       </form>
@@ -416,13 +412,16 @@ function ServerMessage({ m, text, revealing, doc, docId, setSheet, nav }) {
         {!revealing && (
           <div className="bubble-foot">
             <span className={tone.labelCls}>
-              <I size={14} /> {tone.label}
+              <I size={14} /> {T(tone.label)}
             </span>
             {m.sources.length > 0 && (
               <div className="src-chips">
                 {m.sources.map((s, i) => (
                   <button key={`${s.url}-${i}`} className="src-chip" onClick={() => setSheet({ type: 'source', payload: { items: [s] } })}>
-                    {s.title}, {fmtDate(s.checkedAt)} 확인
+                    {T('{v0}, {v1} 확인', {
+                      v0: s.title,
+                      v1: fmtDate(s.checkedAt),
+                    })}
                   </button>
                 ))}
               </div>
@@ -441,18 +440,18 @@ function AgencyHint({ doc, docId, nav, mismatch }) {
   const known = agency?.name && agency.name !== '확인되지 않음'
   return (
     <div className="mini-agency">
-      <p className="mini-agency-text">{mismatch ? '어느 쪽이 맞는지 담당기관에 확인하세요.' : '정확한 내용은 담당기관에 확인하세요.'}</p>
+      <p className="mini-agency-text">{mismatch ? T('어느 쪽이 맞는지 담당기관에 확인하세요.') : T('정확한 내용은 담당기관에 확인하세요.')}</p>
       {known && <strong>{agency.name}</strong>}
       {(agency?.phone || doc) && (
         <div className="mini-actions">
           {agency?.phone && (
             <a className="btn btn-small btn-primary" href={`tel:${agency.phone}`}>
-              <Phone size={14} /> 전화
+              <Phone size={14} /> {T('전화')}
             </a>
           )}
           {doc && (
             <button className="btn btn-small btn-outline" onClick={() => nav('agency', { docId })}>
-              담당기관 안내
+              {T('담당기관 안내')}
             </button>
           )}
         </div>
@@ -516,19 +515,17 @@ function MockChat({ doc }) {
 
   return (
     <>
-      <TopBar title="문서에 질문하기" onBack={back} />
+      <TopBar title={T('문서에 질문하기')} onBack={back} />
       <main className="screen chat-screen">
         <button className="chat-doc" onClick={() => nav('result', { docId })}>
           <FileText size={18} />
           <span>
-            <small>질문하는 문서</small>
+            <small>{T('질문하는 문서')}</small>
             <strong>{doc.title}</strong>
           </span>
         </button>
 
-        {messages.length === 0 && !pending && (
-          <p className="chat-intro">이 문서의 내용, 준비서류, 절차, 기한에 대해 물어보세요. 공식 자료에서 찾은 근거와 함께 답해 드려요.</p>
-        )}
+        {messages.length === 0 && !pending && <p className="chat-intro">{T('이 문서의 내용, 준비서류, 절차, 기한에 대해 물어보세요. 공식 자료에서 찾은 근거와 함께 답해 드려요.')}</p>}
 
         <ul className="messages">
           {messages.map((m) => (
@@ -538,7 +535,7 @@ function MockChat({ doc }) {
             <li className="msg is-assistant">
               <div className="bubble">
                 {pending.typing ? (
-                  <span className="typing" aria-label="답변 작성 중">
+                  <span className="typing" aria-label={T('답변 작성 중')}>
                     <i />
                     <i />
                     <i />
@@ -570,8 +567,8 @@ function MockChat({ doc }) {
           send(input)
         }}
       >
-        <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="질문을 입력하세요" aria-label="질문 입력" disabled={!!pending} />
-        <button className="send-btn" type="submit" disabled={!input.trim() || !!pending} aria-label="보내기">
+        <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={T('질문을 입력하세요')} aria-label={T('질문 입력')} disabled={!!pending} />
+        <button className="send-btn" type="submit" disabled={!input.trim() || !!pending} aria-label={T('보내기')}>
           <Send size={20} />
         </button>
       </form>
@@ -593,12 +590,15 @@ function MockMessage({ m, doc, setSheet, nav }) {
         {m.grounded ? (
           <div className="bubble-foot">
             <span className="grounded">
-              <ShieldCheck size={14} /> 공식 근거 있음
+              <ShieldCheck size={14} /> {T('공식 근거 있음')}
             </span>
             <div className="src-chips">
               {m.sources.map((s) => (
                 <button key={s} className="src-chip" onClick={() => setSheet({ type: 'source', payload: { ids: [s] } })}>
-                  {SOURCES[s].title}, {fmtDate(SOURCES[s].checkedAt)} 확인
+                  {T('{v0}, {v1} 확인', {
+                    v0: SOURCES[s].title,
+                    v1: fmtDate(SOURCES[s].checkedAt),
+                  })}
                 </button>
               ))}
             </div>
@@ -606,16 +606,16 @@ function MockMessage({ m, doc, setSheet, nav }) {
         ) : (
           <div className="bubble-foot">
             <span className="ungrounded">
-              <HelpCircle size={14} /> 미확인 답변
+              <HelpCircle size={14} /> {T('미확인 답변')}
             </span>
             <div className="mini-agency">
               <strong>{doc.agency.name}</strong>
               <div className="mini-actions">
                 <a className="btn btn-small btn-primary" href={`tel:${doc.agency.phone}`}>
-                  <Phone size={14} /> 전화
+                  <Phone size={14} /> {T('전화')}
                 </a>
                 <button className="btn btn-small btn-outline" onClick={() => nav('agency', { docId: doc.id })}>
-                  담당기관 안내
+                  {T('담당기관 안내')}
                 </button>
               </div>
             </div>

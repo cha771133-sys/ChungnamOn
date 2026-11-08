@@ -3,6 +3,7 @@ import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2
 import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, isVisibleSchedule, docDeadline } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
+import { T } from '../i18n.js'
 
 /* 원문 속 행정용어는 버튼으로, 가린 개인정보(●)는 마스킹 표시로 바꿔 렌더링 */
 function RichText({ text, terms = [], onTerm }) {
@@ -16,12 +17,12 @@ function RichText({ text, terms = [], onTerm }) {
   const renderMask = (part, key) =>
     part.split(/(●+|\*{3,})/).map((p, i) =>
       /^(●|\*{3})/.test(p) ? (
-        <span key={`${key}-${i}`} className="mask" aria-label="가려진 개인정보">
+        <span key={`${key}-${i}`} className="mask" aria-label={T('가려진 개인정보')}>
           {p}
         </span>
       ) : (
         p
-      )
+      ),
     )
   return text.split('\n').map((line, li) => (
     <p key={li}>
@@ -58,7 +59,7 @@ export default function Result({ docId }) {
   const deadline = docDeadline(doc)
   const n = deadline ? dday(deadline) : null
   const viewOptions = doc.source === 'api' ? [doc.contentLang] : contentLang === 'ko' ? ['ko'] : [contentLang, 'ko']
-  const label = (code) => (code === 'ko' ? '한국어(쉬운 말)' : LANGS.find((l) => l.code === code)?.label)
+  const label = (code) => (code === 'ko' ? T('한국어(쉬운 말)') : LANGS.find((l) => l.code === code)?.label)
   const openTerm = (term) => setSheet({ type: 'term', payload: { term } })
   const openEvidence = (itemId) => setSheet({ type: 'evidence', payload: { docId, itemId } })
 
@@ -72,11 +73,11 @@ export default function Result({ docId }) {
   return (
     <>
       <TopBar
-        title="해석 결과"
+        title={T('해석 결과')}
         onBack={back}
         right={
           doc.source === 'api' && (
-            <button className="icon-btn danger" onClick={() => setSheet({ type: 'deleteDoc', payload: { docId } })} aria-label="문서 삭제">
+            <button className="icon-btn danger" onClick={() => setSheet({ type: 'deleteDoc', payload: { docId } })} aria-label={T('문서 삭제')}>
               <Trash2 size={20} />
             </button>
           )
@@ -85,23 +86,27 @@ export default function Result({ docId }) {
       <main className="screen has-actions">
         <header className="result-head">
           <div>
-            <span className="doc-type-tag">{doc.docType}</span>
+            <span className="doc-type-tag">{T(doc.docType)}</span>
             <h1 className="result-title">{doc.title}</h1>
-            <p className="result-sender">{doc.sender.name}에서 보낸 문서</p>
+            <p className="result-sender">
+              {T('{v0}에서 보낸 문서', {
+                v0: doc.sender.name,
+              })}
+            </p>
           </div>
-          <Stamp tone={tone} top={`${matched}/${v.length}`} bottom={hasMis ? '불일치 있음' : hasUn ? '일부 미확인' : '공식 자료 일치'} />
+          <Stamp tone={tone} top={`${matched}/${v.length}`} bottom={hasMis ? T('불일치 있음') : hasUn ? T('일부 미확인') : T('공식 자료 일치')} />
         </header>
 
         {doc.lowConfidence && (
           <p className="callout tone-amber" role="alert">
-            글자가 흐려 일부 내용이 정확하지 않을 수 있어요. 기한과 금액은 원문과 꼭 함께 확인하세요.
+            {T('글자가 흐려 일부 내용이 정확하지 않을 수 있어요. 기한과 금액은 원문과 꼭 함께 확인하세요.')}
           </p>
         )}
 
-        {doc.source !== 'api' && !['vi', 'en', 'ko'].includes(lang) && <p className="hint">선택한 언어는 데모에서 영어로 보여드려요.</p>}
+        {doc.source !== 'api' && !['vi', 'en', 'ko'].includes(lang) && <p className="hint">{T('선택한 언어는 데모에서 영어로 보여드려요.')}</p>}
 
         {viewOptions.length > 1 && (
-          <div className="segmented" role="tablist" aria-label="보기 언어">
+          <div className="segmented" role="tablist" aria-label={T('보기 언어')}>
             {viewOptions.map((code) => (
               <button key={code} role="tab" aria-selected={view === code} className={view === code ? 'is-active' : ''} onClick={() => setView(code)}>
                 {label(code)}
@@ -110,7 +115,7 @@ export default function Result({ docId }) {
           </div>
         )}
 
-        <section className="summary" aria-label="핵심 요약">
+        <section className="summary" aria-label={T('핵심 요약')}>
           <ul>
             {pick(doc.summary, view).map((s, i) => (
               <li key={i}>{s}</li>
@@ -118,51 +123,54 @@ export default function Result({ docId }) {
           </ul>
         </section>
 
-        <section className="facts" aria-label="핵심 정보">
+        <section className="facts" aria-label={T('핵심 정보')}>
           <div className="fact">
-            <span className="fact-label">해야 할 일</span>
+            <span className="fact-label">{T('해야 할 일')}</span>
             <strong>{pick(doc.task, view)}</strong>
           </div>
           <div className={`fact${n !== null && n <= 7 ? ' is-urgent' : ''}`}>
-            <span className="fact-label">마감일</span>
+            <span className="fact-label">{T('마감일')}</span>
             {deadline ? (
               <>
                 <strong>{fmtDate(deadline)}</strong>
                 <span className="fact-dday">{ddayLabel(n)}</span>
               </>
             ) : (
-              <strong className="muted">확인되지 않음</strong>
+              <strong className="muted">{T('확인되지 않음')}</strong>
             )}
           </div>
           {/* 보낸 기관을 누르면 담당기관 안내(문서 연락처 + 공식 자료 연락처)로 이동 */}
           <button className="fact fact-link" onClick={() => nav('agency', { docId })}>
-            <span className="fact-label">보낸 기관</span>
-            <strong>{doc.sender.name}</strong>
+            <span className="fact-label">{T('보낸 기관')}</span>
+            <strong>{T(doc.sender.name)}</strong>
             <span className="fact-more">
-              연락처 보기 <ChevronRight size={14} />
+              {T('연락처 보기')} <ChevronRight size={14} />
             </span>
           </button>
           <div className="fact">
-            <span className="fact-label">준비서류</span>
-            <strong>{doc.requiredDocs.length ? doc.requiredDocs.join(', ') : '확인되지 않음'}</strong>
+            <span className="fact-label">{T('준비서류')}</span>
+            <strong>{doc.requiredDocs.length ? doc.requiredDocs.map((d) => T(d)).join(', ') : T('확인되지 않음')}</strong>
           </div>
         </section>
 
         <section className="section">
           <div className="section-head">
-            <h2>공식 자료와 대조한 결과</h2>
+            <h2>{T('공식 자료와 대조한 결과')}</h2>
           </div>
           <ul className="verify-list">
             {v.map((item) => (
               <li key={item.id}>
                 <button className={`verify-row tone-${item.status}`} onClick={() => openEvidence(item.id)}>
                   <span className="verify-main">
-                    <span className="verify-label">{item.label}</span>
+                    <span className="verify-label">{T(item.label)}</span>
                     <strong>{item.docValue}</strong>
                     <span className="verify-src">
                       {item.sources.length
-                        ? `${getSource(doc, item.sources[0]).agency} 자료, ${fmtDate(getSource(doc, item.sources[0]).checkedAt)} 확인`
-                        : '공식 자료를 찾지 못했어요'}
+                        ? T('{v0} 자료, {v1} 확인', {
+                            v0: getSource(doc, item.sources[0]).agency,
+                            v1: fmtDate(getSource(doc, item.sources[0]).checkedAt),
+                          })
+                        : T('공식 자료를 찾지 못했어요')}
                     </span>
                   </span>
                   <Badge status={item.status} />
@@ -174,7 +182,7 @@ export default function Result({ docId }) {
           {(hasMis || hasUn) && (
             <button className="banner tone-amber" onClick={() => nav('agency', { docId })}>
               <Building2 size={18} />
-              <span>확인이 필요한 항목이 있어요. 담당기관에 확인하세요.</span>
+              <span>{T('확인이 필요한 항목이 있어요. 담당기관에 확인하세요.')}</span>
               <ChevronRight size={18} />
             </button>
           )}
@@ -182,20 +190,20 @@ export default function Result({ docId }) {
 
         <section className="section">
           <div className="section-head">
-            <h2>{showOriginal ? '원문 (한국어)' : '전체 번역'}</h2>
+            <h2>{showOriginal ? T('원문 (한국어)') : T('전체 번역')}</h2>
             <button className="text-btn" onClick={() => setShowOriginal(!showOriginal)}>
-              {showOriginal ? '번역 보기' : '원문 보기'}
+              {showOriginal ? T('번역 보기') : T('원문 보기')}
             </button>
           </div>
           <div className={`doc-text${showOriginal ? ' is-original' : ''}`}>
             {showOriginal ? <RichText text={doc.original} terms={doc.terms} onTerm={openTerm} /> : <RichText text={pick(doc.translated, view)} />}
           </div>
-          {showOriginal && <p className="hint">밑줄 친 행정용어를 누르면 쉬운 설명을 볼 수 있어요.</p>}
+          {showOriginal && <p className="hint">{T('밑줄 친 행정용어를 누르면 쉬운 설명을 볼 수 있어요.')}</p>}
         </section>
 
         <section className="section">
           <div className="section-head">
-            <h2>어려운 행정용어</h2>
+            <h2>{T('어려운 행정용어')}</h2>
           </div>
           <ul className="term-list">
             {doc.terms.map((t) => (
@@ -212,7 +220,10 @@ export default function Result({ docId }) {
         <div className="privacy-note">
           <ShieldCheck size={20} />
           <p>
-            개인정보 {doc.maskedCount}곳을 가렸어요. 원본 파일은 {fmtDate(addDays(doc.uploadedAt, 30))}에 자동 삭제돼요.
+            {T('개인정보 {v0}곳을 가렸어요. 원본 파일은 {v1}에 자동 삭제돼요.', {
+              v0: doc.maskedCount,
+              v1: fmtDate(addDays(doc.uploadedAt, 30)),
+            })}
           </p>
         </div>
 
@@ -221,7 +232,7 @@ export default function Result({ docId }) {
 
       <div className="bottom-actions">
         <button className="btn btn-outline" onClick={() => nav('chat', { docId })}>
-          <MessageCircle size={18} /> 질문하기
+          <MessageCircle size={18} /> {T('질문하기')}
         </button>
         {/* 유저 플로우 n34: 절차 정보가 충분하면 체크리스트, 아니면 담당기관 안내 */}
         {doc.source === 'api' && deadlineDates.length > 0 ? (
@@ -229,20 +240,20 @@ export default function Result({ docId }) {
           // 마감일이 여러 개면 모두 등록됐을 때만 "등록된 일정 보기", 하나라도 남았으면 등록으로 보낸다
           registered.length === deadlineDates.length ? (
             <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: nextRegistered.id })}>
-              <CalendarCheck size={18} /> 등록된 일정 보기
+              <CalendarCheck size={18} /> {T('등록된 일정 보기')}
             </button>
           ) : (
             <button className="btn btn-primary" onClick={() => nav('scheduleNew', { docId })}>
-              <CalendarPlus size={18} /> {registered.length ? '남은 마감일 등록' : '마감일 일정 등록'}
+              <CalendarPlus size={18} /> {registered.length ? T('남은 마감일 등록') : T('마감일 일정 등록')}
             </button>
           )
         ) : doc.checklist.length > 0 ? (
           <button className="btn btn-primary" onClick={() => nav('checklist', { docId })}>
-            <ListChecks size={18} /> 할 일 체크리스트
+            <ListChecks size={18} /> {T('할 일 체크리스트')}
           </button>
         ) : (
           <button className="btn btn-primary" onClick={() => nav('agency', { docId })}>
-            <Building2 size={18} /> 담당기관 안내
+            <Building2 size={18} /> {T('담당기관 안내')}
           </button>
         )}
       </div>

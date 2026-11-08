@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react'
 import { SOURCES } from './data/mock.js'
 import { tokenStore } from './lib/api'
 import { nearestDeadline } from './lib/documentAdapter.js'
+import { T, getUiLang } from './i18n.js'
 
 export const Ctx = createContext(null)
 export const useApp = () => useContext(Ctx)
@@ -41,14 +42,22 @@ export function dday(s) {
 }
 export function ddayLabel(n) {
   if (n === 0) return 'D-day'
-  return n > 0 ? `D-${n}` : `${-n}일 지남`
+  return n > 0 ? `D-${n}` : T('{v0}일 지남', { v0: -n })
 }
-export function fmtDate(s) {
+const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** 날짜(YYYY-MM-DD)를 안내 언어 형식으로 (ko: 2026년 11월 7일, en: Nov 7, 2026, vi: 7/11/2026) */
+export function fmtDate(s, lang = getUiLang()) {
   const [y, m, d] = s.split('-')
+  if (lang === 'en') return `${MONTHS_EN[+m - 1]} ${+d}, ${y}`
+  if (lang === 'vi') return `${+d}/${+m}/${y}`
   return `${y}년 ${+m}월 ${+d}일`
 }
 export function fmtShort(s) {
   const [, m, d] = s.split('-')
+  const lang = getUiLang()
+  if (lang === 'en') return `${MONTHS_EN[+m - 1]} ${+d}`
+  if (lang === 'vi') return `${+d}/${+m}`
   return `${+m}월 ${+d}일`
 }
 export function addDays(s, n) {
@@ -67,7 +76,7 @@ export function openDoc(doc, nav, showToast) {
   else if (doc.status === 'done') nav('result', { docId: doc.id })
   else if (doc.status === 'failed') nav('failed', { docId: doc.id })
   else if (doc.serverId) nav('analyzing', { docId: doc.id })
-  else showToast('아직 분석 중이에요. 잠시 후 다시 확인하세요.')
+  else showToast(T('아직 분석 중이에요. 잠시 후 다시 확인하세요.'))
 }
 
 /** 서버에서 받은 문서인지 (목업 문서는 d1처럼 s로 시작하지 않는다) */

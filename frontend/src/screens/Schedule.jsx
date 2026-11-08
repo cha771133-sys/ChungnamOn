@@ -7,6 +7,7 @@ import { createSchedule, deleteSchedule, getSchedule, updateSchedule, ScheduleEx
 import { localScheduleId, mergeServerSchedules, serverScheduleId } from '../lib/scheduleAdapter.js'
 import { isCalendarDate } from '../lib/documentAdapter.js'
 import { parseApiError } from '../lib/api'
+import { T } from '../i18n.js'
 
 /** 일정 카드 (목록·달력 공통) */
 function ScheduleCard({ s }) {
@@ -18,9 +19,9 @@ function ScheduleCard({ s }) {
   return (
     <li>
       <button className={`sched-card ${cls}`} onClick={() => nav('scheduleDetail', { scheduleId: s.id })}>
-        <span className="sched-dday">{s.done ? '완료' : ddayLabel(n)}</span>
+        <span className="sched-dday">{s.done ? T('완료') : ddayLabel(n)}</span>
         <span className="sched-main">
-          <strong>{s.title}</strong>
+          <strong>{T(s.title)}</strong>
           <span>
             {fmtDate(s.date)}
             {docTitle ? `, ${docTitle}` : ''}
@@ -46,10 +47,13 @@ function Month({ schedules }) {
   return (
     <div className="month">
       <h2 className="month-title">
-        {y}년 {m + 1}월
+        {T('{v0}년 {v1}월', {
+          v0: y,
+          v1: m + 1,
+        })}
       </h2>
       <div className="month-grid" role="grid">
-        {['일', '월', '화', '수', '목', '금', '토'].map((w) => (
+        {[T('일'), T('월'), T('화'), T('수'), T('목'), T('금'), T('토')].map((w) => (
           <span key={w} className="month-week">
             {w}
           </span>
@@ -63,7 +67,11 @@ function Month({ schedules }) {
               key={d}
               className={`month-day${isToday ? ' is-today' : ''}${sel === d ? ' is-selected' : ''}${items.some((s) => !s.done) ? ' has-item' : ''}`}
               onClick={() => setSel(d)}
-              aria-label={`${m + 1}월 ${d}일${items.length ? `, 일정 ${items.length}개` : ''}`}
+              aria-label={T('{v0}월 {v1}일{v2}', {
+                v0: m + 1,
+                v1: d,
+                v2: items.length ? T(', 일정 {v0}개', { v0: items.length }) : '',
+              })}
             >
               {d}
               {items.length > 0 && <i />}
@@ -81,7 +89,10 @@ function Month({ schedules }) {
             </ul>
           ) : (
             <p className="hint">
-              {m + 1}월 {sel}일에는 일정이 없어요.
+              {T('{v0}월 {v1}일에는 일정이 없어요.', {
+                v0: m + 1,
+                v1: sel,
+              })}
             </p>
           )}
         </div>
@@ -103,16 +114,16 @@ export function Schedule() {
   return (
     <>
       <TopBar
-        title="일정"
+        title={T('일정')}
         right={
           <>
-            <button className="icon-btn" onClick={retry} aria-label="새로고침" disabled={loading}>
+            <button className="icon-btn" onClick={retry} aria-label={T('새로고침')} disabled={loading}>
               <RefreshCw size={20} />
             </button>
-            <button className="icon-btn" onClick={() => tab('settings')} aria-label="알림 수신 설정">
+            <button className="icon-btn" onClick={() => tab('settings')} aria-label={T('알림 수신 설정')}>
               {data.notify.enabled ? <Bell size={20} /> : <BellOff size={20} />}
             </button>
-            <button className="icon-btn" onClick={() => setMode(mode === 'list' ? 'month' : 'list')} aria-label={mode === 'list' ? '달력으로 보기' : '목록으로 보기'}>
+            <button className="icon-btn" onClick={() => setMode(mode === 'list' ? 'month' : 'list')} aria-label={mode === 'list' ? T('달력으로 보기') : T('목록으로 보기')}>
               {mode === 'list' ? <CalendarDays size={21} /> : <List size={21} />}
             </button>
           </>
@@ -122,13 +133,17 @@ export function Schedule() {
         {error && (
           <button className="banner tone-amber" onClick={retry}>
             <RefreshCw size={18} />
-            <span>{error} 눌러서 다시 시도하세요.</span>
+            <span>
+              {T('{v0} 눌러서 다시 시도하세요.', {
+                v0: T(error),
+              })}
+            </span>
           </button>
         )}
         {!data.notify.enabled && (
           <button className="banner tone-slate" onClick={() => tab('settings')}>
             <BellOff size={18} />
-            <span>알림이 꺼져 있어요. 설정에서 켜면 마감 7일 전과 1일 전에 알려드려요.</span>
+            <span>{T('알림이 꺼져 있어요. 설정에서 켜면 마감 7일 전과 1일 전에 알려드려요.')}</span>
             <ChevronRight size={18} />
           </button>
         )}
@@ -136,11 +151,11 @@ export function Schedule() {
         {s.length === 0 ? (
           <Empty
             icon={CalendarDays}
-            title="등록된 일정이 없어요"
-            desc="문서 해석 결과에서 ‘마감일 일정 등록’을 누르면 여기에 모여요."
+            title={T('등록된 일정이 없어요')}
+            desc={T('문서 해석 결과에서 ‘마감일 일정 등록’을 누르면 여기에 모여요.')}
             action={
               <button className="btn btn-primary" onClick={() => tab('docs')}>
-                내 문서 보기
+                {T('내 문서 보기')}
               </button>
             }
           />
@@ -150,7 +165,7 @@ export function Schedule() {
           <>
             {overdue.length > 0 && (
               <section className="section">
-                <h2 className="list-head is-overdue">기한이 지난 일정</h2>
+                <h2 className="list-head is-overdue">{T('기한이 지난 일정')}</h2>
                 <ul className="sched-list">
                   {overdue.map((x) => (
                     <ScheduleCard key={x.id} s={x} />
@@ -159,7 +174,7 @@ export function Schedule() {
               </section>
             )}
             <section className="section">
-              <h2 className="list-head">다가오는 마감</h2>
+              <h2 className="list-head">{T('다가오는 마감')}</h2>
               {upcoming.length ? (
                 <ul className="sched-list">
                   {upcoming.map((x) => (
@@ -167,12 +182,12 @@ export function Schedule() {
                   ))}
                 </ul>
               ) : (
-                <p className="hint">다가오는 마감이 없어요.</p>
+                <p className="hint">{T('다가오는 마감이 없어요.')}</p>
               )}
             </section>
             {done.length > 0 && (
               <section className="section">
-                <h2 className="list-head">완료</h2>
+                <h2 className="list-head">{T('완료')}</h2>
                 <ul className="sched-list">
                   {done.map((x) => (
                     <ScheduleCard key={x.id} s={x} />
@@ -185,14 +200,22 @@ export function Schedule() {
 
         {upcoming[0] && (
           <section className="section">
-            <h2 className="list-head">알림은 이렇게 와요</h2>
+            <h2 className="list-head">{T('알림은 이렇게 와요')}</h2>
             <button className="push-preview is-inline" onClick={() => nav('scheduleDetail', { scheduleId: upcoming[0].id })}>
               <div className="push-app">
                 <span className="push-icon" />
-                ChungnamOn <small>오전 9:00</small>
+                ChungnamOn <small>{T('오전 9:00')}</small>
               </div>
-              <strong>{upcoming[0].title} 마감 7일 전이에요</strong>
-              <span>{fmtDate(upcoming[0].date)}까지예요. 눌러서 할 일을 확인하세요.</span>
+              <strong>
+                {T('{v0} 마감 7일 전이에요', {
+                  v0: T(upcoming[0].title),
+                })}
+              </strong>
+              <span>
+                {T('{v0}까지예요. 눌러서 할 일을 확인하세요.', {
+                  v0: fmtDate(upcoming[0].date),
+                })}
+              </span>
             </button>
           </section>
         )}
@@ -203,6 +226,12 @@ export function Schedule() {
 }
 
 /** 일정 등록: 서버 문서는 해석 결과의 마감일 중 하나를 골라 서버에 등록, 시연용 문서는 로컬에 등록 */
+/** 같은 날짜가 여러 번 오면 첫 항목만 남긴다 (서버 find_deadline_label도 첫 항목의 업무명을 쓴다) */
+function firstPerDate(list) {
+  const seen = new Set()
+  return list.filter((x) => (seen.has(x.date) ? false : seen.add(x.date)))
+}
+
 export function ScheduleNew({ docId }) {
   const { data, update, back, replace, tab, nav, showToast } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
@@ -210,7 +239,7 @@ export function ScheduleNew({ docId }) {
   // 서버 문서는 마감일이 여러 개일 수 있다 (같은 날짜는 하나로)
   // 서버가 준 순서와 상관없이 날짜순으로 보여주고, 가장 가까운 마감일을 기본으로 고른다
   const options = isServer
-    ? [...new Map((doc.deadlines ?? []).filter((x) => isCalendarDate(x?.date)).map((x) => [x.date, x])).values()].sort((a, b) => a.date.localeCompare(b.date))
+    ? firstPerDate((doc.deadlines ?? []).filter((x) => isCalendarDate(x?.date))).sort((a, b) => a.date.localeCompare(b.date))
     : doc?.deadline
       ? [{ label: '', date: doc.deadline }]
       : []
@@ -231,13 +260,13 @@ export function ScheduleNew({ docId }) {
   const saveLocal = () => {
     const exist = data.schedules.find((s) => s.docId === docId && s.date === date)
     if (exist) {
-      showToast('이미 등록된 일정이에요')
+      showToast(T('이미 등록된 일정이에요'))
       replace('scheduleDetail', { scheduleId: exist.id })
       return
     }
     const s = { id: 'sc' + Date.now(), docId, title: title.trim() || doc.title, date, done: false, remind }
     update((d) => ({ schedules: [...d.schedules, s] }))
-    showToast('일정을 등록했어요')
+    showToast(T('일정을 등록했어요'))
     tab('schedule') // 유저 플로우 n35 → n37
   }
 
@@ -247,15 +276,13 @@ export function ScheduleNew({ docId }) {
     try {
       const item = await createSchedule(doc.serverId, date, title.trim())
       update((d) => ({
-        schedules: mergeServerSchedules(d.schedules, [item], { ownerId: data.user?.id, complete: false }).map((s) =>
-          s.id === localScheduleId(item.scheduleId) ? { ...s, remind } : s,
-        ),
+        schedules: mergeServerSchedules(d.schedules, [item], { ownerId: data.user?.id, complete: false }).map((s) => (s.id === localScheduleId(item.scheduleId) ? { ...s, remind } : s)),
       }))
-      showToast('일정을 등록했어요')
+      showToast(T('일정을 등록했어요'))
       tab('schedule')
     } catch (err) {
       if (err instanceof ScheduleExistsError) {
-        showToast('이미 등록된 일정이에요')
+        showToast(T('이미 등록된 일정이에요'))
         replace('scheduleDetail', { scheduleId: localScheduleId(err.scheduleId) })
         return
       }
@@ -268,29 +295,29 @@ export function ScheduleNew({ docId }) {
 
   return (
     <>
-      <TopBar title="마감일 일정 등록" onBack={back} />
+      <TopBar title={T('마감일 일정 등록')} onBack={back} />
       <main className="screen">
         {!options.length ? (
           <Empty
             icon={AlertTriangle}
-            title="마감일을 확인하지 못했어요"
-            desc="문서에서 마감일을 찾지 못해 일정으로 등록할 수 없어요. 담당기관에 기한을 확인하세요."
+            title={T('마감일을 확인하지 못했어요')}
+            desc={T('문서에서 마감일을 찾지 못해 일정으로 등록할 수 없어요. 담당기관에 기한을 확인하세요.')}
             action={
               <button className="btn btn-primary" onClick={() => nav('agency', { docId })}>
-                담당기관 안내 보기
+                {T('담당기관 안내 보기')}
               </button>
             }
           />
         ) : (
           <>
             <label className="field">
-              <span className="field-label">할 일</span>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={isServer ? '비워 두면 "마감 항목 - 문서 제목"으로 등록돼요' : ''} />
+              <span className="field-label">{T('할 일')}</span>
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={isServer ? T('비워 두면 "마감 항목 - 문서 제목"으로 등록돼요') : ''} />
             </label>
             <div className="field">
-              <span className="field-label">마감일 (문서에서 확인한 날짜)</span>
+              <span className="field-label">{T('마감일 (문서에서 확인한 날짜)')}</span>
               {options.length > 1 ? (
-                <div className="option-list" role="radiogroup" aria-label="마감일 선택">
+                <div className="option-list" role="radiogroup" aria-label={T('마감일 선택')}>
                   {options.map((o) => (
                     <button key={o.date} type="button" role="radio" aria-checked={date === o.date} className={`option${date === o.date ? ' is-selected' : ''}`} onClick={() => setDate(o.date)}>
                       <span className="option-text">
@@ -298,7 +325,7 @@ export function ScheduleNew({ docId }) {
                         <small>
                           {o.label ? `${o.label}, ` : ''}
                           {ddayLabel(dday(o.date))}
-                          {registeredDates.has(o.date) ? ', 등록됨' : ''}
+                          {registeredDates.has(o.date) ? T(', 등록됨') : ''}
                         </small>
                       </span>
                       {date === o.date && <Check size={20} />}
@@ -311,41 +338,44 @@ export function ScheduleNew({ docId }) {
                 </div>
               )}
             </div>
-            {n < 0 && <p className="callout tone-amber">이미 기한이 지났어요. 등록할 수는 있지만 담당기관에 먼저 확인하세요.</p>}
+            {n < 0 && <p className="callout tone-amber">{T('이미 기한이 지났어요. 등록할 수는 있지만 담당기관에 먼저 확인하세요.')}</p>}
             <div className="field">
-              <span className="field-label">미리 알림</span>
+              <span className="field-label">{T('미리 알림')}</span>
               <div className="toggle-row">
-                <span>마감 7일 전</span>
-                <Toggle checked={remind.d7} onChange={(v) => setRemind({ ...remind, d7: v })} label="마감 7일 전 알림" />
+                <span>{T('마감 7일 전')}</span>
+                <Toggle checked={remind.d7} onChange={(v) => setRemind({ ...remind, d7: v })} label={T('마감 7일 전 알림')} />
               </div>
               <div className="toggle-row">
-                <span>마감 1일 전</span>
-                <Toggle checked={remind.d1} onChange={(v) => setRemind({ ...remind, d1: v })} label="마감 1일 전 알림" />
+                <span>{T('마감 1일 전')}</span>
+                <Toggle checked={remind.d1} onChange={(v) => setRemind({ ...remind, d1: v })} label={T('마감 1일 전 알림')} />
               </div>
             </div>
             <div className="linked">
-              <span className="field-label">함께 연결돼요</span>
+              <span className="field-label">{T('함께 연결돼요')}</span>
               <p>
                 <FileText size={16} /> {doc.title}
               </p>
               {doc.checklist?.length > 0 && (
                 <p>
-                  <ListChecks size={16} /> 할 일 체크리스트 {doc.checklist.length}개
+                  <ListChecks size={16} />{' '}
+                  {T('할 일 체크리스트 {v0}개', {
+                    v0: doc.checklist.length,
+                  })}
                 </p>
               )}
               <p>
-                <Building2 size={16} /> {doc.agency?.name ?? '확인되지 않음'}
+                <Building2 size={16} /> {doc.agency?.name ?? T('확인되지 않음')}
               </p>
             </div>
             {error && (
               <p className="form-error" role="alert">
-                {error}
+                {T(error)}
               </p>
             )}
-            <p className="hint">일정 등록은 실제 납부나 신청을 뜻하지 않아요.</p>
+            <p className="hint">{T('일정 등록은 실제 납부나 신청을 뜻하지 않아요.')}</p>
             <div className="sticky-actions">
               <button className="btn btn-primary btn-block btn-lg" onClick={isServer ? saveServer : saveLocal} disabled={busy || !date}>
-                {busy ? '등록하는 중...' : '일정 등록하기'}
+                {busy ? T('등록하는 중...') : T('일정 등록하기')}
               </button>
             </div>
           </>
@@ -375,9 +405,9 @@ export function ScheduleDetail({ scheduleId }) {
   if (!s) {
     return (
       <>
-        <TopBar title="일정 상세" onBack={back} />
+        <TopBar title={T('일정 상세')} onBack={back} />
         <main className="screen center-screen">
-          <p className="lead">{loadError || '일정을 불러오는 중이에요...'}</p>
+          <p className="lead">{T(loadError || '일정을 불러오는 중이에요...')}</p>
         </main>
       </>
     )
@@ -401,7 +431,7 @@ export function ScheduleDetail({ scheduleId }) {
       update((d) => ({ schedules: mergeServerSchedules(d.schedules, [item], { ownerId: s.ownerId, complete: false }) }))
     } catch {
       set({ done: !next })
-      showToast('저장하지 못했어요. 다시 시도하세요')
+      showToast(T('저장하지 못했어요. 다시 시도하세요'))
     } finally {
       setBusy(false)
     }
@@ -416,13 +446,13 @@ export function ScheduleDetail({ scheduleId }) {
         // 이미 지워진 일정(404)이 아니면 실패로 알린다
         if (parseApiError(err).status !== 404) {
           setBusy(false)
-          showToast('삭제하지 못했어요. 다시 시도하세요')
+          showToast(T('삭제하지 못했어요. 다시 시도하세요'))
           return
         }
       }
     }
     update((d) => ({ schedules: d.schedules.filter((x) => x.id !== s.id) }))
-    showToast('일정을 삭제했어요')
+    showToast(T('일정을 삭제했어요'))
     back()
   }
 
@@ -435,34 +465,38 @@ export function ScheduleDetail({ scheduleId }) {
   return (
     <>
       <TopBar
-        title="일정 상세"
+        title={T('일정 상세')}
         onBack={back}
         right={
-          <button className="icon-btn danger" onClick={remove} aria-label="일정 삭제" disabled={busy}>
+          <button className="icon-btn danger" onClick={remove} aria-label={T('일정 삭제')} disabled={busy}>
             <Trash2 size={20} />
           </button>
         }
       />
       <main className="screen">
         <header className={`sched-head${overdue ? ' is-overdue' : !s.done && n <= 7 ? ' is-soon' : ''}`}>
-          <span className="sched-head-dday">{s.done ? '완료' : ddayLabel(n)}</span>
-          <h1 className="h2">{s.title}</h1>
-          <p>{fmtDate(s.date)}까지</p>
+          <span className="sched-head-dday">{s.done ? T('완료') : ddayLabel(n)}</span>
+          <h1 className="h2">{T(s.title)}</h1>
+          <p>
+            {T('{v0}까지', {
+              v0: fmtDate(s.date),
+            })}
+          </p>
         </header>
 
-        {overdue && <p className="callout tone-seal">기한이 지났어요. 지금 낼 수 있는지, 추가 금액이 있는지 담당기관에 확인하세요.</p>}
+        {overdue && <p className="callout tone-seal">{T('기한이 지났어요. 지금 낼 수 있는지, 추가 금액이 있는지 담당기관에 확인하세요.')}</p>}
 
         <button className={`done-toggle${s.done ? ' is-done' : ''}`} onClick={toggleDone} aria-pressed={s.done} disabled={busy}>
           <span className="check-box">{s.done && <Check size={16} strokeWidth={3} />}</span>
-          {s.done ? '완료로 표시했어요' : '완료로 표시하기'}
+          {s.done ? T('완료로 표시했어요') : T('완료로 표시하기')}
         </button>
 
         <section className="section">
-          <h2 className="list-head">연결된 정보</h2>
+          <h2 className="list-head">{T('연결된 정보')}</h2>
           <ul className="link-list">
             <li>
               <button onClick={openLinkedDoc}>
-                <FileText size={18} /> <span>{doc?.title ?? s.documentTitle ?? '연결된 문서'}</span> <ChevronRight size={18} />
+                <FileText size={18} /> <span>{doc?.title ?? s.documentTitle ?? T('연결된 문서')}</span> <ChevronRight size={18} />
               </button>
             </li>
             {doc?.checklist?.length > 0 && (
@@ -470,7 +504,10 @@ export function ScheduleDetail({ scheduleId }) {
                 <button onClick={() => nav('checklist', { docId: doc.id })}>
                   <ListChecks size={18} />
                   <span>
-                    체크리스트 {doc.checklist.filter((c) => c.done).length}/{doc.checklist.length} 완료
+                    {T('체크리스트 {v0}/{v1} 완료', {
+                      v0: doc.checklist.filter((c) => c.done).length,
+                      v1: doc.checklist.length,
+                    })}
                   </span>
                   <ChevronRight size={18} />
                 </button>
@@ -479,7 +516,7 @@ export function ScheduleDetail({ scheduleId }) {
             {doc ? (
               <li>
                 <button onClick={() => nav('agency', { docId: doc.id })}>
-                  <Building2 size={18} /> <span>{doc.agency?.name ?? '담당기관'}</span> <ChevronRight size={18} />
+                  <Building2 size={18} /> <span>{doc.agency?.name ?? T('담당기관')}</span> <ChevronRight size={18} />
                 </button>
               </li>
             ) : (
@@ -495,17 +532,17 @@ export function ScheduleDetail({ scheduleId }) {
         </section>
 
         <section className="section">
-          <h2 className="list-head">미리 알림</h2>
+          <h2 className="list-head">{T('미리 알림')}</h2>
           <div className="toggle-row">
-            <span>마감 7일 전</span>
-            <Toggle checked={s.remind?.d7 ?? true} onChange={(v) => set({ remind: { ...s.remind, d7: v } })} label="마감 7일 전 알림" />
+            <span>{T('마감 7일 전')}</span>
+            <Toggle checked={s.remind?.d7 ?? true} onChange={(v) => set({ remind: { ...s.remind, d7: v } })} label={T('마감 7일 전 알림')} />
           </div>
           <div className="toggle-row">
-            <span>마감 1일 전</span>
-            <Toggle checked={s.remind?.d1 ?? true} onChange={(v) => set({ remind: { ...s.remind, d1: v } })} label="마감 1일 전 알림" />
+            <span>{T('마감 1일 전')}</span>
+            <Toggle checked={s.remind?.d1 ?? true} onChange={(v) => set({ remind: { ...s.remind, d1: v } })} label={T('마감 1일 전 알림')} />
           </div>
-          {!data.notify.enabled && <p className="hint">앱 알림이 꺼져 있어 알림을 받을 수 없어요. 설정에서 켜세요.</p>}
-          {isServer && <p className="hint">미리 알림 설정은 이 기기에 저장돼요.</p>}
+          {!data.notify.enabled && <p className="hint">{T('앱 알림이 꺼져 있어 알림을 받을 수 없어요. 설정에서 켜세요.')}</p>}
+          {isServer && <p className="hint">{T('미리 알림 설정은 이 기기에 저장돼요.')}</p>}
         </section>
       </main>
     </>

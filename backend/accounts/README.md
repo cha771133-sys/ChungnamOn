@@ -19,6 +19,7 @@
 - 프로필이 없으면 세 프로필 필드는 `null`, `onboardingCompleted`는 `false`다. 조회로 프로필 행을 만들지 않는다.
 - 최초 설정 또는 미완료 프로필에는 세 필드를 모두 제출해야 한다. 유효성 검사에 실패하면 일부 필드도 저장하지 않는다. 완료 후 부분 수정은 가능하지만 빈 값·`null`로 필드를 지울 수 없다.
 - 언어: `vi`, `en`, `zh`, `uz`, `ne`, `th`, `ko`. 국적: 대문자 영문 두 자리 코드 형식. 체류자격: `E-9`, `H-2`, `F-4`, `F-6`, `D-2`, `D-4`, `E-7`, `F-2`, `F-5`, `ETC`. 프론트 목업의 언어·체류자격 선택지를 기준으로 했다. 국적·체류자격 정보는 안내용이며 실제 국적이나 체류자격을 검증하지 않는다.
+- 국적 ‘기타’는 대문자 `ZZ`로 전송·저장·조회한다. `ZZ`는 서비스 내부에서 ‘기타’를 뜻하는 코드이며 특정 국가에 부여된 ISO 3166-1 alpha-2 코드가 아니다. 최초 설정에도 사용할 수 있으며 다른 두 항목이 유효하면 `onboardingCompleted`는 `true`다. 설정 완료 후 `VN` 등 국가 코드와 `ZZ` 사이의 부분 수정도 가능하다. 소문자 `zz`, 빈 값, `null`은 허용하지 않는다.
 - 프로필 수정은 위 세 필드만 허용한다. 사용자 ID 경로는 제공하지 않으며 요청 본문으로 대상 사용자나 계정·권한 정보를 지정할 수 없다.
 - 유효성 오류는 400 `{code: "VALIDATION_ERROR", message, details: {필드: [오류]}}`, 인증 누락은 401 `NOT_AUTHENTICATED`, 인증 실패·무효/만료 토큰은 401 `AUTHENTICATION_FAILED`다. 모두 공통 `code/message/details` 형식과 기존 HTTP 상태·인증 헤더를 유지한다. 잘못된 비밀번호, 미등록 계정, 비활성 계정은 동일한 로그인 오류를 반환한다.
 - Access Token은 15분, Refresh Token은 7일이다. 갱신하면 새 Refresh Token도 반환하고 이전 토큰은 blacklist에 넣는다. 프론트는 두 토큰을 함께 교체해야 한다.
@@ -58,3 +59,17 @@
 - 신규 파일 SQLite에서 `migrate --noinput`, `showmigrations`, `migrate --check`가 모두 통과했다. accounts·documents·blacklist 적용, DB 무결성, 문서·관리자 로그·토큰의 `accounts_user` FK를 확인했다.
 - 기존 DB의 `migrate --plan`은 예상한 `InconsistentMigrationHistory`로 실패했다. 전후 파일 해시가 같아 기존 DB가 보존됨을 확인했다. 검증 도구의 임시 SQLite 정리에서 발생한 Windows 파일 잠금은 연결을 명시적으로 닫아 해결했으며, 임시 파일도 정리했다.
 - 작업 전에도 있던 `backend/staticfiles` 미생성 경고는 배포의 `collectstatic` 단계와 관련된다. 로컬의 짧은 `.env` 서명키 경고도 확인했으며, 최종 테스트는 임시 무작위 키로 실행한다. 실제 `.env`는 수정하지 않는다.
+
+## 국적 기타 코드 — 이슈 #52
+
+- [x] 이메일+비밀번호 회원가입·로그인 API 회귀 확인
+- [x] simplejwt 토큰 발급·재발급·로그아웃 회귀 확인
+- [x] 프로필 언어·국적·체류자격 세 항목 필수 및 저장·부분 수정 확인
+- [x] 비로그인 사용자 차단 회귀 확인
+- [x] 국적 `ZZ`의 최초 설정·재조회·국가 코드와의 상호 수정 확인
+- [x] 소문자 `zz` 거절 및 기존 빈 값·`null` 검증 유지 확인
+- [x] Swagger 입력·응답과 프론트 주석에 `ZZ`의 의미 명시
+
+프로필 모델의 `help_text`를 반영하는 `0002_document_other_nationality_code` 마이그레이션을 포함한다. 국적 값과 검증 규칙은 변경하지 않는다.
+
+검증: `check`, `makemigrations --check --dry-run`, 관련 테스트 60개 통과. 임시 파일 SQLite에서 전체 577개 테스트가 통과했다(PostgreSQL 전용 6개 제외). 프론트 `npm run lint`는 오류 없이 기존 경고 7개, `npm run build`는 통과했다.
