@@ -221,8 +221,10 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 
-# P2-13: 로컬 더미만 제공한다. 지원하지 않는 실제 모드는 503으로 차단한다.
+# P2-13: 기본은 로컬 더미. rag는 backend/ai/chatbot RAG 모듈, 그 밖의 값은 503으로 차단한다.
 CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
+# 문서 처리 파이프라인의 공식 자료 대조(verify). dummy(기본) | rag
+DOCUMENTS_VERIFY_MODE = os.environ.get('DOCUMENTS_VERIFY_MODE', 'dummy')
 
 # 문서 OCR. dummy는 외부 호출 없이 더미 결과를 쓰고, clova는 CLOVA OCR을 호출한다.
 # .env에 OCR_MODE=처럼 값이 비어 있어도 dummy로 동작하도록 or를 쓴다.

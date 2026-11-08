@@ -1,0 +1,6 @@
+# 챗봇 AI 모듈이 쓰는 패키지. 아래 세 개는 backend/requirements.txt에 같은 버전으로 들어 있음.
+anthropic==2.4.0
+httpx==0.28.1
+numpy==2.5.4
+# 선택: 임베딩을 앱 안에서 직접 돌릴 때만 (AI_EMBEDDER=fastembed). 공통 requirements에는 넣지 않음
+# fastembed==0.9.1
