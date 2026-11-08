@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AUTH_EXPIRED_EVENT, SESSION_CHANGED_EVENT, tokenStore } from './lib/api'
 import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
+import { getNotifyPreference } from './lib/notifications'
 import { t, setUiLang } from './i18n.js'
 import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
 import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
@@ -47,7 +48,7 @@ function fresh() {
     docs: INITIAL_DOCS,
     schedules: INITIAL_SCHEDULES,
     chats: {},
-    notify: { enabled: false, d7: true, d1: true },
+    notify: { enabled: false, deviceCount: 0 },
     installDismissed: false,
   }
 }
@@ -125,6 +126,21 @@ export default function App() {
       })
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [verifyAttempt])
+
+  // 계정이 확인되면 그 계정의 알림 수신 설정(서버 저장)을 받아 화면 상태를 맞춘다
+  const verifiedUser = data.user?.id != null && data.user.session === tokenStore.marker() ? data.user.id : null
+  useEffect(() => {
+    if (verifiedUser == null) return
+    const session = tokenStore.session()
+    getNotifyPreference()
+      .then((pref) => {
+        if (tokenStore.session() !== session) return
+        setData((d) => ({ ...d, notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))
+      })
+      .catch(() => {
+        /* 실패하면 기기에 저장된 값을 그대로 쓰고, 설정 화면에서 다시 맞춘다 */
+      })
+  }, [verifiedUser, verifyAttempt])
 
   // 인터넷이 다시 연결되면 계정 확인을 다시 시도한다
   useEffect(() => {
