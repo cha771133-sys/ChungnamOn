@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AUTH_EXPIRED_EVENT, SESSION_CHANGED_EVENT, tokenStore } from './lib/api'
 import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
-import { getNotifyPreference } from './lib/notifications'
+import { refreshNotifyPreference } from './lib/notifications'
 import { t, setUiLang } from './i18n.js'
 import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
 import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
@@ -131,15 +131,10 @@ export default function App() {
   const verifiedUser = data.user?.id != null && data.user.session === tokenStore.marker() ? data.user.id : null
   useEffect(() => {
     if (verifiedUser == null) return
-    const session = tokenStore.session()
-    getNotifyPreference()
-      .then((pref) => {
-        if (tokenStore.session() !== session) return
-        setData((d) => ({ ...d, notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))
-      })
-      .catch(() => {
-        /* 실패하면 기기에 저장된 값을 그대로 쓰고, 설정 화면에서 다시 맞춘다 */
-      })
+    // 그사이 설정을 바꿨거나 계정이 바뀌었으면 늦게 온 응답은 버린다 (refreshNotifyPreference가 확인)
+    refreshNotifyPreference((pref) => setData((d) => ({ ...d, notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))).catch(() => {
+      /* 실패하면 기기에 저장된 값을 그대로 쓰고, 설정 화면에서 다시 맞춘다 */
+    })
   }, [verifiedUser, verifyAttempt])
 
   // 인터넷이 다시 연결되면 계정 확인을 다시 시도한다

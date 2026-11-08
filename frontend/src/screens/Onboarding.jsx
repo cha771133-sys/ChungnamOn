@@ -6,7 +6,7 @@ import { t, uiLang, NATION_NAMES, VISA_NAMES } from '../i18n.js'
 import { TopBar, Stamp } from '../components/ui.jsx'
 import { fetchMe, hasSession, login, register, updateMe } from '../lib/auth'
 import { parseApiError, tokenStore } from '../lib/api'
-import { setNotifyPreference } from '../lib/notifications'
+import { refreshNotifyPreference, saveNotifyPreference } from '../lib/notifications'
 
 /** 소개를 마친 뒤 로그인 여부와 프로필 완료 여부에 따라 다음 화면을 고른다 (유저 플로우 n8). */
 function useAfterIntro() {
@@ -490,7 +490,14 @@ export function NotifyPermission() {
   const finish = (enabled) => {
     update((d) => ({ onboarded: true, notify: { ...d.notify, enabled } }))
     // 계정 설정이라 서버에도 저장한다. 실패해도 온보딩은 계속하고, 설정 화면에서 다시 맞춘다
-    if (hasSession()) setNotifyPreference(enabled, tokenStore.session()).catch(() => {})
+    if (hasSession()) {
+      const apply = (pref) => update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))
+      saveNotifyPreference(enabled, {
+        onSaved: apply,
+        // 저장에 실패하면 서버에 남아 있는 값으로 화면을 되돌린다 (조회도 실패하면 꺼짐으로 둔다)
+        onFailed: () => refreshNotifyPreference(apply).catch(() => update((d) => ({ notify: { ...d.notify, enabled: false } }))),
+      })
+    }
     tab('home')
     if (!isStandalone && !data.installDismissed) setTimeout(() => setSheet({ type: 'install' }), 700)
   }

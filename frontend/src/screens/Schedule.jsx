@@ -232,6 +232,15 @@ export function Schedule() {
  */
 function NotifyNote({ done = false }) {
   const { data, tab } = useApp()
+  // 완료한 일정은 알림 설정과 상관없이 알림이 가지 않는다
+  if (done) {
+    return (
+      <p className="notify-note">
+        <Bell size={16} />
+        <span>{T('완료한 일정은 알림을 보내지 않아요.')}</span>
+      </p>
+    )
+  }
   if (!data.notify.enabled) {
     return (
       <button className="notify-note is-off" onClick={() => tab('settings')}>
@@ -241,10 +250,19 @@ function NotifyNote({ done = false }) {
       </button>
     )
   }
+  // 알림은 켜졌지만 알림 받을 기기가 아직 없으면 (Firebase 연동 전) 알림이 간다고 약속하지 않는다
+  if (!data.notify.deviceCount) {
+    return (
+      <p className="notify-note is-off">
+        <BellOff size={16} />
+        <span>{T('알림은 켜져 있지만, 이 기기를 연결하는 기능이 준비 중이라 아직 알림이 오지 않아요.')}</span>
+      </p>
+    )
+  }
   return (
     <p className="notify-note">
       <Bell size={16} />
-      <span>{done ? T('완료한 일정은 알림을 보내지 않아요.') : T('마감 7일 전과 1일 전에 알려드려요.')}</span>
+      <span>{T('마감 7일 전과 1일 전에 알려드려요.')}</span>
     </p>
   )
 }

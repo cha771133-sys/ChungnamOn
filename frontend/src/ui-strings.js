@@ -318,6 +318,10 @@ export const UI = {
   '알림 설정을 저장하지 못했어요. 다시 시도하세요': { en: "Couldn't save the notification setting. Try again", vi: 'Không lưu được cài đặt thông báo. Hãy thử lại' },
   '알림 수신 설정': { en: 'Notification settings', vi: 'Cài đặt nhận thông báo' },
   '알림은 이렇게 와요': { en: 'Notifications look like this', vi: 'Thông báo sẽ hiện như thế này' },
+  '알림은 켜져 있지만, 이 기기를 연결하는 기능이 준비 중이라 아직 알림이 오지 않아요.': {
+    en: "Notifications are on, but connecting this device is coming soon, so you won't receive them yet.",
+    vi: 'Thông báo đã bật, nhưng tính năng kết nối thiết bị này đang được chuẩn bị nên bạn chưa nhận được thông báo.',
+  },
   '알림이 꺼져 있어 마감일을 알려드릴 수 없어요.': { en: "Notifications are off, so we can't remind you of deadlines.", vi: 'Thông báo đang tắt nên không thể nhắc bạn về hạn chót.' },
   '알림이 꺼져 있어요. 설정에서 켜면 마감 7일 전과 1일 전에 알려드려요.': {
     en: 'Notifications are off. Turn them on in Settings to get reminders 7 days and 1 day before.',

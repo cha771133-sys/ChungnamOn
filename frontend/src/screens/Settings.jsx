@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
-import { api, parseApiError, StaleSessionError, tokenStore } from '../lib/api'
-import { setNotifyPreference } from '../lib/notifications'
+import { api, parseApiError } from '../lib/api'
+import { refreshNotifyPreference, saveNotifyPreference } from '../lib/notifications'
 import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
 import { useApp, purgeServerData } from '../store.js'
 import { LANGS } from '../data/mock.js'
@@ -16,6 +16,14 @@ export default function Settings() {
   const [server, setServer] = useState(null)
   const [saving, setSaving] = useState(false)
   const [notifySaving, setNotifySaving] = useState(false)
+
+  // 설정 화면에 들어올 때마다 서버의 알림 설정으로 다시 맞춘다 (다른 곳에서 저장에 실패했어도 바로잡힘)
+  useEffect(() => {
+    if (!hasSession()) return
+    refreshNotifyPreference((pref) => update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))).catch(() => {})
+    // 화면에 들어올 때 한 번만
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** 서버 상태 확인 (GET /api/health/) */
   const checkServer = async () => {
@@ -76,17 +84,17 @@ export default function Settings() {
     update((d) => ({ notify: { ...d.notify, enabled } }))
     if (!hasSession()) return
     setNotifySaving(true)
-    try {
-      const pref = await setNotifyPreference(enabled, tokenStore.session())
-      update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))
-    } catch (err) {
-      if (err instanceof StaleSessionError) return
-      update((d) => ({ notify: { ...d.notify, enabled: before } }))
-      showToast(T('알림 설정을 저장하지 못했어요. 다시 시도하세요'))
-    } finally {
-      setNotifySaving(false)
-    }
+    // 저장 중 계정이 바뀌거나 더 새로운 변경이 생기면 지난 결과로 화면을 바꾸지 않는다
+    await saveNotifyPreference(enabled, {
+      onSaved: (pref) => update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } })),
+      onFailed: () => {
+        update((d) => ({ notify: { ...d.notify, enabled: before } }))
+        showToast(T('알림 설정을 저장하지 못했어요. 다시 시도하세요'))
+      },
+    })
+    setNotifySaving(false)
   }
+
   /** 서버의 Refresh Token을 무효화하고 로그인 화면으로 이동한다. */
   const logout = async () => {
     try {
