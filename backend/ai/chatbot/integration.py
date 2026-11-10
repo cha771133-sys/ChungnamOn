@@ -157,14 +157,19 @@ def _document_values(doc: dict) -> list[tuple[str, str, str]]:
 
     - AMOUNT: amount (문자열 또는 null)
     - DEADLINE: deadlines [{label, date}] → "납부 마감 2026-08-31"
-    - PAYMENT_METHOD: payment_methods (문자열 목록)
+    - PAYMENT_METHOD: payment_methods (문자열 목록, 문자열 하나도 허용)
     - AGENCY_CONTACT: agency.phone
     """
     deadlines = [
         " ".join(p for p in (_text(d.get("label")), _text(d.get("date"))) if p)
         for d in doc.get("deadlines") or [] if isinstance(d, dict) and _text(d.get("date"))
     ]
-    methods = [_text(m) for m in doc.get("payment_methods") or [] if _text(m)]
+    raw_methods = doc.get("payment_methods")
+    if isinstance(raw_methods, str):
+        raw_methods = [raw_methods]  # 문자열 하나가 글자 단위로 쪼개지지 않게
+    elif not isinstance(raw_methods, (list, tuple)):
+        raw_methods = []  # null·숫자 등 이상한 타입이면 PAYMENT_METHOD 항목 제외
+    methods = [_text(m) for m in raw_methods if _text(m)]
     values = {
         "AMOUNT": _text(doc.get("amount")),
         "DEADLINE": ", ".join(deadlines),

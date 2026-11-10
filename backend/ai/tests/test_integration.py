@@ -290,6 +290,23 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         search.assert_not_called()
         llm.assert_not_called()
 
+    def test_payment_methods_string_or_wrong_type(self):
+        self.source("a")
+
+        def method_item(value):
+            out = self.verify({**C1_RESULT, "payment_methods": value})
+            return next((i for i in out["items"] if i["key"] == "PAYMENT_METHOD"), None)
+
+        # 문자열 하나는 글자 단위로 쪼개지 않고 그대로
+        self.assertEqual(method_item("위택스")["docValue"], "위택스")
+        self.assertEqual(method_item(" 위택스 ")["docValue"], "위택스")
+        # 리스트는 지금처럼: 빈 값·비문자열은 거르고 중복 제거
+        self.assertEqual(method_item(["위택스", "", 3, None, "위택스", "가상계좌"])["docValue"], "위택스, 가상계좌")
+        # 숫자·dict 같은 이상한 타입이나 빈 문자열이면 항목 제외
+        for value in (123, 1.5, True, {"name": "위택스"}, None, "", "  "):
+            with self.subTest(value=value):
+                self.assertIsNone(method_item(value))
+
     def test_overall_rules(self):
         from ai.chatbot.integration import _overall
 
