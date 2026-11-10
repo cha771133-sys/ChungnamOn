@@ -107,7 +107,8 @@ def _official_documents(ids):
         pk__in=ids, status=SourceDocument.Status.ACTIVE, collected_at__isnull=False,
         review_status=SourceDocument.ReviewStatus.APPROVED, ai_reprocessing_required=False,
         source_url__isnull=False,
-    ).only("id", "title", "source_url", "collected_at", "status", "review_status", "ai_reprocessing_required")
+    ).only("id", "title", "source_url", "collected_at", "published_at", "status", "review_status",
+           "ai_reprocessing_required")
     out = {}
     for d in docs:
         if not d.ai_eligible:
@@ -134,41 +135,151 @@ def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchRe
     return [(h, official[i]) for i, h in best.items() if i in official][:limit]
 
 
-def verify_interpretation(result: dict, limit: int = VERIFY_LIMIT) -> dict:
-    """pipeline.verify 출력 형식 + 각 출처에 sourceDocumentId.
+# C1 항목 (key, label). 문서에 값이 없는 항목은 결과에서 뺀다
+VERIFY_ITEMS = (
+    ("AMOUNT", "납부 금액"),
+    ("DEADLINE", "납부 기한"),
+    ("PAYMENT_METHOD", "납부 방법"),
+    ("AGENCY_CONTACT", "문의 연락처"),
+)
+VALUE_MAX_CHARS = 500
+REASON_NO_IDENTITY = "발신기관·지역을 확인할 수 없어 공식 자료를 찾지 않았어요."
+REASON_NO_SOURCES = "이 문서와 관련된 공식 자료를 찾지 못했어요."
+REASON_NO_EVIDENCE = "공식 자료에서 이 내용을 확인하지 못했어요."
 
-    {"status": "MATCHED"|"MISMATCH"|"UNVERIFIED",
-     "sources": [{"title", "url", "checkedAt": "YYYY-MM-DD", "sourceDocumentId": int}]}  # 최대 limit개, 관련도 순
-    발신기관·지역을 모르면 검색하지 않고 UNVERIFIED. 검색·LLM 오류는 그대로 던지고,
-    pipeline.verify가 받아서 UNVERIFIED로 바꾼다 (문서 처리는 실패시키지 않음).
+
+def _text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _document_values(doc: dict) -> list[tuple[str, str, str]]:
+    """해석 결과에서 대조할 문서 값. [(key, label, doc_value)] — 값이 없는 항목은 빠짐.
+
+    - AMOUNT: amount (문자열 또는 null)
+    - DEADLINE: deadlines [{label, date}] → "납부 마감 2026-08-31"
+    - PAYMENT_METHOD: payment_methods (문자열 목록)
+    - AGENCY_CONTACT: agency.phone
     """
+    deadlines = [
+        " ".join(p for p in (_text(d.get("label")), _text(d.get("date"))) if p)
+        for d in doc.get("deadlines") or [] if isinstance(d, dict) and _text(d.get("date"))
+    ]
+    methods = [_text(m) for m in doc.get("payment_methods") or [] if _text(m)]
+    values = {
+        "AMOUNT": _text(doc.get("amount")),
+        "DEADLINE": ", ".join(deadlines),
+        "PAYMENT_METHOD": ", ".join(dict.fromkeys(methods)),
+        "AGENCY_CONTACT": _text((doc.get("agency") or {}).get("phone")),
+    }
+    return [(key, label, values[key]) for key, label in VERIFY_ITEMS if values[key]]
+
+
+def _overall(items: list[dict]) -> str:
+    """하나라도 MISMATCH면 MISMATCH, 모두 MATCHED면 MATCHED, 그 외(항목 0개 포함) UNVERIFIED."""
+    statuses = [i["status"] for i in items]
+    if "MISMATCH" in statuses:
+        return "MISMATCH"
+    if statuses and all(s == "MATCHED" for s in statuses):
+        return "MATCHED"
+    return "UNVERIFIED"
+
+
+def _item(key, label, doc_value, status="UNVERIFIED", official_value=None, reason=REASON_NO_EVIDENCE, source_ids=()):
+    return {
+        "key": key, "label": label, "docValue": doc_value, "officialValue": official_value,
+        "status": status, "reason": reason, "sourceIds": list(source_ids),
+    }
+
+
+def _judge_item(key, label, doc_value, raw: dict | None, valid_ids: set[str]) -> dict:
+    """LLM이 낸 항목 판정을 검사. 이상하면 그 항목만 UNVERIFIED (챗봇 decide_status와 같은 원칙).
+
+    - status가 MATCHED/MISMATCH/UNVERIFIED가 아니면 UNVERIFIED
+    - sourceIds 중 실제 sources에 없는 id가 하나라도 있으면 UNVERIFIED
+    - MATCHED/MISMATCH인데 근거(sourceIds)나 공식 값이 없으면 UNVERIFIED
+    """
+    if not isinstance(raw, dict):
+        return _item(key, label, doc_value)
+    status = _text(raw.get("status")).upper()
+    ids = raw.get("sourceIds", raw.get("source_ids"))
+    ids = ids if isinstance(ids, list) else []
+    ids = list(dict.fromkeys(i.strip().lower() for i in ids if isinstance(i, str) and i.strip()))
+    official_value = _text(raw.get("officialValue", raw.get("official_value")))[:VALUE_MAX_CHARS]
+    reason = _text(raw.get("reason"))[:VALUE_MAX_CHARS]
+    if status not in VERIFY_STATUSES or any(i not in valid_ids for i in ids):
+        return _item(key, label, doc_value)
+    if status == "UNVERIFIED":
+        return _item(key, label, doc_value, reason=reason or REASON_NO_EVIDENCE)
+    if not ids or not official_value:
+        return _item(key, label, doc_value)
+    return _item(key, label, doc_value, status, official_value, reason, ids)
+
+
+def _unverified_result(values, reason: str) -> dict:
+    items = [_item(key, label, value, reason=reason) for key, label, value in values]
+    return {"overall": "UNVERIFIED", "status": "UNVERIFIED", "items": items, "sources": []}
+
+
+def verify_interpretation(result: dict, limit: int = VERIFY_LIMIT) -> dict:
+    """해석 결과를 공식 자료와 항목별로 대조한다 (C1 형식, DOCUMENTS_VERIFY_MODE=rag).
+
+    {
+      "overall": "MATCHED"|"MISMATCH"|"UNVERIFIED",   # items로 코드에서 계산
+      "status": overall과 같은 값 (기존 코드·챗봇 호환),
+      "items": [{"key": "AMOUNT"|"DEADLINE"|"PAYMENT_METHOD"|"AGENCY_CONTACT", "label", "docValue",
+                 "officialValue": str|None, "status", "reason", "sourceIds": ["s1", ...]}],
+      "sources": [{"id": "s1", "title", "url", "checkedAt": "YYYY-MM-DD", "publishedAt"(있으면),
+                   "sourceDocumentId": int}]   # 관련도 순 최대 limit개, 결과에 한 번만
+    }
+    문서에 값이 없는 항목은 items에서 뺀다. 발신기관·지역을 모르거나 관련 자료가 없으면 항목은 모두 UNVERIFIED.
+    검색·임베딩·LLM 등 어떤 오류도 여기서 잡아 overall=UNVERIFIED, items=[], sources=[]로 돌려준다
+    (문서 처리는 계속됨).
+    """
+    try:
+        return _verify(result, limit)
+    except Exception as exc:
+        # 오류 원문에는 문서 내용이 섞일 수 있어서 종류만 남긴다
+        log.warning("공식 자료 항목별 대조 실패, UNVERIFIED로 처리: %s", type(exc).__name__)
+        return {"overall": "UNVERIFIED", "status": "UNVERIFIED", "items": [], "sources": []}
+
+
+def _verify(result: dict, limit: int) -> dict:
     from django.utils import timezone
 
     doc = normalize_document(result)
+    values = _document_values(doc)
+    if not values:
+        return _unverified_result([], REASON_NO_EVIDENCE)
     if not _identifiable(doc):
-        return {"status": "UNVERIFIED", "sources": []}
+        return _unverified_result(values, REASON_NO_IDENTITY)
     related = related_sources(doc, limit)
     if not related:
-        return {"status": "UNVERIFIED", "sources": []}
+        return _unverified_result(values, REASON_NO_SOURCES)
 
-    hits = [h for h, _ in related]
+    sources = []
+    for i, (_, d) in enumerate(related, 1):
+        source = {
+            "id": f"s{i}",
+            "title": d.title,
+            "url": d.source_url,
+            "checkedAt": timezone.localdate(d.collected_at).isoformat(),
+        }
+        if d.published_at:
+            source["publishedAt"] = d.published_at.isoformat()
+        source["sourceDocumentId"] = d.pk
+        sources.append(source)
+    source_ids = [s["id"] for s in sources]
+
     raw = get_llm().complete_json(
         prompts.VERIFY_SYSTEM,
-        [{"role": "user", "content": prompts.verify_user_message(doc, hits)}],
-        mock_hint={"task": "verify", "source_ids": [f"S{i}" for i in range(1, len(hits) + 1)]},
+        [{"role": "user", "content": prompts.verify_user_message(doc, values, [h for h, _ in related])}],
+        mock_hint={"task": "verify", "item_keys": [key for key, _, _ in values], "source_ids": source_ids},
     )
-    status = str(raw.get("status", "")).upper()
-    if status not in VERIFY_STATUSES:
-        status = "UNVERIFIED"
-    return {
-        "status": status,
-        "sources": [
-            {
-                "title": d.title,
-                "url": d.source_url,
-                "checkedAt": timezone.localdate(d.collected_at).isoformat(),
-                "sourceDocumentId": d.pk,
-            }
-            for _, d in related
-        ],
-    }
+    entries = raw.get("items") if isinstance(raw, dict) else None
+    by_key = {}
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict):
+            by_key.setdefault(_text(entry.get("key")).upper(), entry)
+    items = [_judge_item(key, label, value, by_key.get(key), set(source_ids)) for key, label, value in values]
+    overall = _overall(items)
+    return {"overall": overall, "status": overall, "items": items, "sources": sources}
