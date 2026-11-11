@@ -80,10 +80,26 @@ def _language(user, interpretation):
 def _official_sources(interpretation, *, for_update=False):
     """검증 결과에 실제 ID로 연결된 활성 공식 자료의 수집 메타데이터만 반환한다."""
     verification = interpretation.get('verification')
-    if not isinstance(verification, dict) or verification.get('status') not in ('MATCHED', 'MISMATCH'):
+    if not isinstance(verification, dict):
         return []
     references = verification.get('sources', [])
     if not isinstance(references, list):
+        return []
+    if 'items' in verification:
+        items = verification['items']
+        # 빈 목록·잘못된 형식을 레거시 전체 상태로 우회하지 않는다.
+        if not isinstance(items, list):
+            return []
+        source_ids = set()
+        for item in items:
+            if not isinstance(item, dict) or item.get('status') not in ('MATCHED', 'MISMATCH'):
+                continue
+            item_source_ids = item.get('sourceIds')
+            if isinstance(item_source_ids, list):
+                source_ids.update(value for value in item_source_ids if isinstance(value, str) and value.strip())
+        references = [entry for entry in references if isinstance(entry, dict)
+                      and isinstance(entry.get('id'), str) and entry['id'] in source_ids]
+    elif verification.get('status') not in ('MATCHED', 'MISMATCH'):
         return []
     # 기존 더미 검증에는 ID가 없다. URL/기관명만으로 연결 관계를 추측하지 않는다.
     ids = {entry.get('sourceDocumentId') for entry in references if isinstance(entry, dict)
