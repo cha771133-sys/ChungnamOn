@@ -120,27 +120,52 @@ VERIFICATION_STATUSES = ('MATCHED', 'MISMATCH', 'UNVERIFIED')
 VERIFICATION_ITEM_KEYS = ('AMOUNT', 'DEADLINE', 'PAYMENT_METHOD', 'AGENCY_CONTACT')
 
 
+def is_valid_verification_item(item):
+    """C1 항목 하나가 응답 명세의 필드와 타입을 모두 갖췄는지."""
+    return (
+        isinstance(item, dict)
+        and item.get('key') in VERIFICATION_ITEM_KEYS
+        and item.get('status') in VERIFICATION_STATUSES
+        and all(isinstance(item.get(name), str) for name in ('label', 'docValue', 'reason'))
+        and (item.get('officialValue') is None or isinstance(item.get('officialValue'), str))
+        and isinstance(item.get('sourceIds'), list)
+        and all(isinstance(source_id, str) for source_id in item['sourceIds'])
+    )
+
+
 def normalize_verification(verification):
     """저장된 verification을 C1 항목별 형식으로 맞춘다.
 
-    옛 형식 {status, sources}는 overall=status, items=[]로 바꾸고, id가 없는 출처에는 s1, s2… 를 붙인다.
+    옛 형식 {status, sources}는 overall=status, items=[]로 바꾸고, id가 없는 출처에는 기존 id와 겹치지 않는
+    s1, s2… 를 붙인다. 형식이 틀린 항목은 빼고, 그런 항목이 하나라도 있으면 overall을 UNVERIFIED로 둔다.
     """
     if not isinstance(verification, dict):
         verification = {}
     overall = verification.get('overall') or verification.get('status')
     if overall not in VERIFICATION_STATUSES:
         overall = 'UNVERIFIED'
-    items = verification.get('items')
+
+    raw_items = verification.get('items')
+    raw_items = raw_items if isinstance(raw_items, list) else []
+    items = [item for item in raw_items if is_valid_verification_item(item)]
+    if len(items) != len(raw_items):
+        # 일부 항목만 보고 MATCHED라고 보여주지 않도록 판정을 미확인으로 낮춘다.
+        overall = 'UNVERIFIED'
+
+    raw_sources = verification.get('sources')
+    raw_sources = [source for source in raw_sources if isinstance(source, dict)] if isinstance(raw_sources, list) else []
+    used_ids = {source['id'] for source in raw_sources if isinstance(source.get('id'), str) and source['id']}
+    next_number = 1
     sources = []
-    for index, source in enumerate(verification.get('sources') or [], start=1):
-        if isinstance(source, dict):
-            sources.append({'id': f's{index}', **source} if not source.get('id') else source)
-    return {
-        'overall': overall,
-        'status': overall,
-        'items': [item for item in items if isinstance(item, dict)] if isinstance(items, list) else [],
-        'sources': sources,
-    }
+    for source in raw_sources:
+        if isinstance(source.get('id'), str) and source['id']:
+            sources.append(source)
+            continue
+        while f's{next_number}' in used_ids:
+            next_number += 1
+        used_ids.add(f's{next_number}')
+        sources.append({**source, 'id': f's{next_number}'})
+    return {'overall': overall, 'status': overall, 'items': items, 'sources': sources}
 
 
 class VerificationItemSerializer(serializers.Serializer):

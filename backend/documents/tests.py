@@ -477,6 +477,40 @@ class NormalizeVerificationTests(TestCase):
 
         self.assertEqual(normalize_verification(verification), verification)
 
+    def test_non_list_sources_become_empty(self):
+        for sources in (7, 'abc', {'id': 's1'}):
+            with self.subTest(sources=sources):
+                normalized = normalize_verification({'status': 'MATCHED', 'sources': sources})
+
+                self.assertEqual(normalized['sources'], [])
+                self.assertEqual(normalized['overall'], 'MATCHED')
+
+    def test_generated_source_ids_do_not_collide(self):
+        normalized = normalize_verification({'status': 'MATCHED', 'sources': [
+            {'id': 's2', 'title': 'A'}, {'title': 'B'}, {'id': '', 'title': 'C'}, {'id': 's1', 'title': 'D'},
+        ]})
+
+        self.assertEqual([source['id'] for source in normalized['sources']], ['s2', 's3', 's4', 's1'])
+
+    def test_invalid_items_are_dropped_and_overall_becomes_unverified(self):
+        valid = pipeline.verify({})['items'][0]
+        broken = [{}, {**valid, 'key': 'OTHER'}, {**valid, 'status': 'OK'}, {**valid, 'sourceIds': 's1'},
+                  {**valid, 'officialValue': 3}, 'text']
+        for item in broken:
+            with self.subTest(item=item):
+                normalized = normalize_verification({'overall': 'MATCHED', 'items': [valid, item], 'sources': []})
+
+                self.assertEqual(normalized['items'], [valid])
+                self.assertEqual(normalized['overall'], 'UNVERIFIED')
+                self.assertEqual(normalized['status'], 'UNVERIFIED')
+
+    def test_null_official_value_is_valid(self):
+        item = {**pipeline.verify({})['items'][0], 'officialValue': None, 'status': 'UNVERIFIED'}
+
+        normalized = normalize_verification({'overall': 'UNVERIFIED', 'items': [item], 'sources': []})
+
+        self.assertEqual(normalized['items'], [item])
+
     def test_status_follows_overall(self):
         normalized = normalize_verification({'overall': 'MATCHED', 'status': 'UNVERIFIED', 'items': [], 'sources': []})
 
