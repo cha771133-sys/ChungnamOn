@@ -19,6 +19,7 @@ from django.db import transaction
 from accounts.models import UserProfile
 
 from ..models import Document, InterpretationResult
+from .checklist import replace_checklist
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,16 @@ def interpret(masked_text, language):
         "agency": {"name": str, "phone": str, "source": "document" | "official" | "unknown"},
         "amount": str,                      # 납부 금액 예: "6,250원". 없으면 빈 문자열
         "payment_methods": [str],           # 납부 방법
+        "checklist": [{                     # 사용자가 할 일. 없거나 형식이 틀리면 체크리스트만 비운다
+            "text": str,                    # 할 일 (필수, 최대 300자)
+            "detail": str,
+            "docs": [str],                  # 준비할 서류
+            "method": str,                  # 하는 방법
+            "due": "YYYY-MM-DD" | None,     # 형식이 틀리면 None으로 저장
+            "state": "CONFIRMED" | "CONDITIONAL" | "CHECK_NEEDED",  # 그 외 값은 CHECK_NEEDED
+            "note": str,
+            "sourceIds": [str],             # verify 결과 sources[].id
+        }],
     }
     """
     # 더미는 요청 언어와 상관없이 베트남어 번역만 돌려준다.
@@ -129,6 +140,48 @@ def interpret(masked_text, language):
         'agency': {'name': '아산시청 세무과', 'phone': '041-000-0000', 'source': 'document'},
         'amount': '6,250원',
         'payment_methods': ['은행 창구', '가상계좌', '위택스'],
+        'checklist': [
+            {
+                'text': '주민세 6,250원 내기',
+                'detail': '2026년 개인분 주민세예요. 기한이 지나면 가산세가 붙어요.',
+                'docs': ['고지서'],
+                'method': '은행 창구, 가상계좌, 위택스(www.wetax.go.kr) 중 하나로 내요.',
+                'due': '2026-08-31',
+                'state': 'CONFIRMED',
+                'note': '',
+                'sourceIds': ['s1'],
+            },
+            {
+                'text': '외국인등록증 챙기기',
+                'detail': '은행 창구에서 낼 때 신분 확인에 필요할 수 있어요.',
+                'docs': ['외국인등록증'],
+                'method': '은행 창구에 갈 때 가져가요.',
+                'due': None,
+                'state': 'CONDITIONAL',
+                'note': '가상계좌나 위택스로 내면 필요 없어요.',
+                'sourceIds': ['s1'],
+            },
+            {
+                'text': '세무과 연락처 확인하기',
+                'detail': '고지서의 연락처가 공식 자료와 달라요.',
+                'docs': [],
+                'method': '아산시청 누리집에서 세무과 번호를 확인해요.',
+                'due': None,
+                'state': 'CHECK_NEEDED',
+                'note': '전화하기 전에 공식 번호를 먼저 확인하세요.',
+                'sourceIds': ['s2'],
+            },
+            {
+                'text': '납부 영수증 보관하기',
+                'detail': '나중에 체류 연장 등에서 납세 증명이 필요할 수 있어요.',
+                'docs': ['납부 영수증'],
+                'method': '종이 영수증이나 위택스 납부 내역을 저장해요.',
+                'due': None,
+                'state': 'CONFIRMED',
+                'note': '',
+                'sourceIds': [],
+            },
+        ],
     }
 
 
@@ -276,6 +329,8 @@ def _save_result(document, ocr, masked, result, verification):
                 'language': result['language'],
             },
         )
+        # 다시 처리하면 이전 체크리스트(완료 표시 포함)를 새 해석 결과로 교체한다.
+        replace_checklist(document, result.get('checklist'))
         document.doc_type = result['doc_type']
         document.title = result['title']
         document.masked_count = masked['masked_count']

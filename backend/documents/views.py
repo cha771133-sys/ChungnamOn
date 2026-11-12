@@ -16,8 +16,9 @@ from core.pagination import StandardPagination
 from core.permissions import IsOwner
 from core.schema import error_response
 
-from .models import Document, InterpretationResult, Schedule
+from .models import ChecklistItem, Document, InterpretationResult, Schedule
 from .serializers import (
+    ChecklistItemSerializer, ChecklistItemUpdateSerializer, ChecklistSerializer,
     DocumentDetailSerializer, DocumentListSerializer, DocumentNotReadySerializer,
     DocumentResultSerializer, DocumentStatusResponseSerializer, DocumentStatusSerializer,
     DocumentUploadResponseSerializer, DocumentUploadSerializer, ScheduleConflictSerializer,
@@ -277,12 +278,20 @@ NOT_READY_EXAMPLES = [
 ]
 
 
-def get_done_result(request, view, pk):
-    """본인 DONE 문서의 해석 결과를 찾는다. 처리 전·실패 문서면 (None, 409 응답)을 돌려준다."""
+def get_done_document(request, view, pk):
+    """본인 DONE 문서를 찾는다. 처리 전·실패 문서면 (None, 409 응답)을 돌려준다."""
     document = get_object_or_404(Document, pk=pk, owner=request.user)
     view.check_object_permissions(request, document)
     if document.status != Document.Status.DONE:
         return None, Response(not_ready_body(document), status=status.HTTP_409_CONFLICT)
+    return document, None
+
+
+def get_done_result(request, view, pk):
+    """본인 DONE 문서의 해석 결과를 찾는다. 처리 전·실패 문서면 (None, 409 응답)을 돌려준다."""
+    document, not_ready = get_done_document(request, view, pk)
+    if not_ready:
+        return None, not_ready
     result = get_object_or_404(InterpretationResult.objects.select_related('document'), document=document)
     return result, None
 
@@ -363,6 +372,121 @@ class DocumentVerificationView(APIView):
         if not_ready:
             return not_ready
         return Response(normalize_verification(result.verification))
+
+
+CHECKLIST_ITEM_EXAMPLE = {
+    'id': 31, 'text': '주민세 6,250원 내기',
+    'detail': '2026년 개인분 주민세예요. 기한이 지나면 가산세가 붙어요.', 'docs': ['고지서'],
+    'method': '은행 창구, 가상계좌, 위택스(www.wetax.go.kr) 중 하나로 내요.', 'due': '2026-08-31',
+    'state': 'CONFIRMED', 'done': False, 'doneAt': None, 'note': '', 'sourceIds': ['s1'],
+}
+CHECKLIST_EXAMPLE = {
+    'documentId': 123, 'total': 2, 'doneCount': 1, 'progress': 50,
+    'items': [
+        {**CHECKLIST_ITEM_EXAMPLE, 'done': True, 'doneAt': '2026-08-20T10:30:00+09:00'},
+        {
+            'id': 32, 'text': '외국인등록증 챙기기', 'detail': '은행 창구에서 낼 때 신분 확인에 필요할 수 있어요.',
+            'docs': ['외국인등록증'], 'method': '은행 창구에 갈 때 가져가요.', 'due': None,
+            'state': 'CONDITIONAL', 'done': False, 'doneAt': None,
+            'note': '가상계좌나 위택스로 내면 필요 없어요.', 'sourceIds': ['s1'],
+        },
+    ],
+}
+CHECKLIST_ITEM_PARAMETER = OpenApiParameter('item_id', int, OpenApiParameter.PATH, description='체크리스트 항목 ID')
+
+
+@extend_schema_view(get=extend_schema(
+    operation_id='document_checklist',
+    summary='내 문서 체크리스트 조회',
+    description=(
+        '해석 결과로 만든 체크리스트를 순서대로 반환합니다. '
+        'progress는 완료 비율(0~100, 소수점 버림)이며 항목이 없으면 0입니다. '
+        '문서를 다시 처리하면 체크리스트는 새 해석 결과로 교체되고 완료 표시도 초기화됩니다. '
+        '처리 중이거나 실패하면 결과 조회 API와 같은 409를 반환하고, 타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
+    ),
+    parameters=[PK_PARAMETER],
+    responses={
+        200: ChecklistSerializer,
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 접근 가능한 문서가 없음'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        409: DocumentNotReadySerializer,
+    },
+    examples=[
+        OpenApiExample('체크리스트', value=CHECKLIST_EXAMPLE, response_only=True, status_codes=['200']),
+        OpenApiExample('항목 없음', value={
+            'documentId': 123, 'total': 0, 'doneCount': 0, 'progress': 0, 'items': [],
+        }, response_only=True, status_codes=['200']),
+        *NOT_READY_EXAMPLES,
+    ],
+    tags=['문서'],
+))
+class DocumentChecklistView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request, pk):
+        document, not_ready = get_done_document(request, self, pk)
+        if not_ready:
+            return not_ready
+        items = list(document.checklist_items.order_by('order', 'id'))
+        done_count = sum(item.done for item in items)
+        return Response({
+            'documentId': document.id,
+            'total': len(items),
+            'doneCount': done_count,
+            # 모두 끝났을 때만 100이 되도록 버림한다.
+            'progress': done_count * 100 // len(items) if items else 0,
+            'items': ChecklistItemSerializer(items, many=True).data,
+        })
+
+
+@extend_schema_view(patch=extend_schema(
+    operation_id='document_checklist_item_update',
+    summary='체크리스트 항목 완료 체크',
+    description=(
+        'done만 수정할 수 있습니다. true면 완료 시각(doneAt)을 기록하고, '
+        '이미 완료된 항목이면 처음 완료 시각을 유지합니다. false면 doneAt을 비웁니다. '
+        '다른 필드를 보내면 400을 반환합니다. '
+        '처리 중이거나 실패한 문서는 결과 조회 API와 같은 409를 반환하고, '
+        '타인 문서·없는 문서·다른 문서의 항목은 동일하게 404를 반환합니다.'
+    ),
+    parameters=[PK_PARAMETER, CHECKLIST_ITEM_PARAMETER],
+    request=ChecklistItemUpdateSerializer,
+    responses={
+        200: ChecklistItemSerializer,
+        400: error_response('VALIDATION_ERROR: done 누락·형식 오류 또는 수정할 수 없는 필드'),
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 접근 가능한 문서 또는 항목이 없음'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        409: DocumentNotReadySerializer,
+    },
+    examples=[
+        OpenApiExample('완료 체크', value={'done': True}, request_only=True),
+        OpenApiExample('완료한 항목', value={
+            **CHECKLIST_ITEM_EXAMPLE, 'done': True, 'doneAt': '2026-08-20T10:30:00+09:00',
+        }, response_only=True, status_codes=['200']),
+        OpenApiExample('수정할 수 없는 필드', value={
+            'code': 'VALIDATION_ERROR', 'message': '입력값을 확인해 주세요.',
+            'details': {'text': ['수정할 수 없는 필드입니다.']},
+        }, response_only=True, status_codes=['400']),
+        *NOT_READY_EXAMPLES,
+    ],
+    tags=['문서'],
+))
+class DocumentChecklistItemView(APIView):
+    permission_classes = [IsOwner]
+
+    def patch(self, request, pk, item_id):
+        document, not_ready = get_done_document(request, self, pk)
+        if not_ready:
+            return not_ready
+        item = get_object_or_404(ChecklistItem, pk=item_id, document=document)
+        serializer = ChecklistItemUpdateSerializer(item, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ChecklistItemSerializer(item).data)
 
 
 SCHEDULE_EXAMPLE = {

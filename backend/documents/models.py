@@ -114,3 +114,39 @@ class Schedule(models.Model):
 
     def __str__(self):
         return f'{self.id} {self.date} {self.title}'
+
+
+class ChecklistItem(models.Model):
+    """해석(interpret)이 만든 체크리스트 항목. 문서를 다시 처리하면 새 항목으로 교체한다."""
+
+    class State(models.TextChoices):
+        CONFIRMED = 'CONFIRMED', '확정'
+        CONDITIONAL = 'CONDITIONAL', '조건부'
+        CHECK_NEEDED = 'CHECK_NEEDED', '확인 필요'
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='checklist_items')
+    # interpret이 낸 순서 (0부터)
+    order = models.PositiveIntegerField()
+    text = models.CharField(max_length=300)
+    detail = models.TextField(blank=True)
+    # 준비할 서류 이름 목록
+    docs = models.JSONField(default=list)
+    method = models.TextField(blank=True)
+    due = models.DateField(null=True, blank=True)
+    state = models.CharField(max_length=20, choices=State.choices, default=State.CHECK_NEEDED)
+    done = models.BooleanField(default=False)
+    done_at = models.DateTimeField(null=True, blank=True)
+    note = models.TextField(blank=True)
+    # 근거 출처 id 목록 (verification sources[].id)
+    source_ids = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['document', 'order'], name='unique_checklist_item_order'),
+        ]
+
+    def __str__(self):
+        return f'{self.document_id}-{self.order} {self.text}'
