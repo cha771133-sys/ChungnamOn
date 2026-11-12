@@ -230,3 +230,257 @@ class ChatServiceTests(ChatFixtures, TestCase):
         with self.assertRaises(chat_service.ChatServiceUnavailable):
             self.submit()
         self.assertFalse(ChatMessage.objects.exists())
+
+
+class ChatItemSourceTests(ChatFixtures, TestCase):
+    """C1 항목별 출처 연결과 실제 질문 처리의 근거 경계를 검증한다."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """문서 검증에 연결할 기한·연락처 공식 자료를 준비한다."""
+        super().setUpTestData()
+        cls.deadline_source = create_source(
+            status=SourceDocument.Status.ACTIVE, collected_at=timezone.now(),
+            content_hash='deadline-hash',
+        )
+        cls.contact_source = create_source(
+            source_url='https://www.asan.go.kr/notices/2', title='연락처 안내',
+            status=SourceDocument.Status.ACTIVE, collected_at=timezone.now(),
+            content_hash='contact-hash',
+        )
+
+    def save_verification(self, items, *, status='UNVERIFIED', sources=None):
+        """지정한 항목과 출처 연결을 C1 검증 결과로 저장한다."""
+        self.result.verification = {
+            'overall': status, 'status': status, 'items': items,
+            'sources': sources if sources is not None else [
+                {'id': 's1', 'sourceDocumentId': self.deadline_source.pk},
+                {'id': 's2', 'sourceDocumentId': self.contact_source.pk},
+            ],
+        }
+        self.result.save(update_fields=['verification'])
+
+    @staticmethod
+    def snapshot(source):
+        """AI 메타데이터 대신 DB 공식 자료에서 기대 스냅샷을 만든다."""
+        return {
+            'sourceDocumentId': source.pk, 'title': source.title, 'url': source.source_url,
+            'checkedAt': source.collected_at.isoformat(), 'contentHash': source.content_hash,
+        }
+
+    @staticmethod
+    def answer(sources, *, status=None):
+        """지정 자료의 ID만 포함하는 AI 응답을 네트워크 없이 구성한다."""
+        return {
+            'answer': '공식 자료를 확인했습니다.',
+            'sources': [{'sourceDocumentId': source.pk} for source in sources],
+            'grounded': (status or ('GROUNDED' if sources else 'UNVERIFIED')) == 'GROUNDED',
+            'status': status or ('GROUNDED' if sources else 'UNVERIFIED'),
+            'suggestedQuestions': [],
+        }
+
+    def submit(self):
+        """소유자 권한으로 실제 챗봇 질문 서비스의 전체 흐름을 실행한다."""
+        return chat_service.submit_question(self.user, self.document.pk, {'message': '기한은 언제인가요?'})
+
+    def assert_submission_sources(self, sources, *, status=None):
+        """선택 함수, AI 입력, 실제 DB 출처 스냅샷이 모두 같은 공식 자료인지 확인한다."""
+        expected = [self.snapshot(source) for source in sources]
+        self.assertEqual(chat_service._official_sources({'verification': self.result.verification}), expected)
+        payload = self.answer(sources, status=status)
+        with patch('chatbot.services.ai_client.generate_answer', return_value=payload) as ai:
+            message = self.submit()
+        ai.assert_called_once()
+        self.assertEqual(ai.call_args.kwargs['official_sources'], expected)
+        message.refresh_from_db()
+        self.assertEqual(message.sources, expected)
+        self.assertEqual(message.status, payload['status'])
+        self.assertEqual(message.grounded, payload['grounded'])
+
+    def test_unverified_overall_uses_only_matched_item_source(self):
+        """전체 미확인 상태에서도 일치한 기한의 출처만 전달하고 저장한다."""
+        self.save_verification([
+            {'key': 'DEADLINE', 'label': '납부 기한', 'docValue': '2026-12-01',
+             'officialValue': '2026-12-01', 'reason': '공식 기한과 일치',
+             'status': 'MATCHED', 'sourceIds': ['s1']},
+            {'key': 'AGENCY_CONTACT', 'status': 'UNVERIFIED', 'sourceIds': ['s2']},
+        ])
+        self.assert_submission_sources([self.deadline_source])
+
+    def test_mismatch_item_source_allows_mismatch_answer_when_overall_agrees(self):
+        """항목과 전체 상태가 불일치이면 해당 출처를 포함한 불일치 답변을 허용한다."""
+        self.save_verification([
+            {'key': 'DEADLINE', 'status': 'MISMATCH', 'sourceIds': ['s1']},
+            {'key': 'AGENCY_CONTACT', 'status': 'UNVERIFIED', 'sourceIds': ['s2']},
+        ], status='MISMATCH')
+        self.assert_submission_sources([self.deadline_source], status='MISMATCH')
+
+    def test_multiple_items_and_reference_ids_share_one_source_snapshot(self):
+        """여러 항목과 참조 ID가 같은 자료를 가리켜도 스냅샷은 하나만 저장한다."""
+        self.save_verification([
+            {'status': 'MATCHED', 'sourceIds': ['s1', 's1']},
+            {'status': 'MATCHED', 'sourceIds': ['s1', 's2']},
+        ], status='MATCHED', sources=[
+            {'id': 's1', 'sourceDocumentId': self.deadline_source.pk},
+            {'id': 's2', 'sourceDocumentId': self.deadline_source.pk},
+        ])
+        self.assert_submission_sources([self.deadline_source])
+
+    def test_multiple_matched_items_select_all_linked_sources_in_database_order(self):
+        """서로 다른 일치 항목에 연결된 자료를 DB ID 순으로 모두 선택한다."""
+        self.save_verification([
+            {'status': 'MATCHED', 'sourceIds': ['s2']},
+            {'status': 'MATCHED', 'sourceIds': ['s1']},
+        ], status='MATCHED')
+        self.assert_submission_sources([self.deadline_source, self.contact_source])
+
+    def test_unverified_items_never_authorize_their_sources(self):
+        """전체 상태가 일치여도 미확인 항목의 출처는 근거로 인정하지 않는다."""
+        self.save_verification([
+            {'status': 'UNVERIFIED', 'sourceIds': ['s1', 's2']},
+        ], status='MATCHED')
+        self.assert_submission_sources([])
+
+    def test_empty_items_never_fall_back_to_overall_status(self):
+        """빈 항목 목록은 전체 상태와 무관하게 공식 출처를 만들지 않는다."""
+        for status in ('MATCHED', 'MISMATCH', 'UNVERIFIED'):
+            with self.subTest(status=status):
+                self.save_verification([], status=status)
+                self.assert_submission_sources([])
+
+    def test_missing_items_preserves_legacy_overall_status_policy(self):
+        """항목 키가 없으면 전체 상태에 따르는 기존 출처 선택을 유지한다."""
+        for status in ('MATCHED', 'MISMATCH', 'UNVERIFIED'):
+            with self.subTest(status=status):
+                self.save_verification([], status=status)
+                del self.result.verification['items']
+                self.result.save(update_fields=['verification'])
+                expected = [] if status == 'UNVERIFIED' else [self.deadline_source, self.contact_source]
+                self.assert_submission_sources(expected)
+
+    def test_unknown_and_invalid_reference_ids_are_ignored_without_guessing(self):
+        """없는 ID·잘못된 타입·비슷한 URL과 제목으로는 자료를 연결하지 않는다."""
+        self.save_verification([
+            {'status': 'MATCHED', 'sourceIds': ['s1', 'missing', 'S2', '', None, True, 2, [], {}]},
+        ], sources=[
+            {'id': 's1', 'sourceDocumentId': self.deadline_source.pk},
+            {'id': 's2', 'sourceDocumentId': self.contact_source.pk},
+            {'id': '', 'sourceDocumentId': self.contact_source.pk},
+            {'id': True, 'sourceDocumentId': self.contact_source.pk},
+            {'id': [], 'sourceDocumentId': self.contact_source.pk},
+            {'id': {}, 'sourceDocumentId': self.contact_source.pk},
+            {'title': self.contact_source.title, 'url': self.contact_source.source_url,
+             'sourceDocumentId': self.contact_source.pk},
+            None,
+        ])
+        self.assert_submission_sources([self.deadline_source])
+
+    def test_invalid_or_missing_source_document_ids_are_excluded(self):
+        """불리언·비정수·0 이하·없는 자료 ID를 유효한 연결과 구분해 제외한다."""
+        for value in (True, False, 0, -1, str(self.deadline_source.pk), float(self.deadline_source.pk),
+                      None, [], {}, 999999):
+            with self.subTest(value=value):
+                self.save_verification([
+                    {'status': 'MATCHED', 'sourceIds': ['s1', 'bad']},
+                ], sources=[
+                    {'id': 's1', 'sourceDocumentId': self.contact_source.pk},
+                    {'id': 'bad', 'sourceDocumentId': value},
+                ])
+                self.assert_submission_sources([self.contact_source])
+
+    def test_pending_inactive_uncollected_and_nonofficial_item_sources_are_excluded(self):
+        """상태·수집일·공식 URL 조건을 충족하지 않는 항목 출처를 제외한다."""
+        self.save_verification([{'status': 'MATCHED', 'sourceIds': ['s1']}])
+        for changes in (
+            {'status': SourceDocument.Status.PENDING}, {'status': SourceDocument.Status.INACTIVE},
+            {'collected_at': None}, {'source_url': 'https://example.org/unofficial'},
+        ):
+            with self.subTest(changes=changes), transaction.atomic():
+                SourceDocument.objects.filter(pk=self.deadline_source.pk).update(**changes)
+                self.assert_submission_sources([])
+                transaction.set_rollback(True)
+
+    def test_malformed_items_do_not_fall_back_to_legacy_sources(self):
+        """잘못된 항목 컨테이너를 전체 상태로 우회하여 신뢰하지 않는다."""
+        for items in (None, {}, 's1', 1, True):
+            with self.subTest(items=items):
+                self.save_verification(items, status='MATCHED')
+                self.assert_submission_sources([])
+
+    def test_malformed_items_and_source_id_lists_cannot_authorize_sources(self):
+        """손상된 항목은 무시하고 별도로 유효한 항목의 연결만 허용한다."""
+        invalid_items = [
+            None, [], 's1', {},
+            {'status': 'MATCHED', 'sourceIds': 's1'},
+            {'status': 'MATCHED', 'sourceIds': {'s1': True}},
+            {'status': ['MATCHED'], 'sourceIds': ['s1']},
+            {'status': 'matched', 'sourceIds': ['s1']},
+            {'status': 'MATCHED'},
+        ]
+        self.save_verification(invalid_items, status='MATCHED')
+        self.assert_submission_sources([])
+        self.save_verification(invalid_items + [{'status': 'MATCHED', 'sourceIds': ['s2']}])
+        self.assert_submission_sources([self.contact_source])
+
+    def test_malformed_verification_sources_are_not_evidence(self):
+        """출처 컨테이너가 목록이 아니면 항목 상태와 무관하게 근거를 제외한다."""
+        for sources in (None, {}, 's1', True):
+            with self.subTest(sources=sources):
+                self.save_verification([{'status': 'MATCHED', 'sourceIds': ['s1']}])
+                self.result.verification['sources'] = sources
+                self.result.save(update_fields=['verification'])
+                self.assert_submission_sources([])
+
+    def test_ai_cannot_return_unselected_sources_or_fabricated_metadata(self):
+        """AI가 선택되지 않은 출처나 조작된 메타데이터를 반환하면 저장을 거부한다."""
+        self.save_verification([
+            {'status': 'MATCHED', 'sourceIds': ['s1']},
+            {'status': 'UNVERIFIED', 'sourceIds': ['s2']},
+        ])
+        sources = [{'sourceDocumentId': self.contact_source.pk}, {'sourceDocumentId': 999999}]
+        for key, value in (('url', 'https://www.gov.kr/invented'), ('title', '임의 제목'),
+                           ('checkedAt', '2020-01-01'), ('contentHash', 'fabricated')):
+            sources.append({'sourceDocumentId': self.deadline_source.pk, key: value})
+        for source in sources:
+            payload = {**self.answer([self.deadline_source]), 'sources': [source]}
+            with self.subTest(source=source), patch(
+                    'chatbot.services.ai_client.generate_answer', return_value=payload) as ai:
+                with self.assertRaises(chat_service.ChatServiceUnavailable):
+                    self.submit()
+            self.assertEqual(ai.call_args.kwargs['official_sources'], [self.snapshot(self.deadline_source)])
+        self.assertFalse(ChatMessage.objects.exists())
+
+    def test_item_source_state_and_snapshot_changes_during_ai_call_prevent_saving(self):
+        """AI 호출 중 자료의 적격 조건이나 스냅샷이 달라지면 저장을 거부한다."""
+        self.save_verification([{'status': 'MATCHED', 'sourceIds': ['s1']}])
+        for changes in (
+            {'status': SourceDocument.Status.INACTIVE}, {'collected_at': None},
+            {'source_url': 'https://example.org/unofficial'}, {'content_hash': 'updated-hash'},
+            {'title': '변경된 제목'}, {'collected_at': timezone.now()},
+        ):
+            with self.subTest(changes=changes), transaction.atomic():
+                def mutate(**kwargs):
+                    """응답 생성 중 DB 공식 자료를 바꿔 저장 직전 재검사를 유도한다."""
+                    SourceDocument.objects.filter(pk=self.deadline_source.pk).update(**changes)
+                    return self.answer([self.deadline_source])
+
+                with patch('chatbot.services.ai_client.generate_answer', side_effect=mutate) as ai:
+                    with self.assertRaises(chat_service.ChatServiceUnavailable):
+                        self.submit()
+                self.assertEqual(ai.call_args.kwargs['official_sources'], [self.snapshot(self.deadline_source)])
+                self.assertFalse(ChatMessage.objects.exists())
+                transaction.set_rollback(True)
+
+    def test_item_mismatch_does_not_relax_overall_mismatch_answer_policy(self):
+        """불일치 항목이 있어도 전체 상태가 불일치가 아니면 불일치 답변을 거부한다."""
+        for status in ('MATCHED', 'UNVERIFIED'):
+            with self.subTest(status=status):
+                self.save_verification([
+                    {'status': 'MISMATCH', 'sourceIds': ['s1']},
+                ], status=status)
+                with patch('chatbot.services.ai_client.generate_answer',
+                           return_value=self.answer([self.deadline_source], status='MISMATCH')) as ai:
+                    with self.assertRaises(chat_service.ChatServiceUnavailable):
+                        self.submit()
+                self.assertEqual(ai.call_args.kwargs['official_sources'], [self.snapshot(self.deadline_source)])
+        self.assertFalse(ChatMessage.objects.exists())
