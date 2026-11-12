@@ -188,3 +188,37 @@ ai/chatbot/
 ai/tests/         unittest
   fixtures/       테스트용 [샘플] 공식 자료 .md (지어낸 내용, 실제 DB에 넣지 말 것)
 ```
+
+## S4 체크리스트·전화 대본 (`checklist.py`)
+
+pipeline에서 verify 다음에 한 줄로 부름 (성진님 연동 예정):
+```python
+result.update(build_actions(result, verification, result['language']))
+# → result['checklist'] (지금 저장 코드가 그대로 저장), result['call_script'] (저장할 칸 생기기 전까지는 반환만)
+```
+
+| `DOCUMENTS_CHECKLIST_MODE` | 동작 |
+|---|---|
+| `dummy` (기본) | interpret가 준 `checklist`를 그대로 둠 (기존 동작). 대본만 규칙으로 만듦 |
+| `rag` | interpret의 `checklist`는 무시하고 해석 결과 + verify(C1) 결과로 만듦 |
+
+Django settings에 값이 없으면 환경변수(`.env`)를 읽음.
+
+**항목** (문서에 값이 없으면 안 만듦)
+1. 납부: 납부 기한(label에 납부·납기 등) + `amount` + `payment_methods` → "2026년 8월 31일까지 6,250원 내기" (AMOUNT·DEADLINE·PAYMENT_METHOD)
+2. 그 밖의 기한: 기한마다 "2026년 7월 31일까지 감면 신청 확인하기" (DEADLINE)
+3. 준비서류: `required_docs` 하나씩 "외국인등록증 준비하기"
+4. 연락처 확인: 문서에 번호가 있고 AGENCY_CONTACT가 MATCHED가 아닐 때만
+
+**state·sourceIds** (코드가 정함)
+- 연결된 verify 항목이 모두 MATCHED면 `CONFIRMED`, 하나라도 아니거나 없으면 `CHECK_NEEDED`
+- `sourceIds`는 연결된 verify 항목 중 MATCHED·MISMATCH의 id만, `verification.sources`에 실제 있는 것만
+- LLM 한 번으로 사용자 언어 번역 + 판정. 공식 자료 본문은 `verification.sources[].sourceDocumentId`의 현재 청크로 읽음 (재검색 없음)
+  - `CONFIRMED` → `CONDITIONAL`로 낮추는 것만 허용 (조건 note + 실제 근거 id 필요)
+  - 준비서류는 verify에 항목이 없어서, 실제 근거 id가 있을 때만 `CONFIRMED`/`CONDITIONAL`
+  - 번역문에서 금액·날짜 숫자가 바뀌거나 빠지면 그 항목은 한국어 초안
+- LLM이 실패하면 한국어 규칙 결과 그대로. 오류는 함수 안에서 잡고 로그에는 오류 종류만
+
+**전화 대본** (`call_script`, 한국어, 기관 담당자에게 보여줄 문장)
+- 정해진 필드(문서 제목·종류, 기관 이름, 금액, 기한, 납부 방법, 확인이 필요한 항목)로만 만듦. 원문·LLM 출력은 안 씀
+- 마스킹 표시·전화번호·주민/외국인등록번호·계좌번호·긴 숫자·이메일이 보이는 줄은 뺌. 기관 번호도 넣지 않음 (화면에 버튼으로 따로 있음)
