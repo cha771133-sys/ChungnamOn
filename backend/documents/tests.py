@@ -504,6 +504,19 @@ class NormalizeVerificationTests(TestCase):
                 self.assertEqual(normalized['overall'], 'UNVERIFIED')
                 self.assertEqual(normalized['status'], 'UNVERIFIED')
 
+    def test_non_list_items_make_overall_unverified(self):
+        for items in ('broken', 3, {'key': 'AMOUNT'}):
+            with self.subTest(items=items):
+                normalized = normalize_verification({'overall': 'MATCHED', 'items': items, 'sources': []})
+
+                self.assertEqual(normalized['items'], [])
+                self.assertEqual(normalized['overall'], 'UNVERIFIED')
+
+    def test_missing_items_keep_legacy_status(self):
+        for stored in ({'status': 'MATCHED'}, {'status': 'MATCHED', 'items': None}):
+            with self.subTest(stored=stored):
+                self.assertEqual(normalize_verification(stored)['overall'], 'MATCHED')
+
     def test_null_official_value_is_valid(self):
         item = {**pipeline.verify({})['items'][0], 'officialValue': None, 'status': 'UNVERIFIED'}
 

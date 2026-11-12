@@ -146,7 +146,11 @@ def normalize_verification(verification):
         overall = 'UNVERIFIED'
 
     raw_items = verification.get('items')
-    raw_items = raw_items if isinstance(raw_items, list) else []
+    if raw_items is None:
+        # 옛 형식에는 items가 없다.
+        raw_items = []
+    elif not isinstance(raw_items, list):
+        raw_items = [raw_items]
     items = [item for item in raw_items if is_valid_verification_item(item)]
     if len(items) != len(raw_items):
         # 일부 항목만 보고 MATCHED라고 보여주지 않도록 판정을 미확인으로 낮춘다.
