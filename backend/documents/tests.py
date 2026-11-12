@@ -19,7 +19,7 @@ from .services import pipeline
 from .services.checklist import clean_checklist
 from .services.pipeline import process_document
 from .services.runner import start_processing
-from .views import DocumentDetailView
+from .views import DocumentDetailView, ScheduleDetailView
 
 TEMP_MEDIA_ROOT = tempfile.mkdtemp()
 UPLOAD_URL = '/api/documents/'
@@ -1120,6 +1120,20 @@ class ScheduleDetailTests(FixedTodayMixin, APITestCase):
         self.assertIsNone(undone.json()['doneAt'])
         self.schedule.refresh_from_db()
         self.assertIsNone(self.schedule.done_at)
+
+    def test_patch_returns_404_when_deleted_after_lookup(self):
+        original = ScheduleDetailView.get_object
+
+        def get_then_delete(view):
+            schedule = original(view)
+            Schedule.objects.filter(pk=schedule.pk).delete()
+            return schedule
+
+        with mock.patch.object(ScheduleDetailView, 'get_object', get_then_delete):
+            response = self.client.patch(schedule_url(self.schedule.id), {'done': True}, format='json')
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()['code'], 'NOT_FOUND')
 
     def test_patch_rejects_other_fields(self):
         for body in ({'done': True, 'date': '2026-09-01'}, {'title': '바꾼 이름'}):

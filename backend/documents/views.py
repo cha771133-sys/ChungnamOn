@@ -698,7 +698,8 @@ class ScheduleDetailView(generics.RetrieveUpdateDestroyAPIView):
         schedule = self.get_object()
         # 동시에 완료 처리가 와도 처음 완료 시각이 덮어써지지 않게 행을 잠그고 다시 읽는다.
         with transaction.atomic():
-            schedule = Schedule.objects.select_for_update().get(pk=schedule.pk)
+            # 그 사이 삭제됐으면 500이 아니라 404로 응답한다.
+            schedule = get_object_or_404(Schedule.objects.select_for_update(), pk=schedule.pk)
             serializer = ScheduleUpdateSerializer(schedule, data=request.data)
             serializer.is_valid(raise_exception=True)
             serializer.save()
