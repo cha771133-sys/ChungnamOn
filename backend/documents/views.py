@@ -21,7 +21,8 @@ from .serializers import (
     DocumentDetailSerializer, DocumentListSerializer, DocumentNotReadySerializer,
     DocumentResultSerializer, DocumentStatusResponseSerializer, DocumentStatusSerializer,
     DocumentUploadResponseSerializer, DocumentUploadSerializer, ScheduleConflictSerializer,
-    ScheduleCreateSerializer, ScheduleSerializer, ScheduleUpdateSerializer,
+    ScheduleCreateSerializer, ScheduleSerializer, ScheduleUpdateSerializer, VerificationSerializer,
+    normalize_verification,
 )
 from .services.runner import start_processing
 
@@ -238,11 +239,72 @@ class DocumentDetailView(generics.RetrieveDestroyAPIView):
         )
 
 
+VERIFICATION_EXAMPLE = {
+    'overall': 'MISMATCH',
+    'status': 'MISMATCH',
+    'items': [
+        {
+            'key': 'AMOUNT', 'label': '납부 금액', 'docValue': '6,250원', 'officialValue': '6,250원',
+            'status': 'MATCHED', 'reason': '공식 자료의 개인분 주민세 금액과 같아요.', 'sourceIds': ['s1'],
+        },
+        {
+            'key': 'AGENCY_CONTACT', 'label': '문의 연락처', 'docValue': '041-000-0000',
+            'officialValue': '041-000-1234', 'status': 'MISMATCH',
+            'reason': '공식 자료의 세무과 연락처와 달라요. 전화 전에 공식 번호를 확인하세요.', 'sourceIds': ['s2'],
+        },
+    ],
+    'sources': [
+        {
+            'id': 's1', 'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/',
+            'checkedAt': '2026-10-30', 'publishedAt': '2026-07-01', 'sourceDocumentId': 12,
+        },
+        {'id': 's2', 'title': '아산시청 부서별 연락처', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30'},
+    ],
+}
+LEGACY_VERIFICATION_EXAMPLE = {
+    'overall': 'MATCHED', 'status': 'MATCHED', 'items': [],
+    'sources': [{'id': 's1', 'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/',
+                 'checkedAt': '2026-10-30'}],
+}
+NOT_READY_EXAMPLES = [
+    OpenApiExample('처리 중인 문서', value={
+        'detail': '아직 처리 중입니다.', 'status': 'PROCESSING', 'step': 'VERIFYING',
+    }, response_only=True, status_codes=['409']),
+    OpenApiExample('처리 실패 문서', value={
+        'detail': '문서 처리에 실패했습니다.', 'status': 'FAILED', 'step': 'OCR',
+        'failReason': '문서의 글자를 읽지 못했습니다. 밝은 곳에서 다시 촬영해 업로드해 주세요.',
+    }, response_only=True, status_codes=['409']),
+]
+
+
+def get_done_result(request, view, pk):
+    """본인 DONE 문서의 해석 결과를 찾는다. 처리 전·실패 문서면 (None, 409 응답)을 돌려준다."""
+    document = get_object_or_404(Document, pk=pk, owner=request.user)
+    view.check_object_permissions(request, document)
+    if document.status != Document.Status.DONE:
+        return None, Response(not_ready_body(document), status=status.HTTP_409_CONFLICT)
+    result = get_object_or_404(InterpretationResult.objects.select_related('document'), document=document)
+    return result, None
+
+
+def not_ready_body(document):
+    if document.status == Document.Status.FAILED:
+        return {
+            'detail': '문서 처리에 실패했습니다.',
+            'status': document.status,
+            'step': document.step,
+            'failReason': document.fail_reason,
+        }
+    return {'detail': '아직 처리 중입니다.', 'status': document.status, 'step': document.step}
+
+
 @extend_schema_view(get=extend_schema(
     operation_id='document_result',
     summary='내 문서 해석 결과 조회',
     description=(
         '현재 사용자 소유의 DONE 문서 해석 결과를 반환합니다. '
+        'verification은 항목별 대조 형식(overall·status·items·sources)이며, '
+        '예전 형식으로 저장된 결과는 overall=status, items=[]로 맞추고 출처에 s1, s2… id를 붙여 반환합니다. '
         '처리 중이거나 실패하면 기존 상태·단계·실패 사유를 포함한 409 응답을 반환합니다. '
         '타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
     ),
@@ -255,29 +317,52 @@ class DocumentDetailView(generics.RetrieveDestroyAPIView):
         405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
         409: DocumentNotReadySerializer,
     },
+    examples=NOT_READY_EXAMPLES,
     tags=['문서'],
 ))
 class DocumentResultView(APIView):
     permission_classes = [IsOwner]
 
     def get(self, request, pk):
-        document = get_object_or_404(Document, pk=pk, owner=request.user)
-        self.check_object_permissions(request, document)
-        if document.status != Document.Status.DONE:
-            return Response(self._not_ready_body(document), status=status.HTTP_409_CONFLICT)
-
-        result = get_object_or_404(InterpretationResult.objects.select_related('document'), document=document)
+        result, not_ready = get_done_result(request, self, pk)
+        if not_ready:
+            return not_ready
         return Response(DocumentResultSerializer(result).data)
 
-    def _not_ready_body(self, document):
-        if document.status == Document.Status.FAILED:
-            return {
-                'detail': '문서 처리에 실패했습니다.',
-                'status': document.status,
-                'step': document.step,
-                'failReason': document.fail_reason,
-            }
-        return {'detail': '아직 처리 중입니다.', 'status': document.status, 'step': document.step}
+
+@extend_schema_view(get=extend_schema(
+    operation_id='document_verification',
+    summary='내 문서 검증 결과·근거 조회',
+    description=(
+        '해석 결과의 공식 자료 대조 결과만 반환합니다 (근거 화면용). '
+        'items의 sourceIds는 sources[].id를 가리킵니다. 문서에 값이 없는 항목은 items에서 빠집니다. '
+        '예전 형식으로 저장된 결과는 overall=status, items=[]로 반환합니다. '
+        '처리 중이거나 실패하면 결과 조회 API와 같은 409를 반환하고, 타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
+    ),
+    parameters=[PK_PARAMETER],
+    responses={
+        200: VerificationSerializer,
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 접근 가능한 문서 또는 결과가 없음'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        409: DocumentNotReadySerializer,
+    },
+    examples=[
+        OpenApiExample('항목별 대조 결과', value=VERIFICATION_EXAMPLE, response_only=True, status_codes=['200']),
+        OpenApiExample('예전 형식 결과', value=LEGACY_VERIFICATION_EXAMPLE, response_only=True, status_codes=['200']),
+        *NOT_READY_EXAMPLES,
+    ],
+    tags=['문서'],
+))
+class DocumentVerificationView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request, pk):
+        result, not_ready = get_done_result(request, self, pk)
+        if not_ready:
+            return not_ready
+        return Response(normalize_verification(result.verification))
 
 
 SCHEDULE_EXAMPLE = {

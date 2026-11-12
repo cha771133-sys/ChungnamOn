@@ -98,6 +98,8 @@ def interpret(masked_text, language):
         "deadlines": [{"label": str, "date": "YYYY-MM-DD"}],
         "required_docs": [str],
         "agency": {"name": str, "phone": str, "source": "document" | "official" | "unknown"},
+        "amount": str,                      # 납부 금액 예: "6,250원". 없으면 빈 문자열
+        "payment_methods": [str],           # 납부 방법
     }
     """
     # 더미는 요청 언어와 상관없이 베트남어 번역만 돌려준다.
@@ -125,6 +127,8 @@ def interpret(masked_text, language):
         'deadlines': [{'label': '납부 마감', 'date': '2026-08-31'}],
         'required_docs': ['고지서', '외국인등록증'],
         'agency': {'name': '아산시청 세무과', 'phone': '041-000-0000', 'source': 'document'},
+        'amount': '6,250원',
+        'payment_methods': ['은행 창구', '가상계좌', '위택스'],
     }
 
 
@@ -132,9 +136,14 @@ def verify(result):
     """해석 결과를 공식 자료와 대조한다. (더미)
 
     입력: result (dict) — interpret()의 출력
-    출력: {
-        "status": "MATCHED" | "MISMATCH" | "UNVERIFIED",
-        "sources": [{"title": str, "url": str, "checkedAt": "YYYY-MM-DD"}],
+    출력 (C1 항목별 형식): {
+        "overall": "MATCHED" | "MISMATCH" | "UNVERIFIED",
+        "status": overall과 같은 값 (기존 코드·챗봇 호환),
+        "items": [{"key": "AMOUNT" | "DEADLINE" | "PAYMENT_METHOD" | "AGENCY_CONTACT", "label": str,
+                   "docValue": str, "officialValue": str | None, "status": str, "reason": str,
+                   "sourceIds": ["s1"]}],
+        "sources": [{"id": "s1", "title": str, "url": str, "checkedAt": "YYYY-MM-DD",
+                     "publishedAt": "YYYY-MM-DD"(선택), "sourceDocumentId": int(선택)}],
     }
     발신기관·지역을 식별하지 못하면 "UNVERIFIED"를 반환한다(F2-1).
 
@@ -152,11 +161,43 @@ def verify(result):
             # 오류 원문에는 문서 내용이 섞일 수 있어서 종류만 남긴다.
             logger.warning('공식 자료 대조 실패, UNVERIFIED로 처리: %s', type(exc).__name__)
             return {'status': 'UNVERIFIED', 'sources': []}
+    # 더미는 근거 화면을 확인할 수 있게 항목 3개 일치, 1개 불일치를 돌려준다.
     return {
-        'status': 'MATCHED',
+        'overall': 'MISMATCH',
+        'status': 'MISMATCH',
+        'items': [
+            {
+                'key': 'AMOUNT', 'label': '납부 금액', 'docValue': '6,250원', 'officialValue': '6,250원',
+                'status': 'MATCHED', 'reason': '공식 자료의 개인분 주민세 금액과 같아요.', 'sourceIds': ['s1'],
+            },
+            {
+                'key': 'DEADLINE', 'label': '납부 기한', 'docValue': '납부 마감 2026-08-31',
+                'officialValue': '2026-08-31', 'status': 'MATCHED',
+                'reason': '공식 자료의 주민세 납부 기한과 같아요.', 'sourceIds': ['s1'],
+            },
+            {
+                'key': 'PAYMENT_METHOD', 'label': '납부 방법', 'docValue': '은행 창구, 가상계좌, 위택스',
+                'officialValue': '은행 창구, 가상계좌, 위택스', 'status': 'MATCHED',
+                'reason': '공식 자료에 안내된 납부 방법과 같아요.', 'sourceIds': ['s1'],
+            },
+            {
+                'key': 'AGENCY_CONTACT', 'label': '문의 연락처', 'docValue': '041-000-0000',
+                'officialValue': '041-000-1234', 'status': 'MISMATCH',
+                'reason': '공식 자료의 세무과 연락처와 달라요. 전화 전에 공식 번호를 확인하세요.',
+                'sourceIds': ['s2'],
+            },
+        ],
         'sources': [
             {
+                'id': 's1',
                 'title': '아산시 지방세 납부 안내 (더미)',
+                'url': 'https://www.asan.go.kr/',
+                'checkedAt': '2026-10-30',
+                'publishedAt': '2026-07-01',
+            },
+            {
+                'id': 's2',
+                'title': '아산시청 부서별 연락처 (더미)',
                 'url': 'https://www.asan.go.kr/',
                 'checkedAt': '2026-10-30',
             },
@@ -228,6 +269,9 @@ def _save_result(document, ocr, masked, result, verification):
                 'deadlines': result['deadlines'],
                 'required_docs': result['required_docs'],
                 'agency': result['agency'],
+                # 실제 해석 모듈이 아직 두 값을 내지 않을 수 있어 없으면 비워 둔다.
+                'amount': (result.get('amount') or '')[:100],
+                'payment_methods': result.get('payment_methods') or [],
                 'verification': verification,
                 'language': result['language'],
             },

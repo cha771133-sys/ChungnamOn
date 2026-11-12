@@ -73,6 +73,9 @@ class InterpretationResult(models.Model):
     deadlines = models.JSONField(default=list)
     required_docs = models.JSONField(default=list)
     agency = models.JSONField(default=dict)
+    # 납부 금액 예: "6,250원". 문서에 없으면 빈 문자열
+    amount = models.CharField(max_length=100, blank=True)
+    payment_methods = models.JSONField(default=list)
     verification = models.JSONField(default=dict)
     language = models.CharField(max_length=10, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

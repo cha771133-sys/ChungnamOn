@@ -14,7 +14,7 @@ from accounts.models import UserProfile
 from chatbot.models import ChatMessage
 
 from .models import Document, InterpretationResult, Schedule
-from .serializers import MAX_FILE_SIZE
+from .serializers import MAX_FILE_SIZE, normalize_verification
 from .services import pipeline
 from .services.pipeline import process_document
 from .services.runner import start_processing
@@ -24,9 +24,11 @@ TEMP_MEDIA_ROOT = tempfile.mkdtemp()
 UPLOAD_URL = '/api/documents/'
 RESULT_KEYS = {
     'documentId', 'docType', 'title', 'originalText', 'translatedText',
-    'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'verification',
-    'maskedCount', 'lowConfidence',
+    'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
+    'verification', 'maskedCount', 'lowConfidence',
 }
+VERIFICATION_KEYS = {'overall', 'status', 'items', 'sources'}
+VERIFICATION_ITEM_KEYS = {'key', 'label', 'docValue', 'officialValue', 'status', 'reason', 'sourceIds'}
 
 test_settings = override_settings(
     MEDIA_ROOT=TEMP_MEDIA_ROOT,
@@ -201,8 +203,37 @@ class DocumentProcessingTests(TestCase):
         self.assertFalse(self.document.low_confidence)
         result = self.document.result
         self.assertNotIn('900101-5123456', result.original_text)
-        self.assertEqual(result.verification['status'], 'MATCHED')
+        self.assertEqual(result.amount, '6,250원')
+        self.assertEqual(result.payment_methods, ['은행 창구', '가상계좌', '위택스'])
+        self.assertEqual(result.verification['overall'], 'MISMATCH')
+        self.assertEqual(result.verification['status'], 'MISMATCH')
+        self.assertEqual(
+            [item['key'] for item in result.verification['items']],
+            ['AMOUNT', 'DEADLINE', 'PAYMENT_METHOD', 'AGENCY_CONTACT'],
+        )
         self.assertEqual(result.language, pipeline.DEFAULT_LANGUAGE)
+
+    def test_result_without_amount_and_payment_methods_saves_empty_values(self):
+        output = pipeline.interpret('원문', 'vi')
+        del output['amount'], output['payment_methods']
+
+        with mock.patch.object(pipeline, 'interpret', return_value=output):
+            process_document(self.document.id)
+
+        result = InterpretationResult.objects.get(document=self.document)
+        self.assertEqual(result.amount, '')
+        self.assertEqual(result.payment_methods, [])
+
+    def test_dummy_verification_source_ids_point_to_sources(self):
+        verification = pipeline.verify(pipeline.interpret('원문', 'vi'))
+
+        source_ids = {source['id'] for source in verification['sources']}
+        statuses = [item['status'] for item in verification['items']]
+        self.assertEqual(statuses.count('MATCHED'), 3)
+        self.assertEqual(statuses.count('MISMATCH'), 1)
+        for item in verification['items']:
+            self.assertEqual(set(item), VERIFICATION_ITEM_KEYS)
+            self.assertTrue(set(item['sourceIds']) <= source_ids)
 
     def interpret_spy(self):
         return mock.patch.object(pipeline, 'interpret', wraps=pipeline.interpret)
@@ -344,9 +375,43 @@ class DocumentResultTests(APITestCase):
         self.assertEqual(data['docType'], '고지서')
         self.assertEqual(data['deadlines'], [{'label': '납부 마감', 'date': '2026-08-31'}])
         self.assertEqual(data['agency']['source'], 'document')
-        self.assertEqual(data['verification']['status'], 'MATCHED')
+        self.assertEqual(data['amount'], '6,250원')
+        self.assertEqual(data['paymentMethods'], ['은행 창구', '가상계좌', '위택스'])
+        self.assertEqual(set(data['verification']), VERIFICATION_KEYS)
+        self.assertEqual(data['verification']['overall'], 'MISMATCH')
+        self.assertEqual(data['verification']['status'], 'MISMATCH')
+        self.assertEqual(len(data['verification']['items']), 4)
+        self.assertEqual([source['id'] for source in data['verification']['sources']], ['s1', 's2'])
         self.assertEqual(data['maskedCount'], 2)
         self.assertFalse(data['lowConfidence'])
+
+    def test_legacy_result_is_normalized(self):
+        process_document(self.document.id)
+        InterpretationResult.objects.filter(document=self.document).update(
+            amount='', payment_methods=[],
+            verification={'status': 'MATCHED', 'sources': [
+                {'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30'},
+                {'title': '두 번째 자료', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30',
+                 'sourceDocumentId': 3},
+            ]},
+        )
+
+        data = self.client.get(result_url(self.document.id)).json()
+
+        self.assertIsNone(data['amount'])
+        self.assertEqual(data['paymentMethods'], [])
+        self.assertEqual(data['verification'], {
+            'overall': 'MATCHED', 'status': 'MATCHED', 'items': [],
+            'sources': [
+                {'id': 's1', 'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/',
+                 'checkedAt': '2026-10-30'},
+                {'id': 's2', 'title': '두 번째 자료', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30',
+                 'sourceDocumentId': 3},
+            ],
+        })
+        # 저장된 값은 바꾸지 않고 응답에서만 맞춘다.
+        stored = InterpretationResult.objects.get(document=self.document).verification
+        self.assertNotIn('overall', stored)
 
     def test_unfinished_document_returns_409(self):
         for current, step in (
@@ -390,6 +455,134 @@ class DocumentResultTests(APITestCase):
         self.client.force_authenticate(None)
 
         response = self.client.get(result_url(self.document.id))
+
+        self.assertEqual(response.status_code, 401)
+
+
+def verification_url(document_id):
+    return f'/api/documents/{document_id}/verification/'
+
+
+class NormalizeVerificationTests(TestCase):
+    def test_invalid_values_become_unverified(self):
+        for stored in (None, [], {}, {'status': 'UNKNOWN'}, {'overall': 'BAD', 'items': 'x', 'sources': 'y'}):
+            with self.subTest(stored=stored):
+                self.assertEqual(
+                    normalize_verification(stored),
+                    {'overall': 'UNVERIFIED', 'status': 'UNVERIFIED', 'items': [], 'sources': []},
+                )
+
+    def test_new_format_is_kept(self):
+        verification = pipeline.verify({})
+
+        self.assertEqual(normalize_verification(verification), verification)
+
+    def test_non_list_sources_become_empty(self):
+        for sources in (7, 'abc', {'id': 's1'}):
+            with self.subTest(sources=sources):
+                normalized = normalize_verification({'status': 'MATCHED', 'sources': sources})
+
+                self.assertEqual(normalized['sources'], [])
+                self.assertEqual(normalized['overall'], 'MATCHED')
+
+    def test_generated_source_ids_do_not_collide(self):
+        normalized = normalize_verification({'status': 'MATCHED', 'sources': [
+            {'id': 's2', 'title': 'A'}, {'title': 'B'}, {'id': '', 'title': 'C'}, {'id': 's1', 'title': 'D'},
+        ]})
+
+        self.assertEqual([source['id'] for source in normalized['sources']], ['s2', 's3', 's4', 's1'])
+
+    def test_invalid_items_are_dropped_and_overall_becomes_unverified(self):
+        valid = pipeline.verify({})['items'][0]
+        broken = [{}, {**valid, 'key': 'OTHER'}, {**valid, 'status': 'OK'}, {**valid, 'sourceIds': 's1'},
+                  {**valid, 'officialValue': 3}, 'text']
+        for item in broken:
+            with self.subTest(item=item):
+                normalized = normalize_verification({'overall': 'MATCHED', 'items': [valid, item], 'sources': []})
+
+                self.assertEqual(normalized['items'], [valid])
+                self.assertEqual(normalized['overall'], 'UNVERIFIED')
+                self.assertEqual(normalized['status'], 'UNVERIFIED')
+
+    def test_null_official_value_is_valid(self):
+        item = {**pipeline.verify({})['items'][0], 'officialValue': None, 'status': 'UNVERIFIED'}
+
+        normalized = normalize_verification({'overall': 'UNVERIFIED', 'items': [item], 'sources': []})
+
+        self.assertEqual(normalized['items'], [item])
+
+    def test_status_follows_overall(self):
+        normalized = normalize_verification({'overall': 'MATCHED', 'status': 'UNVERIFIED', 'items': [], 'sources': []})
+
+        self.assertEqual(normalized['status'], 'MATCHED')
+
+
+@test_settings
+class DocumentVerificationTests(APITestCase):
+    def setUp(self):
+        self.user = create_user('owner@example.com')
+        self.document = create_document(self.user)
+        self.client.force_authenticate(self.user)
+
+    def test_returns_verification_block(self):
+        process_document(self.document.id)
+
+        response = self.client.get(verification_url(self.document.id))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(set(data), VERIFICATION_KEYS)
+        self.assertEqual(data, pipeline.verify({}))
+        self.assertEqual(data, self.client.get(result_url(self.document.id)).json()['verification'])
+
+    def test_legacy_verification_is_normalized(self):
+        process_document(self.document.id)
+        InterpretationResult.objects.filter(document=self.document).update(verification={
+            'status': 'UNVERIFIED', 'sources': [],
+        })
+
+        response = self.client.get(verification_url(self.document.id))
+
+        self.assertEqual(response.json(), {'overall': 'UNVERIFIED', 'status': 'UNVERIFIED', 'items': [], 'sources': []})
+
+    def test_unfinished_document_returns_same_409_as_result(self):
+        for current, step in (
+            (Document.Status.PENDING, Document.Step.QUEUED),
+            (Document.Status.PROCESSING, Document.Step.VERIFYING),
+        ):
+            with self.subTest(status=current):
+                Document.objects.filter(id=self.document.id).update(status=current, step=step)
+
+                response = self.client.get(verification_url(self.document.id))
+
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.json(), {'detail': '아직 처리 중입니다.', 'status': current, 'step': step})
+
+    def test_failed_document_returns_409_with_fail_reason(self):
+        Document.objects.filter(id=self.document.id).update(
+            status=Document.Status.FAILED, step=Document.Step.OCR, fail_reason='읽지 못했습니다.',
+        )
+
+        response = self.client.get(verification_url(self.document.id))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['failReason'], '읽지 못했습니다.')
+
+    def test_other_user_and_missing_document_get_404(self):
+        process_document(self.document.id)
+        self.client.force_authenticate(create_user('other@example.com'))
+
+        other = self.client.get(verification_url(self.document.id))
+        missing = self.client.get(verification_url(self.document.id + 100))
+
+        self.assertEqual(other.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(other.json(), missing.json())
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        response = self.client.get(verification_url(self.document.id))
 
         self.assertEqual(response.status_code, 401)
 
