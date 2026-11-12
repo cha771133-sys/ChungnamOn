@@ -13,20 +13,23 @@ from rest_framework.test import APITestCase
 from accounts.models import UserProfile
 from chatbot.models import ChatMessage
 
-from .models import Document, InterpretationResult, Schedule
-from .serializers import MAX_FILE_SIZE
+from .models import ChecklistItem, Document, InterpretationResult, Schedule
+from .serializers import MAX_FILE_SIZE, normalize_verification
 from .services import pipeline
+from .services.checklist import clean_checklist
 from .services.pipeline import process_document
 from .services.runner import start_processing
-from .views import DocumentDetailView
+from .views import DocumentDetailView, ScheduleDetailView
 
 TEMP_MEDIA_ROOT = tempfile.mkdtemp()
 UPLOAD_URL = '/api/documents/'
 RESULT_KEYS = {
     'documentId', 'docType', 'title', 'originalText', 'translatedText',
-    'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'verification',
-    'maskedCount', 'lowConfidence',
+    'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
+    'verification', 'maskedCount', 'lowConfidence',
 }
+VERIFICATION_KEYS = {'overall', 'status', 'items', 'sources'}
+VERIFICATION_ITEM_KEYS = {'key', 'label', 'docValue', 'officialValue', 'status', 'reason', 'sourceIds'}
 
 test_settings = override_settings(
     MEDIA_ROOT=TEMP_MEDIA_ROOT,
@@ -201,8 +204,37 @@ class DocumentProcessingTests(TestCase):
         self.assertFalse(self.document.low_confidence)
         result = self.document.result
         self.assertNotIn('900101-5123456', result.original_text)
-        self.assertEqual(result.verification['status'], 'MATCHED')
+        self.assertEqual(result.amount, '6,250원')
+        self.assertEqual(result.payment_methods, ['은행 창구', '가상계좌', '위택스'])
+        self.assertEqual(result.verification['overall'], 'MISMATCH')
+        self.assertEqual(result.verification['status'], 'MISMATCH')
+        self.assertEqual(
+            [item['key'] for item in result.verification['items']],
+            ['AMOUNT', 'DEADLINE', 'PAYMENT_METHOD', 'AGENCY_CONTACT'],
+        )
         self.assertEqual(result.language, pipeline.DEFAULT_LANGUAGE)
+
+    def test_result_without_amount_and_payment_methods_saves_empty_values(self):
+        output = pipeline.interpret('원문', 'vi')
+        del output['amount'], output['payment_methods']
+
+        with mock.patch.object(pipeline, 'interpret', return_value=output):
+            process_document(self.document.id)
+
+        result = InterpretationResult.objects.get(document=self.document)
+        self.assertEqual(result.amount, '')
+        self.assertEqual(result.payment_methods, [])
+
+    def test_dummy_verification_source_ids_point_to_sources(self):
+        verification = pipeline.verify(pipeline.interpret('원문', 'vi'))
+
+        source_ids = {source['id'] for source in verification['sources']}
+        statuses = [item['status'] for item in verification['items']]
+        self.assertEqual(statuses.count('MATCHED'), 3)
+        self.assertEqual(statuses.count('MISMATCH'), 1)
+        for item in verification['items']:
+            self.assertEqual(set(item), VERIFICATION_ITEM_KEYS)
+            self.assertTrue(set(item['sourceIds']) <= source_ids)
 
     def interpret_spy(self):
         return mock.patch.object(pipeline, 'interpret', wraps=pipeline.interpret)
@@ -344,9 +376,43 @@ class DocumentResultTests(APITestCase):
         self.assertEqual(data['docType'], '고지서')
         self.assertEqual(data['deadlines'], [{'label': '납부 마감', 'date': '2026-08-31'}])
         self.assertEqual(data['agency']['source'], 'document')
-        self.assertEqual(data['verification']['status'], 'MATCHED')
+        self.assertEqual(data['amount'], '6,250원')
+        self.assertEqual(data['paymentMethods'], ['은행 창구', '가상계좌', '위택스'])
+        self.assertEqual(set(data['verification']), VERIFICATION_KEYS)
+        self.assertEqual(data['verification']['overall'], 'MISMATCH')
+        self.assertEqual(data['verification']['status'], 'MISMATCH')
+        self.assertEqual(len(data['verification']['items']), 4)
+        self.assertEqual([source['id'] for source in data['verification']['sources']], ['s1', 's2'])
         self.assertEqual(data['maskedCount'], 2)
         self.assertFalse(data['lowConfidence'])
+
+    def test_legacy_result_is_normalized(self):
+        process_document(self.document.id)
+        InterpretationResult.objects.filter(document=self.document).update(
+            amount='', payment_methods=[],
+            verification={'status': 'MATCHED', 'sources': [
+                {'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30'},
+                {'title': '두 번째 자료', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30',
+                 'sourceDocumentId': 3},
+            ]},
+        )
+
+        data = self.client.get(result_url(self.document.id)).json()
+
+        self.assertIsNone(data['amount'])
+        self.assertEqual(data['paymentMethods'], [])
+        self.assertEqual(data['verification'], {
+            'overall': 'MATCHED', 'status': 'MATCHED', 'items': [],
+            'sources': [
+                {'id': 's1', 'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/',
+                 'checkedAt': '2026-10-30'},
+                {'id': 's2', 'title': '두 번째 자료', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30',
+                 'sourceDocumentId': 3},
+            ],
+        })
+        # 저장된 값은 바꾸지 않고 응답에서만 맞춘다.
+        stored = InterpretationResult.objects.get(document=self.document).verification
+        self.assertNotIn('overall', stored)
 
     def test_unfinished_document_returns_409(self):
         for current, step in (
@@ -390,6 +456,147 @@ class DocumentResultTests(APITestCase):
         self.client.force_authenticate(None)
 
         response = self.client.get(result_url(self.document.id))
+
+        self.assertEqual(response.status_code, 401)
+
+
+def verification_url(document_id):
+    return f'/api/documents/{document_id}/verification/'
+
+
+class NormalizeVerificationTests(TestCase):
+    def test_invalid_values_become_unverified(self):
+        for stored in (None, [], {}, {'status': 'UNKNOWN'}, {'overall': 'BAD', 'items': 'x', 'sources': 'y'}):
+            with self.subTest(stored=stored):
+                self.assertEqual(
+                    normalize_verification(stored),
+                    {'overall': 'UNVERIFIED', 'status': 'UNVERIFIED', 'items': [], 'sources': []},
+                )
+
+    def test_new_format_is_kept(self):
+        verification = pipeline.verify({})
+
+        self.assertEqual(normalize_verification(verification), verification)
+
+    def test_non_list_sources_become_empty(self):
+        for sources in (7, 'abc', {'id': 's1'}):
+            with self.subTest(sources=sources):
+                normalized = normalize_verification({'status': 'MATCHED', 'sources': sources})
+
+                self.assertEqual(normalized['sources'], [])
+                self.assertEqual(normalized['overall'], 'MATCHED')
+
+    def test_generated_source_ids_do_not_collide(self):
+        normalized = normalize_verification({'status': 'MATCHED', 'sources': [
+            {'id': 's2', 'title': 'A'}, {'title': 'B'}, {'id': '', 'title': 'C'}, {'id': 's1', 'title': 'D'},
+        ]})
+
+        self.assertEqual([source['id'] for source in normalized['sources']], ['s2', 's3', 's4', 's1'])
+
+    def test_invalid_items_are_dropped_and_overall_becomes_unverified(self):
+        valid = pipeline.verify({})['items'][0]
+        broken = [{}, {**valid, 'key': 'OTHER'}, {**valid, 'status': 'OK'}, {**valid, 'sourceIds': 's1'},
+                  {**valid, 'officialValue': 3}, 'text']
+        for item in broken:
+            with self.subTest(item=item):
+                normalized = normalize_verification({'overall': 'MATCHED', 'items': [valid, item], 'sources': []})
+
+                self.assertEqual(normalized['items'], [valid])
+                self.assertEqual(normalized['overall'], 'UNVERIFIED')
+                self.assertEqual(normalized['status'], 'UNVERIFIED')
+
+    def test_non_list_items_make_overall_unverified(self):
+        for items in ('broken', 3, {'key': 'AMOUNT'}, pipeline.verify({})['items'][0]):
+            with self.subTest(items=items):
+                normalized = normalize_verification({'overall': 'MATCHED', 'items': items, 'sources': []})
+
+                self.assertEqual(normalized['items'], [])
+                self.assertEqual(normalized['overall'], 'UNVERIFIED')
+
+    def test_missing_items_keep_legacy_status(self):
+        for stored in ({'status': 'MATCHED'}, {'status': 'MATCHED', 'items': None}):
+            with self.subTest(stored=stored):
+                self.assertEqual(normalize_verification(stored)['overall'], 'MATCHED')
+
+    def test_null_official_value_is_valid(self):
+        item = {**pipeline.verify({})['items'][0], 'officialValue': None, 'status': 'UNVERIFIED'}
+
+        normalized = normalize_verification({'overall': 'UNVERIFIED', 'items': [item], 'sources': []})
+
+        self.assertEqual(normalized['items'], [item])
+
+    def test_status_follows_overall(self):
+        normalized = normalize_verification({'overall': 'MATCHED', 'status': 'UNVERIFIED', 'items': [], 'sources': []})
+
+        self.assertEqual(normalized['status'], 'MATCHED')
+
+
+@test_settings
+class DocumentVerificationTests(APITestCase):
+    def setUp(self):
+        self.user = create_user('owner@example.com')
+        self.document = create_document(self.user)
+        self.client.force_authenticate(self.user)
+
+    def test_returns_verification_block(self):
+        process_document(self.document.id)
+
+        response = self.client.get(verification_url(self.document.id))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(set(data), VERIFICATION_KEYS)
+        self.assertEqual(data, pipeline.verify({}))
+        self.assertEqual(data, self.client.get(result_url(self.document.id)).json()['verification'])
+
+    def test_legacy_verification_is_normalized(self):
+        process_document(self.document.id)
+        InterpretationResult.objects.filter(document=self.document).update(verification={
+            'status': 'UNVERIFIED', 'sources': [],
+        })
+
+        response = self.client.get(verification_url(self.document.id))
+
+        self.assertEqual(response.json(), {'overall': 'UNVERIFIED', 'status': 'UNVERIFIED', 'items': [], 'sources': []})
+
+    def test_unfinished_document_returns_same_409_as_result(self):
+        for current, step in (
+            (Document.Status.PENDING, Document.Step.QUEUED),
+            (Document.Status.PROCESSING, Document.Step.VERIFYING),
+        ):
+            with self.subTest(status=current):
+                Document.objects.filter(id=self.document.id).update(status=current, step=step)
+
+                response = self.client.get(verification_url(self.document.id))
+
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.json(), {'detail': '아직 처리 중입니다.', 'status': current, 'step': step})
+
+    def test_failed_document_returns_409_with_fail_reason(self):
+        Document.objects.filter(id=self.document.id).update(
+            status=Document.Status.FAILED, step=Document.Step.OCR, fail_reason='읽지 못했습니다.',
+        )
+
+        response = self.client.get(verification_url(self.document.id))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['failReason'], '읽지 못했습니다.')
+
+    def test_other_user_and_missing_document_get_404(self):
+        process_document(self.document.id)
+        self.client.force_authenticate(create_user('other@example.com'))
+
+        other = self.client.get(verification_url(self.document.id))
+        missing = self.client.get(verification_url(self.document.id + 100))
+
+        self.assertEqual(other.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(other.json(), missing.json())
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        response = self.client.get(verification_url(self.document.id))
 
         self.assertEqual(response.status_code, 401)
 
@@ -914,6 +1121,20 @@ class ScheduleDetailTests(FixedTodayMixin, APITestCase):
         self.schedule.refresh_from_db()
         self.assertIsNone(self.schedule.done_at)
 
+    def test_patch_returns_404_when_deleted_after_lookup(self):
+        original = ScheduleDetailView.get_object
+
+        def get_then_delete(view):
+            schedule = original(view)
+            Schedule.objects.filter(pk=schedule.pk).delete()
+            return schedule
+
+        with mock.patch.object(ScheduleDetailView, 'get_object', get_then_delete):
+            response = self.client.patch(schedule_url(self.schedule.id), {'done': True}, format='json')
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()['code'], 'NOT_FOUND')
+
     def test_patch_rejects_other_fields(self):
         for body in ({'done': True, 'date': '2026-09-01'}, {'title': '바꾼 이름'}):
             with self.subTest(body=body):
@@ -981,3 +1202,285 @@ class ScheduleDetailTests(FixedTodayMixin, APITestCase):
         self.assertEqual(self.client.get(schedule_url(self.schedule.id)).status_code, 401)
         self.assertEqual(self.client.delete(schedule_url(self.schedule.id)).status_code, 401)
         self.assertTrue(Schedule.objects.filter(id=self.schedule.id).exists())
+
+
+CHECKLIST_ITEM_KEYS = {
+    'id', 'text', 'detail', 'docs', 'method', 'due', 'state', 'done', 'doneAt', 'note', 'sourceIds',
+}
+
+
+def checklist_url(document_id):
+    return f'/api/documents/{document_id}/checklist/'
+
+
+def checklist_item_url(document_id, item_id):
+    return f'/api/documents/{document_id}/checklist/{item_id}/'
+
+
+def interpret_with_checklist(checklist):
+    output = pipeline.interpret('원문', 'vi')
+    output['checklist'] = checklist
+    return mock.patch.object(pipeline, 'interpret', return_value=output)
+
+
+@test_settings
+class ChecklistPipelineTests(TestCase):
+    def setUp(self):
+        self.document = create_document(create_user('owner@example.com'))
+
+    def test_process_document_creates_items(self):
+        process_document(self.document.id)
+
+        items = list(self.document.checklist_items.all())
+        self.assertEqual([item.order for item in items], [0, 1, 2, 3])
+        self.assertEqual(
+            {item.state for item in items},
+            {'CONFIRMED', 'CONDITIONAL', 'CHECK_NEEDED'},
+        )
+        first = items[0]
+        self.assertEqual(first.text, '주민세 6,250원 내기')
+        self.assertEqual(first.docs, ['고지서'])
+        self.assertEqual(first.due, date(2026, 8, 31))
+        self.assertEqual(first.source_ids, ['s1'])
+        self.assertFalse(first.done)
+
+    def test_reprocessing_replaces_items(self):
+        process_document(self.document.id)
+        old_ids = set(self.document.checklist_items.values_list('id', flat=True))
+        self.document.checklist_items.update(done=True, done_at=timezone.now())
+        Document.objects.filter(id=self.document.id).update(status=Document.Status.FAILED)
+
+        with interpret_with_checklist([{'text': '새 할 일', 'state': 'CONFIRMED'}]):
+            process_document(self.document.id)
+
+        items = list(self.document.checklist_items.all())
+        self.assertEqual([item.text for item in items], ['새 할 일'])
+        self.assertFalse(items[0].done)
+        self.assertFalse(old_ids & {item.id for item in items})
+
+    def test_invalid_checklist_keeps_document_done(self):
+        for checklist in (None, 'abc', 3, {'text': '할 일'}, [1, 'x', {}, {'text': '  '}]):
+            with self.subTest(checklist=checklist):
+                Document.objects.filter(id=self.document.id).update(status=Document.Status.PENDING)
+
+                with interpret_with_checklist(checklist):
+                    process_document(self.document.id)
+
+                self.document.refresh_from_db()
+                self.assertEqual(self.document.status, Document.Status.DONE)
+                self.assertFalse(self.document.checklist_items.exists())
+
+    def test_missing_checklist_key_keeps_document_done(self):
+        output = pipeline.interpret('원문', 'vi')
+        del output['checklist']
+
+        with mock.patch.object(pipeline, 'interpret', return_value=output):
+            process_document(self.document.id)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, Document.Status.DONE)
+        self.assertFalse(self.document.checklist_items.exists())
+
+    def test_invalid_fields_are_cleaned(self):
+        with interpret_with_checklist([
+            {'text': '할 일 1', 'state': 'DONE', 'due': '2026/08/31', 'docs': '고지서', 'sourceIds': 's1',
+             'done': True, 'detail': 3},
+            {'text': '할 일 2', 'state': 'CONDITIONAL', 'due': '2026-02-30', 'docs': ['', '여권', 7]},
+            {'text': 'x' * 400, 'due': None},
+        ]):
+            process_document(self.document.id)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, Document.Status.DONE)
+        first, second, third = self.document.checklist_items.all()
+        self.assertEqual((first.state, first.due, first.docs, first.source_ids), ('CHECK_NEEDED', None, ['고지서'], ['s1']))
+        self.assertFalse(first.done)
+        self.assertEqual(first.detail, '')
+        self.assertEqual((second.state, second.due, second.docs), ('CONDITIONAL', None, ['여권']))
+        self.assertEqual(len(third.text), 300)
+        self.assertEqual(third.state, 'CHECK_NEEDED')
+
+    def test_due_accepts_only_calendar_date(self):
+        cases = {
+            '2026-08-31': date(2026, 8, 31), ' 2026-08-31 ': date(2026, 8, 31),
+            '2026-W01-1': None, '20260831': None, '2026-8-31': None, '2026-08-31T00:00': None, 20260831: None,
+        }
+        for due, expected in cases.items():
+            with self.subTest(due=due):
+                self.assertEqual(clean_checklist([{'text': '할 일', 'due': due}])[0]['due'], expected)
+
+    def test_document_delete_removes_items(self):
+        process_document(self.document.id)
+
+        self.document.delete()
+
+        self.assertFalse(ChecklistItem.objects.exists())
+
+
+@test_settings
+class ChecklistApiTests(APITestCase):
+    def setUp(self):
+        self.user = create_user('owner@example.com')
+        self.document = create_document(self.user)
+        process_document(self.document.id)
+        self.items = list(self.document.checklist_items.all())
+        self.client.force_authenticate(self.user)
+
+    def test_returns_items_in_order(self):
+        response = self.client.get(checklist_url(self.document.id))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['documentId'], self.document.id)
+        self.assertEqual((data['total'], data['doneCount'], data['progress']), (4, 0, 0))
+        self.assertEqual([item['id'] for item in data['items']], [item.id for item in self.items])
+        self.assertEqual(set(data['items'][0]), CHECKLIST_ITEM_KEYS)
+        self.assertEqual(data['items'][0]['due'], '2026-08-31')
+        self.assertIsNone(data['items'][1]['due'])
+        self.assertEqual(data['items'][2]['state'], 'CHECK_NEEDED')
+        self.assertEqual(data['items'][2]['sourceIds'], ['s2'])
+
+    def test_progress_rounds_down(self):
+        ChecklistItem.objects.filter(id=self.items[0].id).update(done=True)
+        self.assertEqual(self.client.get(checklist_url(self.document.id)).json()['progress'], 25)
+
+        ChecklistItem.objects.filter(id__in=[item.id for item in self.items[:3]]).update(done=True)
+        data = self.client.get(checklist_url(self.document.id)).json()
+        self.assertEqual((data['doneCount'], data['progress']), (3, 75))
+
+        ChecklistItem.objects.filter(document=self.document).update(done=True)
+        self.assertEqual(self.client.get(checklist_url(self.document.id)).json()['progress'], 100)
+
+    def test_progress_is_zero_without_items(self):
+        ChecklistItem.objects.all().delete()
+
+        data = self.client.get(checklist_url(self.document.id)).json()
+
+        self.assertEqual(data, {'documentId': self.document.id, 'total': 0, 'doneCount': 0, 'progress': 0, 'items': []})
+
+    def test_result_response_is_unchanged(self):
+        data = self.client.get(result_url(self.document.id)).json()
+
+        self.assertEqual(set(data), RESULT_KEYS)
+
+    def test_patch_done_toggles_done_at(self):
+        url = checklist_item_url(self.document.id, self.items[0].id)
+
+        done = self.client.patch(url, {'done': True}, format='json')
+
+        self.assertEqual(done.status_code, 200)
+        self.assertEqual(set(done.json()), CHECKLIST_ITEM_KEYS)
+        self.assertTrue(done.json()['done'])
+        self.assertIsNotNone(done.json()['doneAt'])
+        item = ChecklistItem.objects.get(id=self.items[0].id)
+        done_at = item.done_at
+
+        self.client.patch(url, {'done': True}, format='json')
+        item.refresh_from_db()
+        self.assertEqual(item.done_at, done_at)
+        self.assertEqual(self.client.get(checklist_url(self.document.id)).json()['doneCount'], 1)
+
+        undone = self.client.patch(url, {'done': False}, format='json')
+
+        self.assertFalse(undone.json()['done'])
+        self.assertIsNone(undone.json()['doneAt'])
+        item.refresh_from_db()
+        self.assertIsNone(item.done_at)
+
+    def test_patch_locks_item_row(self):
+        with mock.patch.object(
+            ChecklistItem.objects, 'select_for_update', wraps=ChecklistItem.objects.select_for_update,
+        ) as select_for_update:
+            response = self.client.patch(
+                checklist_item_url(self.document.id, self.items[0].id), {'done': True}, format='json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        select_for_update.assert_called_once()
+
+    def test_patch_rejects_other_fields(self):
+        url = checklist_item_url(self.document.id, self.items[0].id)
+        for body in ({'done': True, 'text': '바꿈'}, {'state': 'CONFIRMED'}, {}):
+            with self.subTest(body=body):
+                response = self.client.patch(url, body, format='json')
+
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()['code'], 'VALIDATION_ERROR')
+        item = ChecklistItem.objects.get(id=self.items[0].id)
+        self.assertFalse(item.done)
+        self.assertEqual(item.text, '주민세 6,250원 내기')
+
+    def test_other_methods_not_allowed(self):
+        self.assertEqual(self.client.post(checklist_url(self.document.id), {}, format='json').status_code, 405)
+        item_url = checklist_item_url(self.document.id, self.items[0].id)
+        self.assertEqual(self.client.put(item_url, {'done': True}, format='json').status_code, 405)
+        self.assertEqual(self.client.delete(item_url).status_code, 405)
+
+    def test_unfinished_document_returns_same_409_as_result(self):
+        for current, step in (
+            (Document.Status.PENDING, Document.Step.QUEUED),
+            (Document.Status.PROCESSING, Document.Step.INTERPRETING),
+        ):
+            with self.subTest(status=current):
+                Document.objects.filter(id=self.document.id).update(status=current, step=step)
+                expected = {'detail': '아직 처리 중입니다.', 'status': current, 'step': step}
+
+                get = self.client.get(checklist_url(self.document.id))
+                patch = self.client.patch(
+                    checklist_item_url(self.document.id, self.items[0].id), {'done': True}, format='json',
+                )
+
+                self.assertEqual((get.status_code, get.json()), (409, expected))
+                self.assertEqual((patch.status_code, patch.json()), (409, expected))
+        self.assertFalse(ChecklistItem.objects.get(id=self.items[0].id).done)
+
+    def test_failed_document_returns_409_with_fail_reason(self):
+        Document.objects.filter(id=self.document.id).update(
+            status=Document.Status.FAILED, step=Document.Step.OCR, fail_reason='읽지 못했습니다.',
+        )
+
+        response = self.client.get(checklist_url(self.document.id))
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['failReason'], '읽지 못했습니다.')
+
+    def test_other_user_and_missing_document_get_404(self):
+        self.client.force_authenticate(create_user('other@example.com'))
+        item_id = self.items[0].id
+
+        for url_func, method, body in (
+            (lambda pk: checklist_url(pk), 'get', None),
+            (lambda pk: checklist_item_url(pk, item_id), 'patch', {'done': True}),
+        ):
+            with self.subTest(method=method):
+                other = getattr(self.client, method)(url_func(self.document.id), body, format='json')
+                missing = getattr(self.client, method)(url_func(self.document.id + 100), body, format='json')
+
+                self.assertEqual(other.status_code, 404)
+                self.assertEqual(missing.status_code, 404)
+                self.assertEqual(other.json(), missing.json())
+        self.assertFalse(ChecklistItem.objects.get(id=item_id).done)
+
+    def test_item_of_other_document_and_missing_item_get_404(self):
+        other_document = create_document(self.user)
+        process_document(other_document.id)
+        other_item = other_document.checklist_items.first()
+
+        wrong_document = self.client.patch(
+            checklist_item_url(self.document.id, other_item.id), {'done': True}, format='json',
+        )
+        missing = self.client.patch(checklist_item_url(self.document.id, 999999), {'done': True}, format='json')
+
+        self.assertEqual(wrong_document.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        other_item.refresh_from_db()
+        self.assertFalse(other_item.done)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+
+        self.assertEqual(self.client.get(checklist_url(self.document.id)).status_code, 401)
+        response = self.client.patch(
+            checklist_item_url(self.document.id, self.items[0].id), {'done': True}, format='json',
+        )
+        self.assertEqual(response.status_code, 401)

@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from chatbot.models import ChatMessage
 
-from .models import Document, InterpretationResult, Schedule
+from .models import ChecklistItem, Document, InterpretationResult, Schedule
 
 
 @admin.register(Document)
@@ -31,6 +31,25 @@ class ScheduleAdmin(admin.ModelAdmin):
     list_filter = ('done', 'date')
     list_select_related = ('owner', 'document')
     readonly_fields = ('owner', 'document', 'title', 'date', 'done', 'done_at', 'created_at', 'updated_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ChecklistItem)
+class ChecklistItemAdmin(admin.ModelAdmin):
+    """조회 전용. 삭제 권한은 문서 삭제의 CASCADE가 막히지 않도록 기본값을 유지한다."""
+
+    list_display = ('id', 'document', 'order', 'text', 'state', 'due', 'done', 'done_at')
+    list_filter = ('state', 'done')
+    list_select_related = ('document',)
+    readonly_fields = (
+        'document', 'order', 'text', 'detail', 'docs', 'method', 'due', 'state', 'done', 'done_at',
+        'note', 'source_ids', 'created_at', 'updated_at',
+    )
 
     def has_add_permission(self, request):
         return False

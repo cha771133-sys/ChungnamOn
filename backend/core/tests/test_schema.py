@@ -50,7 +50,7 @@ class OpenAPITests(APISimpleTestCase):
         }.issubset(self.schema['paths']))
         for path in self.schema['paths']:
             with self.subTest(path=path):
-                self.assertIsNotNone(resolve(path.replace('{pk}', '1')))
+                self.assertIsNotNone(resolve(path.replace('{pk}', '1').replace('{item_id}', '1')))
         status = self.schema['paths']['/api/documents/{pk}/status/']['get']
         self.assertIn({'in': 'path', 'name': 'pk', 'schema': {'type': 'integer'},
                        'description': '문서 ID', 'required': True}, status['parameters'])
@@ -151,8 +151,8 @@ class OpenAPITests(APISimpleTestCase):
         result = self.dereference(responses['200']['content']['application/json']['schema'])
         self.assertEqual(set(result['properties']), {
             'documentId', 'docType', 'title', 'originalText', 'translatedText',
-            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'verification',
-            'maskedCount', 'lowConfidence',
+            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
+            'verification', 'maskedCount', 'lowConfidence',
         })
         pending = self.dereference(responses['409']['content']['application/json']['schema'])
         self.assertEqual(set(pending['properties']), {'detail', 'status', 'step', 'failReason'})

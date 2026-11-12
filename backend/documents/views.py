@@ -16,12 +16,14 @@ from core.pagination import StandardPagination
 from core.permissions import IsOwner
 from core.schema import error_response
 
-from .models import Document, InterpretationResult, Schedule
+from .models import ChecklistItem, Document, InterpretationResult, Schedule
 from .serializers import (
+    ChecklistItemSerializer, ChecklistItemUpdateSerializer, ChecklistSerializer,
     DocumentDetailSerializer, DocumentListSerializer, DocumentNotReadySerializer,
     DocumentResultSerializer, DocumentStatusResponseSerializer, DocumentStatusSerializer,
     DocumentUploadResponseSerializer, DocumentUploadSerializer, ScheduleConflictSerializer,
-    ScheduleCreateSerializer, ScheduleSerializer, ScheduleUpdateSerializer,
+    ScheduleCreateSerializer, ScheduleSerializer, ScheduleUpdateSerializer, VerificationSerializer,
+    normalize_verification,
 )
 from .services.runner import start_processing
 
@@ -238,11 +240,80 @@ class DocumentDetailView(generics.RetrieveDestroyAPIView):
         )
 
 
+VERIFICATION_EXAMPLE = {
+    'overall': 'MISMATCH',
+    'status': 'MISMATCH',
+    'items': [
+        {
+            'key': 'AMOUNT', 'label': '납부 금액', 'docValue': '6,250원', 'officialValue': '6,250원',
+            'status': 'MATCHED', 'reason': '공식 자료의 개인분 주민세 금액과 같아요.', 'sourceIds': ['s1'],
+        },
+        {
+            'key': 'AGENCY_CONTACT', 'label': '문의 연락처', 'docValue': '041-000-0000',
+            'officialValue': '041-000-1234', 'status': 'MISMATCH',
+            'reason': '공식 자료의 세무과 연락처와 달라요. 전화 전에 공식 번호를 확인하세요.', 'sourceIds': ['s2'],
+        },
+    ],
+    'sources': [
+        {
+            'id': 's1', 'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/',
+            'checkedAt': '2026-10-30', 'publishedAt': '2026-07-01', 'sourceDocumentId': 12,
+        },
+        {'id': 's2', 'title': '아산시청 부서별 연락처', 'url': 'https://www.asan.go.kr/', 'checkedAt': '2026-10-30'},
+    ],
+}
+LEGACY_VERIFICATION_EXAMPLE = {
+    'overall': 'MATCHED', 'status': 'MATCHED', 'items': [],
+    'sources': [{'id': 's1', 'title': '아산시 지방세 납부 안내', 'url': 'https://www.asan.go.kr/',
+                 'checkedAt': '2026-10-30'}],
+}
+NOT_READY_EXAMPLES = [
+    OpenApiExample('처리 중인 문서', value={
+        'detail': '아직 처리 중입니다.', 'status': 'PROCESSING', 'step': 'VERIFYING',
+    }, response_only=True, status_codes=['409']),
+    OpenApiExample('처리 실패 문서', value={
+        'detail': '문서 처리에 실패했습니다.', 'status': 'FAILED', 'step': 'OCR',
+        'failReason': '문서의 글자를 읽지 못했습니다. 밝은 곳에서 다시 촬영해 업로드해 주세요.',
+    }, response_only=True, status_codes=['409']),
+]
+
+
+def get_done_document(request, view, pk):
+    """본인 DONE 문서를 찾는다. 처리 전·실패 문서면 (None, 409 응답)을 돌려준다."""
+    document = get_object_or_404(Document, pk=pk, owner=request.user)
+    view.check_object_permissions(request, document)
+    if document.status != Document.Status.DONE:
+        return None, Response(not_ready_body(document), status=status.HTTP_409_CONFLICT)
+    return document, None
+
+
+def get_done_result(request, view, pk):
+    """본인 DONE 문서의 해석 결과를 찾는다. 처리 전·실패 문서면 (None, 409 응답)을 돌려준다."""
+    document, not_ready = get_done_document(request, view, pk)
+    if not_ready:
+        return None, not_ready
+    result = get_object_or_404(InterpretationResult.objects.select_related('document'), document=document)
+    return result, None
+
+
+def not_ready_body(document):
+    if document.status == Document.Status.FAILED:
+        return {
+            'detail': '문서 처리에 실패했습니다.',
+            'status': document.status,
+            'step': document.step,
+            'failReason': document.fail_reason,
+        }
+    return {'detail': '아직 처리 중입니다.', 'status': document.status, 'step': document.step}
+
+
 @extend_schema_view(get=extend_schema(
     operation_id='document_result',
     summary='내 문서 해석 결과 조회',
     description=(
         '현재 사용자 소유의 DONE 문서 해석 결과를 반환합니다. '
+        'verification은 항목별 대조 형식(overall·status·items·sources)이며, '
+        '예전 형식으로 저장된 결과는 overall=status, items=[]로 맞추고 출처에 s1, s2… id를 붙여 반환합니다. '
         '처리 중이거나 실패하면 기존 상태·단계·실패 사유를 포함한 409 응답을 반환합니다. '
         '타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
     ),
@@ -255,29 +326,169 @@ class DocumentDetailView(generics.RetrieveDestroyAPIView):
         405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
         409: DocumentNotReadySerializer,
     },
+    examples=NOT_READY_EXAMPLES,
     tags=['문서'],
 ))
 class DocumentResultView(APIView):
     permission_classes = [IsOwner]
 
     def get(self, request, pk):
-        document = get_object_or_404(Document, pk=pk, owner=request.user)
-        self.check_object_permissions(request, document)
-        if document.status != Document.Status.DONE:
-            return Response(self._not_ready_body(document), status=status.HTTP_409_CONFLICT)
-
-        result = get_object_or_404(InterpretationResult.objects.select_related('document'), document=document)
+        result, not_ready = get_done_result(request, self, pk)
+        if not_ready:
+            return not_ready
         return Response(DocumentResultSerializer(result).data)
 
-    def _not_ready_body(self, document):
-        if document.status == Document.Status.FAILED:
-            return {
-                'detail': '문서 처리에 실패했습니다.',
-                'status': document.status,
-                'step': document.step,
-                'failReason': document.fail_reason,
-            }
-        return {'detail': '아직 처리 중입니다.', 'status': document.status, 'step': document.step}
+
+@extend_schema_view(get=extend_schema(
+    operation_id='document_verification',
+    summary='내 문서 검증 결과·근거 조회',
+    description=(
+        '해석 결과의 공식 자료 대조 결과만 반환합니다 (근거 화면용). '
+        'items의 sourceIds는 sources[].id를 가리킵니다. 문서에 값이 없는 항목은 items에서 빠집니다. '
+        '예전 형식으로 저장된 결과는 overall=status, items=[]로 반환합니다. '
+        '처리 중이거나 실패하면 결과 조회 API와 같은 409를 반환하고, 타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
+    ),
+    parameters=[PK_PARAMETER],
+    responses={
+        200: VerificationSerializer,
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 접근 가능한 문서 또는 결과가 없음'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        409: DocumentNotReadySerializer,
+    },
+    examples=[
+        OpenApiExample('항목별 대조 결과', value=VERIFICATION_EXAMPLE, response_only=True, status_codes=['200']),
+        OpenApiExample('예전 형식 결과', value=LEGACY_VERIFICATION_EXAMPLE, response_only=True, status_codes=['200']),
+        *NOT_READY_EXAMPLES,
+    ],
+    tags=['문서'],
+))
+class DocumentVerificationView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request, pk):
+        result, not_ready = get_done_result(request, self, pk)
+        if not_ready:
+            return not_ready
+        return Response(normalize_verification(result.verification))
+
+
+CHECKLIST_ITEM_EXAMPLE = {
+    'id': 31, 'text': '주민세 6,250원 내기',
+    'detail': '2026년 개인분 주민세예요. 기한이 지나면 가산세가 붙어요.', 'docs': ['고지서'],
+    'method': '은행 창구, 가상계좌, 위택스(www.wetax.go.kr) 중 하나로 내요.', 'due': '2026-08-31',
+    'state': 'CONFIRMED', 'done': False, 'doneAt': None, 'note': '', 'sourceIds': ['s1'],
+}
+CHECKLIST_EXAMPLE = {
+    'documentId': 123, 'total': 2, 'doneCount': 1, 'progress': 50,
+    'items': [
+        {**CHECKLIST_ITEM_EXAMPLE, 'done': True, 'doneAt': '2026-08-20T10:30:00+09:00'},
+        {
+            'id': 32, 'text': '외국인등록증 챙기기', 'detail': '은행 창구에서 낼 때 신분 확인에 필요할 수 있어요.',
+            'docs': ['외국인등록증'], 'method': '은행 창구에 갈 때 가져가요.', 'due': None,
+            'state': 'CONDITIONAL', 'done': False, 'doneAt': None,
+            'note': '가상계좌나 위택스로 내면 필요 없어요.', 'sourceIds': ['s1'],
+        },
+    ],
+}
+CHECKLIST_ITEM_PARAMETER = OpenApiParameter('item_id', int, OpenApiParameter.PATH, description='체크리스트 항목 ID')
+
+
+@extend_schema_view(get=extend_schema(
+    operation_id='document_checklist',
+    summary='내 문서 체크리스트 조회',
+    description=(
+        '해석 결과로 만든 체크리스트를 순서대로 반환합니다. '
+        'progress는 완료 비율(0~100, 소수점 버림)이며 항목이 없으면 0입니다. '
+        '문서를 다시 처리하면 체크리스트는 새 해석 결과로 교체되고 완료 표시도 초기화됩니다. '
+        '처리 중이거나 실패하면 결과 조회 API와 같은 409를 반환하고, 타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
+    ),
+    parameters=[PK_PARAMETER],
+    responses={
+        200: ChecklistSerializer,
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 접근 가능한 문서가 없음'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        409: DocumentNotReadySerializer,
+    },
+    examples=[
+        OpenApiExample('체크리스트', value=CHECKLIST_EXAMPLE, response_only=True, status_codes=['200']),
+        OpenApiExample('항목 없음', value={
+            'documentId': 123, 'total': 0, 'doneCount': 0, 'progress': 0, 'items': [],
+        }, response_only=True, status_codes=['200']),
+        *NOT_READY_EXAMPLES,
+    ],
+    tags=['문서'],
+))
+class DocumentChecklistView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request, pk):
+        document, not_ready = get_done_document(request, self, pk)
+        if not_ready:
+            return not_ready
+        items = list(document.checklist_items.order_by('order', 'id'))
+        done_count = sum(item.done for item in items)
+        return Response({
+            'documentId': document.id,
+            'total': len(items),
+            'doneCount': done_count,
+            # 모두 끝났을 때만 100이 되도록 버림한다.
+            'progress': done_count * 100 // len(items) if items else 0,
+            'items': ChecklistItemSerializer(items, many=True).data,
+        })
+
+
+@extend_schema_view(patch=extend_schema(
+    operation_id='document_checklist_item_update',
+    summary='체크리스트 항목 완료 체크',
+    description=(
+        'done만 수정할 수 있습니다. true면 완료 시각(doneAt)을 기록하고, '
+        '이미 완료된 항목이면 처음 완료 시각을 유지합니다. false면 doneAt을 비웁니다. '
+        '다른 필드를 보내면 400을 반환합니다. '
+        '처리 중이거나 실패한 문서는 결과 조회 API와 같은 409를 반환하고, '
+        '타인 문서·없는 문서·다른 문서의 항목은 동일하게 404를 반환합니다.'
+    ),
+    parameters=[PK_PARAMETER, CHECKLIST_ITEM_PARAMETER],
+    request=ChecklistItemUpdateSerializer,
+    responses={
+        200: ChecklistItemSerializer,
+        400: error_response('VALIDATION_ERROR: done 누락·형식 오류 또는 수정할 수 없는 필드'),
+        401: error_response('NOT_AUTHENTICATED / AUTHENTICATION_FAILED: Bearer Access Token 누락 또는 무효'),
+        403: error_response('PERMISSION_DENIED: 접근 권한 없음'),
+        404: error_response('NOT_FOUND: 접근 가능한 문서 또는 항목이 없음'),
+        405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
+        409: DocumentNotReadySerializer,
+    },
+    examples=[
+        OpenApiExample('완료 체크', value={'done': True}, request_only=True),
+        OpenApiExample('완료한 항목', value={
+            **CHECKLIST_ITEM_EXAMPLE, 'done': True, 'doneAt': '2026-08-20T10:30:00+09:00',
+        }, response_only=True, status_codes=['200']),
+        OpenApiExample('수정할 수 없는 필드', value={
+            'code': 'VALIDATION_ERROR', 'message': '입력값을 확인해 주세요.',
+            'details': {'text': ['수정할 수 없는 필드입니다.']},
+        }, response_only=True, status_codes=['400']),
+        *NOT_READY_EXAMPLES,
+    ],
+    tags=['문서'],
+))
+class DocumentChecklistItemView(APIView):
+    permission_classes = [IsOwner]
+
+    def patch(self, request, pk, item_id):
+        document, not_ready = get_done_document(request, self, pk)
+        if not_ready:
+            return not_ready
+        # 동시에 완료 체크가 와도 처음 완료 시각이 덮어써지지 않게 행을 잠그고 읽는다.
+        with transaction.atomic():
+            item = get_object_or_404(ChecklistItem.objects.select_for_update(), pk=item_id, document=document)
+            serializer = ChecklistItemUpdateSerializer(item, data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+        return Response(ChecklistItemSerializer(item).data)
 
 
 SCHEDULE_EXAMPLE = {
@@ -485,7 +696,11 @@ class ScheduleDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def update(self, request, *args, **kwargs):
         schedule = self.get_object()
-        serializer = ScheduleUpdateSerializer(schedule, data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        # 동시에 완료 처리가 와도 처음 완료 시각이 덮어써지지 않게 행을 잠그고 다시 읽는다.
+        with transaction.atomic():
+            # 그 사이 삭제됐으면 500이 아니라 404로 응답한다.
+            schedule = get_object_or_404(Schedule.objects.select_for_update(), pk=schedule.pk)
+            serializer = ScheduleUpdateSerializer(schedule, data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(ScheduleSerializer(schedule).data)
