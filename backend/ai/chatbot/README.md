@@ -35,12 +35,20 @@ FE Chat.jsx ──POST /api/chat/──▶ chatbot 앱
 python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks())"
 python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks([3, 5]))"  # 특정 자료만
 ```
-`sources/REFRESH.md`의 'AI 경계' 계약을 따름:
+`sources/REFRESH.md`의 'AI 경계' 계약과 자동 `ACTIVE` 전환 정책(#60)을 따름:
 - 대상: 관리자 승인(`APPROVED`)·공식 링크 있음·`INACTIVE` 아님·본문 있음 (승인 후 재처리 대기라 `PENDING`인 자료 포함)
-- 현재 승인 본문 해시로 만든 청크가 있고 임베딩 차원이 `AI_EMBED_DIM`과 같으면 건너뜀(임베딩 API도 안 부름)
+- 자료마다 처리를 시작할 때 본문 해시·`version`(승인 정보 버전)·상태를 다시 읽어 기억함
+- 현재 승인 본문 해시로 만든 청크가 있고 임베딩 차원이 `AI_EMBED_DIM`과 같으면 청크 생성을 건너뜀(임베딩 API도 안 부름)
 - 새 청크는 기존 청크 **뒤 순서에 추가**하고 `source_content_hash`에 읽은 본문 해시를 기록. 이전 청크는 삭제·ID 재사용 안 함
-- 저장 직전 본문 해시를 다시 확인. 임베딩하는 동안 새 본문이 승인됐으면 저장하지 않음(`changed`)
-- 재처리 대기 자료는 완료 시 `ai_reprocessing_required`를 해제하고 `version`을 올림. **`ACTIVE` 전환은 관리자가 Admin에서**
+- **완료 직전 검사**: 같은 트랜잭션에서 자료 행을 잠그고, 완료 처리가 `version`을 올리기 전에
+  시작 시점의 해시·`version`과 비교하고 관리자 승인·`INACTIVE` 여부를 다시 확인. 청크 생성을 건너뛰는 경로도 똑같이 검사
+  - 다 맞으면: 청크 저장 + 재처리 대기 자료는 **재처리 완료(`ai_reprocessing_required=False`)·자동 `ACTIVE` 전환·`version+1`을 함께** 반영
+  - 하나라도 다르면(`changed`): 청크를 저장하지 않고 자료도 건드리지 않음. 이 작업의 청크는 최신으로 인정하지 않고,
+    최신 상태·재처리 플래그는 그대로 둠. 다음 실행이 새 시작 값으로 다시 처리
+- 완료 처리는 `status`·`ai_reprocessing_required`·`version`·`updated_at`만 바꿈 (제목·기관 등 관리자 입력은 그대로)
+- 이미 재처리가 끝난 자료(플래그 `False`)는 상태·`version`을 바꾸지 않음. 여러 번 실행해도 청크 중복·`version` 중복 증가 없음
+- 임베딩이 실패하면 예외가 나고 자료는 기존 상태 그대로
+- 반환값: `documents`·`chunks`·`skipped`·`completed`·`activated`(그중 `ACTIVE`로 바꾼 수)·`changed`
 
 검색(`DbRetriever`)·verify 후보도 같은 계약: `ai_eligible`(ACTIVE·승인·재처리 완료·공식 링크) 자료의
 `source_content_hash`가 현재 본문 해시와 같은 청크만 씀. 승인 전 자료와 이전 본문 청크는 검색되지 않음.
