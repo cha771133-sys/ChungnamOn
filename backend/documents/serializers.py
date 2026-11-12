@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.exceptions import NotFound
 
@@ -115,6 +116,67 @@ class DocumentNotReadySerializer(serializers.Serializer):
     failReason = serializers.CharField(required=False, help_text='FAILED 상태에서만 반환하는 실패 사유')
 
 
+VERIFICATION_STATUSES = ('MATCHED', 'MISMATCH', 'UNVERIFIED')
+VERIFICATION_ITEM_KEYS = ('AMOUNT', 'DEADLINE', 'PAYMENT_METHOD', 'AGENCY_CONTACT')
+
+
+def normalize_verification(verification):
+    """저장된 verification을 C1 항목별 형식으로 맞춘다.
+
+    옛 형식 {status, sources}는 overall=status, items=[]로 바꾸고, id가 없는 출처에는 s1, s2… 를 붙인다.
+    """
+    if not isinstance(verification, dict):
+        verification = {}
+    overall = verification.get('overall') or verification.get('status')
+    if overall not in VERIFICATION_STATUSES:
+        overall = 'UNVERIFIED'
+    items = verification.get('items')
+    sources = []
+    for index, source in enumerate(verification.get('sources') or [], start=1):
+        if isinstance(source, dict):
+            sources.append({'id': f's{index}', **source} if not source.get('id') else source)
+    return {
+        'overall': overall,
+        'status': overall,
+        'items': [item for item in items if isinstance(item, dict)] if isinstance(items, list) else [],
+        'sources': sources,
+    }
+
+
+class VerificationItemSerializer(serializers.Serializer):
+    """C1 항목별 대조 결과. 문서에 값이 없는 항목은 목록에서 빠진다."""
+
+    key = serializers.ChoiceField(choices=VERIFICATION_ITEM_KEYS)
+    label = serializers.CharField(help_text='항목 이름 예: 납부 금액')
+    docValue = serializers.CharField(help_text='문서에서 읽은 값')
+    officialValue = serializers.CharField(allow_null=True, help_text='공식 자료의 값. 확인하지 못하면 null')
+    # 같은 값 목록의 enum을 여러 이름으로 만들면 Swagger 경고가 나서 enum은 overall에만 둔다.
+    status = serializers.CharField(help_text='항목 판정: MATCHED | MISMATCH | UNVERIFIED (overall과 같은 값 목록)')
+    reason = serializers.CharField(help_text='판정 이유 (한국어)')
+    sourceIds = serializers.ListField(child=serializers.CharField(), help_text='근거 출처 id (sources[].id)')
+
+
+class VerificationSourceSerializer(serializers.Serializer):
+    id = serializers.CharField(help_text='결과 안에서 쓰는 출처 id 예: s1')
+    title = serializers.CharField()
+    url = serializers.URLField()
+    checkedAt = serializers.DateField(help_text='공식 자료를 확인한 날짜')
+    publishedAt = serializers.DateField(required=False, help_text='공식 자료 게시일. 알 때만 포함')
+    sourceDocumentId = serializers.IntegerField(required=False, help_text='공식 자료 ID. RAG 대조일 때만 포함')
+
+
+class VerificationSerializer(serializers.Serializer):
+    """검증 결과 C1 형식 명세. 실제 값은 normalize_verification()이 만든다."""
+
+    overall = serializers.ChoiceField(
+        choices=VERIFICATION_STATUSES,
+        help_text='항목 중 하나라도 MISMATCH면 MISMATCH, 모두 MATCHED면 MATCHED, 그 외 UNVERIFIED',
+    )
+    status = serializers.CharField(help_text='overall과 같은 값 (기존 호환)')
+    items = VerificationItemSerializer(many=True)
+    sources = VerificationSourceSerializer(many=True)
+
+
 class DocumentResultSerializer(serializers.ModelSerializer):
     """결과 조회 응답 형식. 형식이 바뀌면 이 serializer만 고친다."""
 
@@ -123,6 +185,11 @@ class DocumentResultSerializer(serializers.ModelSerializer):
     originalText = serializers.CharField(source='original_text')
     translatedText = serializers.CharField(source='translated_text')
     requiredDocs = serializers.JSONField(source='required_docs')
+    amount = serializers.SerializerMethodField(help_text='납부 금액 예: "6,250원". 문서에 없으면 null')
+    paymentMethods = serializers.ListField(
+        source='payment_methods', child=serializers.CharField(), help_text='납부 방법. 없으면 빈 목록',
+    )
+    verification = serializers.SerializerMethodField()
     maskedCount = serializers.IntegerField(source='document.masked_count')
     lowConfidence = serializers.BooleanField(source='document.low_confidence')
 
@@ -130,10 +197,17 @@ class DocumentResultSerializer(serializers.ModelSerializer):
         model = InterpretationResult
         fields = [
             'documentId', 'docType', 'title', 'originalText', 'translatedText',
-            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'verification',
-            'maskedCount', 'lowConfidence',
+            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
+            'verification', 'maskedCount', 'lowConfidence',
         ]
         read_only_fields = fields
+
+    def get_amount(self, instance) -> str | None:
+        return instance.amount or None
+
+    @extend_schema_field(VerificationSerializer)
+    def get_verification(self, instance):
+        return normalize_verification(instance.verification)
 
 
 def get_result(document):
