@@ -16,6 +16,7 @@ from chatbot.models import ChatMessage
 from .models import ChecklistItem, Document, InterpretationResult, Schedule
 from .serializers import MAX_FILE_SIZE, normalize_verification
 from .services import pipeline
+from .services.checklist import clean_checklist
 from .services.pipeline import process_document
 from .services.runner import start_processing
 from .views import DocumentDetailView
@@ -505,7 +506,7 @@ class NormalizeVerificationTests(TestCase):
                 self.assertEqual(normalized['status'], 'UNVERIFIED')
 
     def test_non_list_items_make_overall_unverified(self):
-        for items in ('broken', 3, {'key': 'AMOUNT'}):
+        for items in ('broken', 3, {'key': 'AMOUNT'}, pipeline.verify({})['items'][0]):
             with self.subTest(items=items):
                 normalized = normalize_verification({'overall': 'MATCHED', 'items': items, 'sources': []})
 
@@ -1285,6 +1286,15 @@ class ChecklistPipelineTests(TestCase):
         self.assertEqual(len(third.text), 300)
         self.assertEqual(third.state, 'CHECK_NEEDED')
 
+    def test_due_accepts_only_calendar_date(self):
+        cases = {
+            '2026-08-31': date(2026, 8, 31), ' 2026-08-31 ': date(2026, 8, 31),
+            '2026-W01-1': None, '20260831': None, '2026-8-31': None, '2026-08-31T00:00': None, 20260831: None,
+        }
+        for due, expected in cases.items():
+            with self.subTest(due=due):
+                self.assertEqual(clean_checklist([{'text': '할 일', 'due': due}])[0]['due'], expected)
+
     def test_document_delete_removes_items(self):
         process_document(self.document.id)
 
@@ -1362,6 +1372,17 @@ class ChecklistApiTests(APITestCase):
         self.assertIsNone(undone.json()['doneAt'])
         item.refresh_from_db()
         self.assertIsNone(item.done_at)
+
+    def test_patch_locks_item_row(self):
+        with mock.patch.object(
+            ChecklistItem.objects, 'select_for_update', wraps=ChecklistItem.objects.select_for_update,
+        ) as select_for_update:
+            response = self.client.patch(
+                checklist_item_url(self.document.id, self.items[0].id), {'done': True}, format='json',
+            )
+
+        self.assertEqual(response.status_code, 200)
+        select_for_update.assert_called_once()
 
     def test_patch_rejects_other_fields(self):
         url = checklist_item_url(self.document.id, self.items[0].id)

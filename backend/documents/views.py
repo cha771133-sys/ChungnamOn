@@ -482,10 +482,12 @@ class DocumentChecklistItemView(APIView):
         document, not_ready = get_done_document(request, self, pk)
         if not_ready:
             return not_ready
-        item = get_object_or_404(ChecklistItem, pk=item_id, document=document)
-        serializer = ChecklistItemUpdateSerializer(item, data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        # 동시에 완료 체크가 와도 처음 완료 시각이 덮어써지지 않게 행을 잠그고 읽는다.
+        with transaction.atomic():
+            item = get_object_or_404(ChecklistItem.objects.select_for_update(), pk=item_id, document=document)
+            serializer = ChecklistItemUpdateSerializer(item, data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(ChecklistItemSerializer(item).data)
 
 
@@ -694,7 +696,10 @@ class ScheduleDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def update(self, request, *args, **kwargs):
         schedule = self.get_object()
-        serializer = ScheduleUpdateSerializer(schedule, data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
+        # 동시에 완료 처리가 와도 처음 완료 시각이 덮어써지지 않게 행을 잠그고 다시 읽는다.
+        with transaction.atomic():
+            schedule = Schedule.objects.select_for_update().get(pk=schedule.pk)
+            serializer = ScheduleUpdateSerializer(schedule, data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(ScheduleSerializer(schedule).data)

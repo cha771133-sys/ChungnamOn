@@ -3,12 +3,15 @@
 형식이 틀려도 문서 처리를 실패시키지 않도록, 고칠 수 있는 값은 고치고 쓸 수 없는 항목은 뺀다.
 """
 
+import re
 from datetime import date
 
 from ..models import ChecklistItem
 
 MAX_ITEMS = 50
 TEXT_MAX_LENGTH = ChecklistItem._meta.get_field('text').max_length
+# fromisoformat은 2026-W01-1 같은 주차 형식도 받아서 달력 날짜 형식을 먼저 확인한다.
+DUE_PATTERN = re.compile(r'\d{4}-\d{2}-\d{2}')
 
 
 def _text(value):
@@ -25,7 +28,7 @@ def _text_list(value):
 
 def _due(value):
     """YYYY-MM-DD 문자열만 날짜로 바꾼다. 그 외 형식은 None."""
-    if not isinstance(value, str) or len(value.strip()) != 10:
+    if not isinstance(value, str) or not DUE_PATTERN.fullmatch(value.strip()):
         return None
     try:
         return date.fromisoformat(value.strip())
