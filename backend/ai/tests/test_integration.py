@@ -413,20 +413,62 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         rag.assert_not_called()
         self.assertNotIn("sourceDocumentId", out["sources"][0])
 
-    def test_chatbot_official_sources_still_work(self):
-        """챗봇 chat_service._official_sources가 새 형식에서도 sourceDocumentId를 그대로 읽는지."""
+    def test_chatbot_official_sources_follow_item_source_ids(self):
+        """실제 verify 결과(rag, mock LLM)를 그대로 chat_service에 넣으면 MATCHED·MISMATCH 항목의 출처만 공식 출처가 된다 (#65).
+
+        items[].sourceIds → verification.sources[].id → sourceDocumentId 연결을 끝까지 확인한다.
+        """
         from chatbot.services.chat_service import _official_sources
 
-        a, b = self.source("a"), self.source("b")
-        cases = ((["MATCHED", "MATCHED"], "MATCHED"), (["MISMATCH", "MATCHED"], "MISMATCH"),
-                 (["MATCHED", "UNVERIFIED"], "UNVERIFIED"))
-        for statuses, expected in cases:
-            verification = self.verify(RESULT, llm=self.llm_items(["DEADLINE", "AGENCY_CONTACT"], statuses))
-            self.assertEqual(verification["status"], expected)
-            linked = {s["sourceDocumentId"] for s in _official_sources({"verification": verification})}
-            # MATCHED·MISMATCH면 verification.sources 전체, UNVERIFIED면 없음 (기존 계약 그대로)
-            self.assertEqual(linked, {a.pk, b.pk} if expected != "UNVERIFIED" else set())
+        docs = [self.source(p) for p in ("a", "b", "c", "d")]
+        llm = {"items": [
+            {"key": "AMOUNT", "status": "MATCHED", "officialValue": "6,250원", "reason": "같음", "sourceIds": ["s1"]},
+            {"key": "DEADLINE", "status": "MISMATCH", "officialValue": "2026-09-30", "reason": "다름",
+             "sourceIds": ["S2"]},  # 대소문자는 맞춰 줌
+            # UNVERIFIED 항목이 인용한 id는 버림 → s3는 근거가 아님
+            {"key": "PAYMENT_METHOD", "status": "UNVERIFIED", "officialValue": None, "reason": "없음",
+             "sourceIds": ["s3"]},
+            # 없는 id(s9)를 섞으면 그 항목은 UNVERIFIED → s4도 근거가 아님
+            {"key": "AGENCY_CONTACT", "status": "MATCHED", "officialValue": "041", "reason": "같음",
+             "sourceIds": ["s4", "s9"]},
+        ]}
+        verification = self.verify(llm=llm)
+        by_id = {s["id"]: s["sourceDocumentId"] for s in verification["sources"]}
+        self.assertEqual(sorted(by_id.values()), sorted(d.pk for d in docs))  # 검색된 4개 모두 sources에는 있음
+        self.assertEqual([(i["key"], i["status"], i["sourceIds"]) for i in verification["items"]], [
+            ("AMOUNT", "MATCHED", ["s1"]), ("DEADLINE", "MISMATCH", ["s2"]),
+            ("PAYMENT_METHOD", "UNVERIFIED", []), ("AGENCY_CONTACT", "UNVERIFIED", []),
+        ])
+        self.assertEqual(verification["overall"], "MISMATCH")
 
+        linked = [s["sourceDocumentId"] for s in _official_sources({"verification": verification})]
+        self.assertEqual(sorted(linked), sorted([by_id["s1"], by_id["s2"]]))
+
+        # 모두 MATCHED여도 sources 전체가 아니라 인용된 출처만
+        all_s1 = self.verify(llm=self.llm_items(self.KEYS, ["MATCHED"] * 4))
+        self.assertEqual([s["sourceDocumentId"] for s in _official_sources({"verification": all_s1})],
+                         [next(s["sourceDocumentId"] for s in all_s1["sources"] if s["id"] == "s1")])
+        # 모든 항목이 UNVERIFIED면 공식 출처 없음
+        none = self.verify(llm=self.llm_items(self.KEYS, ["UNVERIFIED"] * 4))
+        self.assertEqual(_official_sources({"verification": none}), [])
+
+    def test_output_passes_result_api_normalization_unchanged(self):
+        """성진님 결과 API·GET /verification/(normalize_verification, #67)이 내 출력을 고치거나 낮추지 않는지."""
+        import datetime
+
+        from documents.serializers import normalize_verification
+
+        good = self.source("a")
+        good.published_at = datetime.date(2026, 7, 1)
+        good.save(update_fields=["published_at"])
+        self.source("b")
+        bad_llm = {"items": [{"key": "AMOUNT", "status": "MATCHED", "officialValue": 6250, "reason": None,
+                              "sourceIds": ["s1"]}]}
+        for out in (self.verify(), self.verify(llm=self.llm_items(self.KEYS, ["MATCHED", "MISMATCH"] * 2)),
+                    self.verify(llm=bad_llm), self.verify(RESULT), self.verify({"agency": {"name": "아산시청"}}),
+                    self.verify({**C1_RESULT, "agency": {"name": "어딘가"}, "region": None})):
+            with self.subTest(overall=out["overall"], n=len(out["items"])):
+                self.assertEqual(normalize_verification(out), out)
 
 @unittest.skipUnless(DJANGO, "manage.py test로 실행")
 class ChatAnswerTests(AIEnvMixin, TestCase):
