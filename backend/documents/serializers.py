@@ -5,7 +5,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.exceptions import NotFound
 
-from .models import Document, InterpretationResult, Schedule
+from .models import ChecklistItem, Document, InterpretationResult, Schedule
 
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'pdf'}
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -146,7 +146,13 @@ def normalize_verification(verification):
         overall = 'UNVERIFIED'
 
     raw_items = verification.get('items')
-    raw_items = raw_items if isinstance(raw_items, list) else []
+    if raw_items is None:
+        # 옛 형식에는 items가 없다.
+        raw_items = []
+    elif not isinstance(raw_items, list):
+        # 항목 목록을 읽을 수 없으면 항목 하나가 맞아 보여도 판정을 믿지 않는다.
+        raw_items = []
+        overall = 'UNVERIFIED'
     items = [item for item in raw_items if is_valid_verification_item(item)]
     if len(items) != len(raw_items):
         # 일부 항목만 보고 MATCHED라고 보여주지 않도록 판정을 미확인으로 낮춘다.
@@ -338,3 +344,39 @@ class ScheduleConflictSerializer(serializers.Serializer):
 
     detail = serializers.CharField()
     scheduleId = serializers.IntegerField(help_text='이미 등록된 일정 ID')
+
+
+class ChecklistItemSerializer(serializers.ModelSerializer):
+    """체크리스트 항목 응답 형식 (C1)."""
+
+    id = serializers.IntegerField(read_only=True, help_text='항목 ID. 완료 체크 API의 itemId')
+    docs = serializers.ListField(child=serializers.CharField(), read_only=True, help_text='준비할 서류')
+    due = serializers.DateField(read_only=True, allow_null=True, help_text='기한. 없으면 null')
+    state = serializers.ChoiceField(
+        choices=ChecklistItem.State.choices, read_only=True,
+        help_text='CONFIRMED: 확정, CONDITIONAL: 조건에 따라 필요, CHECK_NEEDED: 확인 필요',
+    )
+    doneAt = serializers.DateTimeField(source='done_at', read_only=True, allow_null=True)
+    sourceIds = serializers.ListField(
+        source='source_ids', child=serializers.CharField(), read_only=True,
+        help_text='근거 출처 id. 검증 결과 API의 sources[].id',
+    )
+
+    class Meta:
+        model = ChecklistItem
+        fields = ['id', 'text', 'detail', 'docs', 'method', 'due', 'state', 'done', 'doneAt', 'note', 'sourceIds']
+        read_only_fields = fields
+
+
+class ChecklistSerializer(serializers.Serializer):
+    """체크리스트 조회 응답 명세."""
+
+    documentId = serializers.IntegerField()
+    total = serializers.IntegerField(help_text='전체 항목 수')
+    doneCount = serializers.IntegerField(help_text='완료한 항목 수')
+    progress = serializers.IntegerField(help_text='완료 비율 0~100 (소수점 버림). 항목이 없으면 0')
+    items = ChecklistItemSerializer(many=True)
+
+
+class ChecklistItemUpdateSerializer(ScheduleUpdateSerializer):
+    """체크리스트 항목 완료 체크. 일정과 같이 done만 받고 done_at을 기록한다."""

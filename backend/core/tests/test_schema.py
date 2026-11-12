@@ -50,7 +50,7 @@ class OpenAPITests(APISimpleTestCase):
         }.issubset(self.schema['paths']))
         for path in self.schema['paths']:
             with self.subTest(path=path):
-                self.assertIsNotNone(resolve(path.replace('{pk}', '1')))
+                self.assertIsNotNone(resolve(path.replace('{pk}', '1').replace('{item_id}', '1')))
         status = self.schema['paths']['/api/documents/{pk}/status/']['get']
         self.assertIn({'in': 'path', 'name': 'pk', 'schema': {'type': 'integer'},
                        'description': '문서 ID', 'required': True}, status['parameters'])
