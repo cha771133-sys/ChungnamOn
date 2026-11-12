@@ -90,7 +90,13 @@ class MockLLM:
             return {"query": hint.get("fallback_query", messages[-1]["content"])}
         source_ids = hint.get("source_ids", [])
         if hint.get("task") == "verify":
-            return {"status": "MATCHED" if source_ids else "UNVERIFIED", "reason": "[MOCK]"}
+            # 공식 자료가 있으면 모든 항목을 첫 자료 근거로 MATCHED
+            return {"items": [
+                {"key": key, "status": "MATCHED", "officialValue": "[MOCK] 공식 값", "reason": "[MOCK]",
+                 "sourceIds": source_ids[:1]} if source_ids else
+                {"key": key, "status": "UNVERIFIED", "officialValue": None, "reason": "[MOCK]", "sourceIds": []}
+                for key in hint.get("item_keys", [])
+            ]}
         if source_ids:
             first = hint.get("first_source_text", "")[:160].replace("\n", " ")
             return {

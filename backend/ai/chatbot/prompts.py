@@ -63,19 +63,31 @@ ANSWER_SYSTEM = """너는 충청남도에 사는 외국인 주민이 받은 한�
 
 
 VERIFY_SYSTEM = """너는 외국인 주민이 받은 한국어 행정문서의 해석 결과를 공식 자료와 대조하는 검증 도우미야.
-[업로드 문서]의 핵심 내용(기한, 납부·제출 방법, 준비서류, 담당기관)을 [공식 자료]와 비교해서 status를 정해:
-- MATCHED: [공식 자료] 중 하나 이상이 핵심 내용을 직접 뒷받침하고, 서로 어긋나는 내용이 없음
-- MISMATCH: [공식 자료]의 내용이 [업로드 문서]의 핵심 내용과 분명히 다름
-- UNVERIFIED: [공식 자료]가 이 문서와 관련이 적거나, 핵심 내용을 확인할 수 없음
+[대조 항목]의 문서 값 하나하나를 [공식 자료]와 비교해서 항목마다 status를 정해:
+- MATCHED: [공식 자료]가 이 항목의 문서 값을 직접 뒷받침함 (예: 공식 납부 기간 안에 문서 기한이 있음)
+- MISMATCH: [공식 자료]의 내용이 이 항목의 문서 값과 분명히 다름
+- UNVERIFIED: [공식 자료]에 이 항목을 확인할 내용이 없거나, 확실하지 않음
 규칙:
-- 확실하지 않으면 UNVERIFIED. 네 일반 지식으로 판단하지 마.
-- 개인별 세액·이름처럼 공식 자료에 나올 수 없는 값은 비교에서 빼.
+- 확실하지 않으면 UNVERIFIED. 네 일반 지식으로 판단하지 마. [공식 자료]에 적힌 내용만 근거로 써.
+- 개인별 세액처럼 공식 자료에 그대로 나올 수 없는 값은, 공식 자료에 계산 기준이 있을 때만 MATCHED/MISMATCH로 판단해.
 - 마스킹(***, [주소 가림])된 개인정보를 추측하지 마.
-반드시 JSON 하나만 출력: {"status": "MATCHED|MISMATCH|UNVERIFIED", "reason": "한국어 한 문장"}"""
+- sourceIds에는 판단 근거로 실제 쓴 [공식 자료] id(s1, s2 ...)만 넣어. MATCHED·MISMATCH는 근거 id가 꼭 있어야 해.
+- officialValue: 공식 자료에 적힌 해당 값을 한국어로 짧게. UNVERIFIED면 null.
+- reason: 판단 이유를 한국어 한 문장으로.
+- [대조 항목]에 있는 key만, 항목마다 한 번씩 답해.
+반드시 JSON 하나만 출력:
+{"items": [{"key": "DEADLINE", "status": "MATCHED|MISMATCH|UNVERIFIED", "officialValue": "..." 또는 null,
+            "reason": "...", "sourceIds": ["s1"]}]}"""
 
 
-def verify_user_message(doc: dict, results) -> str:
-    return f"[업로드 문서]\n{document_block(doc)}\n\n[공식 자료]\n{sources_block(results)}"
+def verify_user_message(doc: dict, values, results) -> str:
+    """values: [(key, label, doc_value)] 대조할 항목, results: 공식 자료 검색 결과 (s1, s2 ... 순서)."""
+    items = "\n".join(f"- {key} ({label}): {value}" for key, label, value in values)
+    return (
+        f"[업로드 문서]\n{document_block(doc)}\n\n"
+        f"[대조 항목]\n{items}\n\n"
+        f"[공식 자료]\n{sources_block(results, prefix='s')}"
+    )
 
 
 def document_block(doc: dict) -> str:
