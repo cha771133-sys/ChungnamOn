@@ -300,3 +300,55 @@ class CallScriptAndModeTests(AIEnvMixin, TestCase):
                 out = build_actions(result, v, None)
             self.assertEqual(set(out), {"checklist", "call_script"})
             self.assertIsInstance(out["checklist"], list)
+
+
+@unittest.skipUnless(DJANGO, "manage.py test로 실행")
+@override_settings(DOCUMENTS_CHECKLIST_MODE="rag")
+class ChecklistWithRealVerifyTests(AIEnvMixin, TestCase):
+    """실제 verify_interpretation()(rag, mock LLM) 결과를 그대로 넣었을 때 state·sourceIds가 채워지는지 (#63)."""
+
+    def run_both(self, verify_items=None):
+        from ai.chatbot import build_actions, verify_interpretation
+        from ai.chatbot.llm import MockLLM
+
+        real = MockLLM.complete_json
+
+        def fake(llm_self, system, messages, *, mock_hint=None, **kw):
+            if (mock_hint or {}).get("task") == "verify" and verify_items is not None:
+                return {"items": verify_items}
+            return real(llm_self, system, messages, mock_hint=mock_hint, **kw)
+
+        with mock.patch.object(MockLLM, "complete_json", fake):
+            v = verify_interpretation(RESULT)
+            return v, build_actions(RESULT, v, "vi")
+
+    def test_all_matched_verify_confirms_payment(self):
+        self.source("a")
+        v, out = self.run_both()  # mock verify: 모든 항목 MATCHED, s1 근거
+        self.assertEqual(v["overall"], "MATCHED")
+        pay = out["checklist"][0]
+        self.assertEqual((pay["text"], pay["state"], pay["sourceIds"]),
+                         ("2026년 8월 31일까지 6,250원 내기", "CONFIRMED", ["s1"]))
+        self.assertTrue(all(i in [s["id"] for s in v["sources"]] for i in pay["sourceIds"]))
+        # 연락처가 MATCHED라 연락처 확인 항목은 없음, 준비서류는 근거가 없어 CHECK_NEEDED
+        self.assertNotIn("연락처 확인하기", " ".join(i["text"] for i in out["checklist"]))
+        self.assertEqual({i["state"] for i in out["checklist"] if i["docs"]}, {"CHECK_NEEDED"})
+
+    def test_mismatch_and_unverified_items_from_verify(self):
+        self.source("a"), self.source("b")
+        v, out = self.run_both([
+            {"key": "AMOUNT", "status": "MATCHED", "officialValue": "6,250원", "reason": "같음", "sourceIds": ["s1"]},
+            {"key": "DEADLINE", "status": "UNVERIFIED", "officialValue": None, "reason": "없음", "sourceIds": []},
+            {"key": "PAYMENT_METHOD", "status": "MATCHED", "officialValue": "위택스", "reason": "같음",
+             "sourceIds": ["s2"]},
+            {"key": "AGENCY_CONTACT", "status": "MISMATCH", "officialValue": "041-111-1111", "reason": "다름",
+             "sourceIds": ["s2"]},
+        ])
+        self.assertEqual(v["overall"], "MISMATCH")
+        items = {i["text"]: i for i in out["checklist"]}
+        pay = items["2026년 8월 31일까지 6,250원 내기"]
+        self.assertEqual((pay["state"], pay["sourceIds"]), ("CHECK_NEEDED", ["s1", "s2"]))  # DEADLINE 미확인
+        agency = items["아산시청 세무과 연락처 확인하기"]
+        self.assertEqual((agency["state"], agency["sourceIds"]), ("CHECK_NEEDED", ["s2"]))
+        self.assertIn("기한이 맞는지", out["call_script"].replace("금액과 납부 기한", "기한이 맞는지"))
+        self.assertNotIn("041-111-1111", out["call_script"])
