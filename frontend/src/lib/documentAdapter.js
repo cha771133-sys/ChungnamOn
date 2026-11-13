@@ -25,15 +25,87 @@ export function localToday() {
 /** 출처 URL에서 기관을 짐작할 수 있도록 도메인만 꺼낸다. */
 function hostOf(url) {
   try {
-    return new URL(url).hostname.replace(/^www\./, '')
+    return new URL(url).hostname.replace(/^www\./, '') || '공식 자료'
   } catch {
     return '공식 자료'
   }
 }
 
 const VERIFY_REASON = {
+  MATCHED: '문서 내용과 공식 자료가 같아요.',
   UNVERIFIED: '관련 공식 자료를 찾지 못했어요. 담당기관에 직접 확인하세요.',
   MISMATCH: '문서 내용과 공식 자료가 서로 달라요. 어느 쪽이 맞는지 단정할 수 없어요.',
+}
+
+const VERIFY_STATUSES = ['MATCHED', 'MISMATCH', 'UNVERIFIED']
+
+/** 대조 항목 key → 화면 항목 이름(한국어 원문, 화면에서 T()로 번역). 모르는 key는 서버 label을 쓴다 */
+const VERIFY_LABEL = {
+  AMOUNT: '납부 금액',
+  DEADLINE: '납부 기한',
+  PAYMENT_METHOD: '납부 방법',
+  AGENCY_CONTACT: '문의 연락처',
+}
+
+/** 알 수 없는 검증 상태는 근거 없이 단정하지 않도록 미확인으로 본다 */
+function verifyStatus(value) {
+  return VERIFY_STATUSES.includes(value) ? value : 'UNVERIFIED'
+}
+
+/**
+ * 서버 검증 결과를 화면의 대조 항목과 근거 자료로 바꾼다.
+ * - C1 형식(overall·items·sources): 항목별로 보여주고, 항목의 sourceIds로 근거 자료를 찾는다
+ * - 예전 형식(status·sources만): 문서 전체 한 줄로 보여준다
+ * 근거 자료가 하나도 없는 일치·불일치 항목은 근거를 보여줄 수 없으므로 미확인으로 낮춘다.
+ */
+export function adaptVerification(verification, docKey, docTitle) {
+  const v = verification ?? {}
+  const sourceMap = {}
+  const keyOf = {}
+  ;(Array.isArray(v.sources) ? v.sources : []).forEach((s, i) => {
+    if (!s || typeof s !== 'object') return
+    const key = `${docKey}-src${i}`
+    if (s.id != null) keyOf[String(s.id)] = key
+    sourceMap[key] = {
+      agency: hostOf(s.url),
+      title: s.title || '공식 자료',
+      url: s.url,
+      checkedAt: String(s.checkedAt ?? '').slice(0, 10),
+      publishedAt: s.publishedAt ? String(s.publishedAt).slice(0, 10) : null,
+    }
+  })
+  const items = Array.isArray(v.items) ? v.items.filter((it) => it && typeof it === 'object') : []
+  if (!items.length) {
+    const status = verifyStatus(v.overall ?? v.status)
+    const sources = Object.keys(sourceMap)
+    const shown = status !== 'UNVERIFIED' && !sources.length ? 'UNVERIFIED' : status
+    return {
+      sourceMap,
+      verification: [{ id: 'overall', label: '문서 내용 전체', docValue: docTitle || '문서 내용', status: shown, reason: VERIFY_REASON[shown], genericReason: VERIFY_REASON[shown], sources }],
+    }
+  }
+  const verificationItems = items.map((it, i) => {
+    const sources = (Array.isArray(it.sourceIds) ? it.sourceIds : []).map((sid) => keyOf[String(sid)]).filter(Boolean)
+    const raw = verifyStatus(it.status)
+    const status = raw !== 'UNVERIFIED' && !sources.length ? 'UNVERIFIED' : raw
+    // 서버 설명은 대조 결과와 맞을 때만 쓴다 (상태를 낮췄으면 일반 안내로 바꾼다)
+    const serverReason = status === raw && typeof it.reason === 'string' && it.reason.trim() ? it.reason.trim() : ''
+    return {
+      id: it.key ? String(it.key).toLowerCase() : `item${i}`,
+      key: it.key ?? null,
+      label: VERIFY_LABEL[it.key] ?? it.label ?? '확인 항목',
+      docValue: it.docValue ?? '',
+      officialValue: it.officialValue ?? '',
+      status,
+      reason: serverReason || VERIFY_REASON[status],
+      // 상태별 기본 안내 (번역 사전에 있어 모든 언어로 보여줄 수 있다)
+      genericReason: VERIFY_REASON[status],
+      // 서버가 한국어로 쓴 설명이라 다른 언어 화면에서는 원문 설명으로 따로 보여준다
+      serverReason: Boolean(serverReason),
+      sources,
+    }
+  })
+  return { sourceMap, verification: verificationItems }
 }
 
 /**
@@ -46,19 +118,9 @@ const VERIFY_REASON = {
 export function adaptResult(raw, meta) {
   const lang = meta.language
   const id = localDocId(raw.documentId)
-  const verification = raw.verification ?? { status: 'UNVERIFIED', sources: [] }
-  const sourceMap = {}
-  const sourceIds = (verification.sources ?? []).map((s, i) => {
-    const key = `${id}-src${i}`
-    sourceMap[key] = {
-      agency: hostOf(s.url),
-      title: s.title,
-      url: s.url,
-      checkedAt: String(s.checkedAt ?? '').slice(0, 10),
-      publishedAt: null,
-    }
-    return key
-  })
+  const { sourceMap, verification } = adaptVerification(raw.verification, id, raw.title)
+  // 문의 연락처가 공식 자료와 다르면 담당기관 화면에서 두 번호를 나란히 보여준다
+  const contact = verification.find((it) => it.key === 'AGENCY_CONTACT')
   const summary = raw.summary ?? []
   const agency = raw.agency ?? {}
 
@@ -81,29 +143,26 @@ export function adaptResult(raw, meta) {
     deadlines: raw.deadlines ?? [],
     task: { [lang]: summary[0] ?? '' },
     requiredDocs: raw.requiredDocs ?? [],
+    amount: typeof raw.amount === 'string' && raw.amount.trim() ? raw.amount.trim() : null,
+    paymentMethods: Array.isArray(raw.paymentMethods) ? raw.paymentMethods.filter((m) => typeof m === 'string' && m.trim()) : [],
     summary: { [lang]: summary },
     translated: { [lang]: raw.translatedText ?? '' },
     original: raw.originalText ?? '',
     // 단어가 비어 있는 용어는 화면에서 쓸 수 없으므로 뺀다
-    terms: (raw.terms ?? [])
-      .filter((t) => typeof t?.word === 'string' && t.word.trim())
-      .map((t) => ({ word: t.word.trim(), explain: { [lang]: t.explain ?? '' } })),
-    // 서버는 문서 전체에 대한 대조 결과 하나를 준다 (항목별 대조는 백엔드 A5 작업 후 확장)
-    verification: [
-      {
-        id: 'overall',
-        label: '문서 내용 전체',
-        docValue: raw.title || '문서 내용',
-        status: verification.status,
-        reason: VERIFY_REASON[verification.status],
-        sources: sourceIds,
-      },
-    ],
+    terms: (raw.terms ?? []).filter((t) => typeof t?.word === 'string' && t.word.trim()).map((t) => ({ word: t.word.trim(), explain: { [lang]: t.explain ?? '' } })),
+    verification,
     sourceMap,
     // 체크리스트는 백엔드 체크리스트 API(A6) 연결 전까지 비워 둔다
     checklist: [],
-    agency: { name: agency.name || '확인되지 않음', phone: agency.phone || '', sourceId: null },
-    callScript: null,
+    agency: {
+      name: agency.name || '확인되지 않음',
+      phone: agency.phone || '',
+      // 연락처가 공식 자료와 일치하면 그 자료를 출처로 보여준다
+      sourceId: contact?.status === 'MATCHED' ? (contact.sources[0] ?? null) : null,
+      conflict: contact?.status === 'MISMATCH' && /\d{2,}/.test(contact.officialValue) && contact.sources.length ? { phone: contact.officialValue, sourceId: contact.sources[0] } : null,
+    },
+    // 서버가 전화·방문용 한국어 문장을 주면 쓰고, 없으면 담당기관 화면이 문서 정보로 만든다
+    callScript: typeof raw.callScript === 'string' && raw.callScript.trim() ? raw.callScript.trim() : null,
     suggestedQuestions: [],
   }
 }

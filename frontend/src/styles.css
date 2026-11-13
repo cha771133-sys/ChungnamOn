@@ -451,6 +451,21 @@ ol {
   background: var(--slate-soft);
   color: var(--slate);
 }
+.callout.tone-green {
+  background: var(--green-soft);
+  color: var(--green);
+}
+.callout p {
+  margin: 0;
+}
+.callout .evidence-original {
+  margin-top: 8px;
+  font-size: 13.5px;
+  opacity: 0.85;
+}
+.evidence-original span {
+  font-weight: 700;
+}
 .callout.tone-seal {
   background: var(--seal-soft);
   color: #8e2219;

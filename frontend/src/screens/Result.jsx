@@ -147,6 +147,18 @@ export default function Result({ docId }) {
               {T('연락처 보기')} <ChevronRight size={14} />
             </span>
           </button>
+          {doc.amount && (
+            <div className="fact">
+              <span className="fact-label">{T('납부 금액')}</span>
+              <strong>{doc.amount}</strong>
+            </div>
+          )}
+          {doc.paymentMethods?.length > 0 && (
+            <div className="fact">
+              <span className="fact-label">{T('납부 방법')}</span>
+              <strong>{doc.paymentMethods.map((m) => (view === 'ko' ? m : T(m))).join(', ')}</strong>
+            </div>
+          )}
           <div className="fact">
             <span className="fact-label">{T('준비서류')}</span>
             <strong>{doc.requiredDocs.length ? doc.requiredDocs.map((d) => (view === 'ko' ? d : T(d))).join(', ') : T('확인되지 않음')}</strong>
@@ -163,7 +175,7 @@ export default function Result({ docId }) {
                 <button className={`verify-row tone-${item.status}`} onClick={() => openEvidence(item.id)}>
                   <span className="verify-main">
                     <span className="verify-label">{T(item.label)}</span>
-                    <strong>{item.docValue}</strong>
+                    <strong>{item.docValue || T('확인되지 않음')}</strong>
                     <span className="verify-src">
                       {item.sources.length
                         ? T('{v0} 자료, {v1} 확인', {
