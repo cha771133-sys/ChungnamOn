@@ -20,10 +20,16 @@ SOURCES = [{"id": f"s{i}", "title": f"자료 {i}", "url": "https://www.asan.go.k
            for i in range(1, 5)]
 
 
-def verification(statuses: dict, ids: dict | None = None, sources=None) -> dict:
+# 실제 verify(#63)처럼 DEADLINE docValue에는 문서의 기한을 모두 이어 붙인다
+DOC_VALUES = {"DEADLINE": "납부 마감 2026-08-31, 감면 신청 2026-07-31"}
+
+
+def verification(statuses: dict, ids: dict | None = None, sources=None, doc_values: dict | None = None) -> dict:
     """{key: status} → C1 verification. ids로 항목별 sourceIds를 정함 (기본: MATCHED·MISMATCH면 s1)."""
     ids = ids or {}
-    items = [{"key": k, "label": k, "docValue": "v", "officialValue": None if s == "UNVERIFIED" else "o",
+    doc_values = {**DOC_VALUES, **(doc_values or {})}
+    items = [{"key": k, "label": k, "docValue": doc_values.get(k, "v"),
+              "officialValue": None if s == "UNVERIFIED" else "o",
               "status": s, "reason": "r", "sourceIds": ids.get(k, [] if s == "UNVERIFIED" else ["s1"])}
              for k, s in statuses.items()]
     overall = "MISMATCH" if "MISMATCH" in statuses.values() else (
@@ -120,6 +126,51 @@ class ChecklistRulesTests(ChecklistBase, TestCase):
         docs = [i for i in self.build()["checklist"] if i["docs"]]
         self.assertEqual({i["state"] for i in docs}, {"CHECK_NEEDED"})
 
+    def test_private_phone_with_spaces_is_removed_from_script(self):
+        for phone in ("010 1234 5678", "02 2110 4092", "041 537 3001", "041-537 3001"):
+            with self.subTest(phone=phone):
+                result = {**RESULT, "agency": {"name": f"세무과 {phone}", "phone": phone},
+                          "title": f"고지서 {phone}", "payment_methods": [f"전화 {phone}"]}
+                script = self.build(result)["call_script"]
+                self.assertNotIn(phone, script)
+                self.assertNotIn(phone.replace(" ", ""), script.replace(" ", ""))
+                self.assertIn("금액: 6,250원", script)  # 금액·날짜는 남음
+                self.assertIn("2026년 8월 31일", script)
+
+    def test_bad_deadlines_are_skipped_without_error(self):
+        texts = lambda out: [i["text"] for i in out["checklist"]]  # noqa: E731
+        base = {**RESULT, "required_docs": [], "payment_methods": [], "agency": {"name": "아산시청"}}
+        for deadlines in (42, "2026-08-31", {"date": "2026-08-31"}, None):
+            with self.subTest(deadlines=deadlines):
+                out = self.build({**base, "deadlines": deadlines})
+                self.assertEqual(texts(out), ["6,250원 내기"])  # 납부 항목은 남음
+                self.assertIn("금액: 6,250원", out["call_script"])
+        # 목록 안의 이상한 항목만 빠지고 정상 기한은 남음
+        mixed = [42, None, "x", {"label": 3, "date": 5}, {"label": "납부 마감", "date": "2026-08-31"}]
+        self.assertEqual(texts(self.build({**base, "deadlines": mixed})), ["2026년 8월 31일까지 6,250원 내기"])
+
+    def test_deadline_result_applies_only_to_same_date(self):
+        # DEADLINE 검증 항목이 납부 기한(8/31)만 대조함 → 감면 신청(7/31)에는 적용하지 않음
+        v = verification(ALL_MATCHED, ids={"DEADLINE": ["s2"]}, doc_values={"DEADLINE": "납부 마감 2026-08-31"})
+        items = self.by_text(self.build(v=v))
+        pay = items["2026년 8월 31일까지 6,250원 내기"]
+        self.assertEqual((pay["state"], pay["sourceIds"]), ("CONFIRMED", ["s1", "s2"]))
+        other = items["2026년 7월 31일까지 감면 신청 확인하기"]
+        self.assertEqual((other["state"], other["sourceIds"]), ("CHECK_NEEDED", []))
+
+        # 반대로 감면 신청만 대조했으면 납부 항목은 DEADLINE 근거가 없어 CHECK_NEEDED (금액·방법 근거만)
+        v = verification(ALL_MATCHED, ids={"DEADLINE": ["s2"], "AMOUNT": ["s1"], "PAYMENT_METHOD": ["s3"]},
+                         doc_values={"DEADLINE": "감면 신청 2026-07-31"})
+        items = self.by_text(self.build(v=v))
+        pay = items["2026년 8월 31일까지 6,250원 내기"]
+        self.assertEqual((pay["state"], pay["sourceIds"]), ("CHECK_NEEDED", ["s1", "s3"]))
+        other = items["2026년 7월 31일까지 감면 신청 확인하기"]
+        self.assertEqual((other["state"], other["sourceIds"]), ("CONFIRMED", ["s2"]))
+
+        # docValue에 날짜가 없으면 어느 기한에도 적용하지 않음
+        v = verification(ALL_MATCHED, doc_values={"DEADLINE": "8월 말"})
+        self.assertEqual({i["state"] for i in self.build(v=v)["checklist"] if i["due"]}, {"CHECK_NEEDED"})
+
     def test_source_ids_only_matched_mismatch_and_existing(self):
         v = verification(
             {"AMOUNT": "MATCHED", "DEADLINE": "UNVERIFIED", "PAYMENT_METHOD": "MATCHED", "AGENCY_CONTACT": "MISMATCH"},
@@ -208,6 +259,26 @@ class ChecklistLLMTests(ChecklistBase, TestCase):
 
         lost = self.build(v=self.v(), language="vi", llm=self.llm({"index": 0, "text": "Nộp thuế trước 31/8/2026"}))
         self.assertEqual(lost["checklist"][0]["text"], "2026년 8월 31일까지 6,250원 내기")  # 금액이 빠짐
+        # 숫자는 개수까지 원문과 같아야 함: 추가·중복·누락은 모두 거부 → 한국어
+        korean = "2026년 8월 31일까지 6,250원 내기"
+        for name, text in {
+            "추가": "Nộp 6.250 won trước ngày 31/8/2026 (gọi 1)",
+            "중복": "Nộp 6.250 won (6.250 won) trước ngày 31/8/2026",
+            "누락": "Nộp 6.250 won trước ngày 31/8",
+            "바뀜": "Nộp 6.250 won trước ngày 30/8/2026",
+        }.items():
+            with self.subTest(name):
+                out = self.build(v=self.v(), language="vi", llm=self.llm({"index": 0, "text": text}))
+                self.assertEqual(out["checklist"][0]["text"], korean)
+        # 순서만 다르고 같은 숫자·같은 개수면 통과
+        ok = self.build(v=self.v(), language="vi", llm=self.llm(
+            {"index": 0, "text": "31/8/2026: nộp 6.250 won", "detail": "Hạn nộp: 31/8/2026",
+             "method": "Quầy ngân hàng, tài khoản ảo, Wetax"}))
+        self.assertEqual(ok["checklist"][0]["text"], "31/8/2026: nộp 6.250 won")
+        # 원문에 숫자가 없는데 번역에 숫자가 생겨도 거부
+        extra = self.build(v=self.v(), language="vi", llm=self.llm({"index": 2, "text": "Chuẩn bị 2 giấy báo thuế"}))
+        self.assertEqual(extra["checklist"][2]["text"], "고지서 준비하기")
+
         # 한국어 사용자면 LLM 문장으로 바꾸지 않음
         ko = self.build(v=self.v(), language="ko", llm=self.llm({"index": 2, "text": "다른 문장"}))
         self.assertEqual(ko["checklist"][2]["text"], "고지서 준비하기")

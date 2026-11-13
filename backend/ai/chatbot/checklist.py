@@ -18,12 +18,13 @@ rag:   interpret의 checklist는 무시하고 해석 결과 + verify(C1) 결과�
   3. LLM 한 번으로 사용자 언어 번역 + CONDITIONAL 판정. 코드가 다시 검사한다.
      - CONFIRMED → CONDITIONAL로 낮추는 것만 허용 (조건 설명 note + 실제 근거 id 필요)
      - 준비서류는 verify에 항목이 없어 LLM이 공식 자료로 판정. 실제 근거 id가 있을 때만 CONFIRMED/CONDITIONAL
-     - 번역문에서 금액·날짜 숫자가 바뀌거나 빠지면 그 항목은 한국어 초안을 씀
+     - 번역문의 금액·날짜 숫자가 원문과 개수까지 같지 않으면(추가·중복·누락) 그 항목은 한국어 초안을 씀
   4. LLM이 실패하면 한국어 초안 그대로 (문서 처리는 실패시키지 않음)
 개인 자격(비자·국적 등)은 판단하지 않는다. 로그에는 문서 내용을 남기지 않는다.
 """
 import json
 import logging
+from collections import Counter
 import os
 import re
 
@@ -41,11 +42,13 @@ PAYMENT_WORDS = ("납부", "납기", "납입", "수납", "내는", "낼 ")
 MAX_SOURCE_CHARS = 1500
 MAX_FIELD_CHARS = 1000
 DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 NUMBER_RE = re.compile(r"\d+(?:[.,\s]\d{3})*")
 
 # 대본에 들어가면 안 되는 것: 마스킹 표시·전화번호·주민/외국인등록번호·계좌번호·긴 숫자·이메일
 PRIVATE_PATTERNS = [re.compile(p) for p in (
     r"\*{2,}", r"\[[^\]]*가림\]", r"\d{2,4}-\d{3,4}-\d{4}", r"01[016789]\d{7,8}",
+    r"(?<!\d)0\d{1,2}[\s-]+\d{3,4}[\s-]+\d{4}(?!\d)",  # 010 1234 5678, 02 2110 4092, 041 537-3001
     r"\d{6}\s*-?\s*[1-8]\d{6}", r"\d{2,6}-\d{2,6}-\d{2,8}", r"\d{9,}", r"[\w.+-]+@[\w-]+\.[\w.]+",
 )]
 
@@ -83,6 +86,15 @@ def _due(value: str):
     return value if DATE_RE.match(value) else None
 
 
+def _deadlines(doc: dict) -> list[tuple[str, str]]:
+    """[(label, date)]. deadlines가 목록이 아니거나 항목 형식이 이상하면 그 기한만 뺀다."""
+    raw = doc.get("deadlines")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [(_text(d.get("label")) or "기한", _text(d.get("date")))
+            for d in raw if isinstance(d, dict) and _text(d.get("date"))]
+
+
 def _is_payment(label: str) -> bool:
     return any(w in label for w in PAYMENT_WORDS)
 
@@ -90,9 +102,10 @@ def _is_payment(label: str) -> bool:
 # ── 1·2. 규칙: 초안과 state ──
 
 def _verification(verification) -> tuple[dict, list[str]]:
-    """C1 verification → ({key: (status, 근거 id 목록)}, 실제 있는 출처 id 목록).
+    """C1 verification → ({key: (status, 근거 id 목록, docValue의 날짜 집합)}, 실제 있는 출처 id 목록).
 
     근거 id는 MATCHED·MISMATCH 항목의 것만, sources에 실제 있는 것만 남긴다 (#65 챗봇 규칙과 같음).
+    날짜 집합은 DEADLINE 결과를 같은 날짜의 기한에만 적용하려고 docValue에서 YYYY-MM-DD를 뽑은 것.
     """
     v = verification if isinstance(verification, dict) else {}
     sources = v.get("sources") if isinstance(v.get("sources"), list) else []
@@ -106,21 +119,26 @@ def _verification(verification) -> tuple[dict, list[str]]:
             continue
         ids = item.get("sourceIds") if isinstance(item.get("sourceIds"), list) else []
         ids = [i for i in dict.fromkeys(_text(i) for i in ids) if i in source_ids] if status != "UNVERIFIED" else []
-        items[key] = (status, ids)
+        items[key] = (status, ids, set(ISO_DATE_RE.findall(_text(item.get("docValue")))))
     return items, source_ids
 
 
-def _linked(keys, items) -> tuple[str, list[str]]:
-    """문서 값이 있는 verify 항목 keys가 모두 MATCHED면 CONFIRMED. 하나라도 없거나 아니면 CHECK_NEEDED."""
+def _linked(keys, items, date=None) -> tuple[str, list[str]]:
+    """문서 값이 있는 verify 항목 keys가 모두 MATCHED면 CONFIRMED. 하나라도 없거나 아니면 CHECK_NEEDED.
+
+    DEADLINE 결과는 그 검증 항목 docValue의 날짜와 같은 기한(date)에만 적용한다. 날짜가 다르면 없는 것으로 본다.
+    """
     linked = [items.get(k) for k in keys]
+    linked = [None if k == "DEADLINE" and x and date not in x[2] else x for k, x in zip(keys, linked)]
     state = CONFIRMED if linked and all(x and x[0] == "MATCHED" for x in linked) else CHECK_NEEDED
     ids = list(dict.fromkeys(i for x in linked if x for i in x[1]))
     return state, ids
 
 
-def _draft(kind, text, *, keys=(), items=None, detail="", docs=(), method="", due=None, state=None, ids=()):
+def _draft(kind, text, *, keys=(), items=None, date=None, detail="", docs=(), method="", due=None, state=None,
+           ids=()):
     if keys:
-        state, ids = _linked(keys, items)
+        state, ids = _linked(keys, items, date)
     return {"kind": kind, "text": text, "detail": detail, "docs": list(docs), "method": method, "due": due,
             "state": state or CHECK_NEEDED, "note": "", "sourceIds": list(ids)}
 
@@ -128,8 +146,7 @@ def _draft(kind, text, *, keys=(), items=None, detail="", docs=(), method="", du
 def _drafts(doc: dict, items: dict) -> list[dict]:
     amount = _text(doc.get("amount"))
     methods = _texts(doc.get("payment_methods"))
-    deadlines = [(_text(d.get("label")) or "기한", _text(d.get("date")))
-                 for d in doc.get("deadlines") or [] if isinstance(d, dict) and _text(d.get("date"))]
+    deadlines = _deadlines(doc)
     pay_deadline = next((d for d in deadlines if _is_payment(d[0])), None)
     out = []
 
@@ -138,7 +155,7 @@ def _drafts(doc: dict, items: dict) -> list[dict]:
         when = f"{_date_ko(pay_deadline[1])}까지 " if pay_deadline else ""
         text = f"{when}{amount + ' ' if amount else ''}내기" if (when or amount) else "납부하기"
         keys = [k for k, has in (("AMOUNT", amount), ("DEADLINE", pay_deadline), ("PAYMENT_METHOD", methods)) if has]
-        out.append(_draft("payment", text, keys=keys, items=items,
+        out.append(_draft("payment", text, keys=keys, items=items, date=pay_deadline[1] if pay_deadline else None,
                           detail=f"{pay_deadline[0]}: {_date_ko(pay_deadline[1])}" if pay_deadline else "",
                           method=", ".join(methods), due=_due(pay_deadline[1]) if pay_deadline else None))
 
@@ -147,7 +164,7 @@ def _drafts(doc: dict, items: dict) -> list[dict]:
         if (label, date) == pay_deadline:
             continue
         out.append(_draft("deadline", f"{_date_ko(date)}까지 {label} 확인하기", keys=["DEADLINE"], items=items,
-                          due=_due(date)))
+                          date=date, due=_due(date)))
 
     # ③ 준비서류 (verify에 항목이 없어 기본 CHECK_NEEDED, LLM 단계에서 판정)
     for name in _texts(doc.get("required_docs")):
@@ -216,17 +233,18 @@ def _user_message(drafts, texts) -> str:
     return f"[할 일]\n{json.dumps(todo, ensure_ascii=False, indent=1)}\n\n[공식 자료]\n{sources}"
 
 
-def _numbers(text: str) -> set[str]:
-    """6,250 / 6.250 / 6 250을 모두 6250으로 보고 비교."""
-    return {re.sub(r"\D", "", n) for n in NUMBER_RE.findall(text)}
+def _numbers(text: str) -> Counter:
+    """금액·날짜 숫자를 개수까지 센다. 6,250 / 6.250 / 6 250은 모두 6250으로 본다."""
+    return Counter(re.sub(r"\D", "", n) for n in NUMBER_RE.findall(text))
 
 
 def _translated(draft: dict, raw: dict) -> dict | None:
-    """번역된 text·detail·method. 빈 값이 있거나 숫자가 바뀌었으면 None (한국어 초안을 씀)."""
+    """번역된 text·detail·method. 빈 값이 있거나 숫자가 원문과 다르면 None (한국어 초안을 씀)."""
     out = {}
     for field in ("text", "detail", "method"):
         value = _text(raw.get(field))[:MAX_FIELD_CHARS]
-        if draft[field] and (not value or not _numbers(draft[field]) <= _numbers(value)):
+        # 숫자가 추가·중복·누락되면 거부 (같은 숫자가 같은 개수만큼 있어야 함)
+        if draft[field] and (not value or _numbers(draft[field]) != _numbers(value)):
             return None
         out[field] = value if draft[field] else ""
     return out
@@ -329,9 +347,8 @@ def call_script(doc: dict, items: list[dict]) -> str:
     amount = _text(doc.get("amount"))
     if amount:
         facts.append(f"금액: {amount}")
-    for d in doc.get("deadlines") or []:
-        if isinstance(d, dict) and _text(d.get("date")):
-            facts.append(f"{_text(d.get('label')) or '기한'}: {_date_ko(_text(d.get('date')))}")
+    for label, date in _deadlines(doc):
+        facts.append(f"{label}: {_date_ko(date)}")
     methods = _texts(doc.get("payment_methods"))
     if methods:
         facts.append(f"납부 방법: {', '.join(methods)}")
