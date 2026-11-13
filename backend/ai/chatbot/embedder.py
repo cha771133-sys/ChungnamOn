@@ -249,10 +249,12 @@ class OpenAIEmbedder:
             items = data.get("data") if isinstance(data, dict) else None
             if not isinstance(items, list) or len(items) != len(batch):
                 raise RuntimeError("OpenAI 임베딩 응답 형식이 예상과 다름 (data 개수 불일치)")
-            try:
-                items = sorted(items, key=lambda d: d["index"])
-            except (KeyError, TypeError):
-                raise RuntimeError("OpenAI 임베딩 응답 형식이 예상과 다름 (index 없음)") from None
+            # index가 정수이고 0..len(batch)-1을 정확히 한 번씩 가질 때만 정렬 (중복·누락·범위 밖이면 오류)
+            indexes = [d.get("index") if isinstance(d, dict) else None for d in items]
+            if (not all(type(i) is int for i in indexes)
+                    or sorted(indexes) != list(range(len(batch)))):
+                raise RuntimeError("OpenAI 임베딩 응답 형식이 예상과 다름 (index 중복·누락·범위 밖)")
+            items = sorted(items, key=lambda d: d["index"])
             for d in items:
                 v = np.asarray(d.get("embedding") or [], dtype=np.float32)
                 if v.shape != (self.dim,):

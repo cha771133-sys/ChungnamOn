@@ -17,6 +17,19 @@ def vector(seed: int, dim: int = DIM) -> list[float]:
     return [float(seed + 1)] * dim
 
 
+def one_hot(position: int, dim: int = DIM) -> list[float]:
+    """정규화해도 방향이 서로 다른 벡터 (position 자리만 값이 있음)."""
+    v = [0.0] * dim
+    v[position % dim] = 2.0  # 정규화 전 길이 2 → 정규화 후 1
+    return v
+
+
+def seed_of(text: str, fallback: int) -> int:
+    """'청크 17' → 17. 입력마다 다른 벡터를 돌려줘서 순서 복원을 위치별로 확인한다."""
+    last = text.rsplit(" ", 1)[-1]
+    return int(last) if last.isdigit() else fallback
+
+
 class Recorder:
     """요청을 기록하고, responses에 넣어 둔 (status, body, headers)를 순서대로 돌려줌. 비면 정상 응답."""
 
@@ -30,8 +43,9 @@ class Recorder:
         if self.responses:
             status, body, headers = self.responses.pop(0)
             return httpx.Response(status, json=body, headers=headers or {})
-        n = len(json.loads(request.content)["input"])
-        data = [{"object": "embedding", "index": i, "embedding": vector(i, self.dim)} for i in range(n)]
+        texts = json.loads(request.content)["input"]
+        data = [{"object": "embedding", "index": i, "embedding": one_hot(seed_of(t, i), self.dim)}
+                for i, t in enumerate(texts)]
         return httpx.Response(200, json={"object": "list", "data": data[::-1] if self.reverse else data})
 
     def bodies(self):
@@ -60,13 +74,34 @@ class OpenAIEmbedderTests(unittest.TestCase):
         self.assertEqual((rec2.bodies()[0]["model"], rec2.bodies()[0]["dimensions"]), ("text-embedding-3-small", 256))
 
     def test_batches_and_keeps_order_and_normalizes(self):
-        rec = Recorder(reverse=True)  # 응답 순서가 섞여도 index로 맞춤
+        rec = Recorder(reverse=True)  # 응답 순서가 거꾸로 와도 index로 입력 순서를 복원
         out = make(rec).embed_passages([f"청크 {i}" for i in range(205)])
         self.assertEqual([len(b["input"]) for b in rec.bodies()], [100, 100, 5])
         self.assertEqual(len(out), 205)
         self.assertTrue(all(v.shape == (DIM,) for v in out))
+        # 위치마다 그 입력의 벡터인지 (청크 k → k번 자리만 1)
+        for k, v in enumerate(out):
+            expected = np.zeros(DIM, dtype=np.float32)
+            expected[k] = 1.0
+            np.testing.assert_allclose(v, expected, err_msg=f"{k}번째 결과가 다른 입력의 벡터")
+        # 배치 경계: 99번째는 첫 묶음의 마지막, 100번째는 둘째 묶음의 처음
+        self.assertEqual((int(np.argmax(out[99])), int(np.argmax(out[100]))), (99, 100))
         self.assertAlmostEqual(float(np.linalg.norm(out[0])), 1.0, places=5)
         self.assertEqual(make(Recorder()).embed_passages([]), [])
+
+    def test_duplicate_missing_or_bad_index_is_error(self):
+        def response(*indexes):
+            return (200, {"data": [{"index": i, "embedding": one_hot(n)} for n, i in enumerate(indexes)]}, None)
+
+        cases = {
+            "중복": response(0, 0), "누락": response(0, 2), "범위 밖": response(1, 2), "음수": response(-1, 0),
+            "문자열": response("0", 1), "실수": response(0.0, 1), "bool": response(True, 0), "None": response(None, 0),
+        }
+        for name, resp in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(RuntimeError, "응답 형식.*index"):
+                make(Recorder(resp)).embed_passages(["a", "b"])
+        # 정상 (순서만 섞임)은 통과
+        self.assertEqual(len(make(Recorder(response(1, 0))).embed_passages(["a", "b"])), 2)
 
     def test_429_retry_uses_server_wait_then_succeeds(self):
         sleeps = []
