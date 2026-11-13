@@ -444,6 +444,8 @@ class AccountNumberTests(SimpleTestCase):
             '가상계좌\n국민은행 123456-78-901234',
             '가상계좌\n농협 790-1234-5678-90 (예금주: 아산시)',
             '계좌번호: 농협 790-1234-5678-90 (예금주: 아산시)',
+            '계좌번호: 농협 790-1234-5678-90 예금주: 아산시',
+            '계좌번호: 견본은행 000-0000-0000-00 예금주: 국민건강보험공단',
             '출금 은행\n하나은행',
         ):
             with self.subTest(text=text):
@@ -522,6 +524,24 @@ class KeepGuidanceInfoTests(SimpleTestCase):
             with self.subTest(text=text):
                 self.assertEqual(masked(text), expected)
                 self.assertEqual(masked(expected), expected)
+
+    def test_name_found_in_following_field_is_masked_in_other_lines(self):
+        """줄 중간의 "성명:"에서 찾은 이름도 문서의 다른 줄에서 가린다."""
+        for text, expected in (
+            ('연락처: 041-555-1234 성명: 홍길동\n홍길동 님께 안내드립니다.',
+             '연락처: [전화번호 가림] 성명: [이름 가림]\n[이름 가림] 님께 안내드립니다.'),
+            ('홍길동 님께 안내드립니다.\n여권번호: M12345678 성명: 홍길동',
+             '[이름 가림] 님께 안내드립니다.\n여권번호: [여권번호 가림] 성명: [이름 가림]'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+                self.assertEqual(masked(expected), expected)
+
+    def test_found_names_do_not_leak_between_calls(self):
+        """앞 문서에서 찾은 이름을 다음 문서에 적용하지 않는다."""
+        masked('성명: 홍길동')
+
+        self.assertEqual(masked('홍길동 님께 안내드립니다.'), '홍길동 님께 안내드립니다.')
 
     def test_name_parts_are_not_mistaken_for_next_label(self):
         """이름 조각("반 안")을 다음 항목 라벨로 오해해 이름 일부를 남기지 않는다."""

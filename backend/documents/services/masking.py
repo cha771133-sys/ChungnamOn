@@ -12,6 +12,7 @@ pipeline.mask_personal_info()와 chatbot.services.ai_client.prepare_ai_payload()
 """
 
 import re
+from contextvars import ContextVar
 
 REGISTRATION_MARK = '******-*******'
 PASSPORT_MARK = '[여권번호 가림]'
@@ -132,6 +133,10 @@ NOT_NAME_WORDS = ('정보', '성명', '이름', '서명', '구분', '현황', '�
 # 문장 끝. 이름이 "다"·"요"로 끝날 수 있어 한 글자 어미는 넣지 않는다.
 _SENTENCE_END = re.compile(r'(?:[?？!.。]|니다|세요|나요|까요|어요|아요|해요|데요|네요|군요)[ \t)]*$')
 _ALL_MARKS = (REGISTRATION_MARK, PASSPORT_MARK, ADDRESS_MARK, ACCOUNT_MARK, PHONE_MARK, NAME_MARK)
+
+
+# mask_text() 한 번의 실행에서 찾은 이름 목록. 요청(스레드)마다 따로 유지된다.
+_found_names = ContextVar('masking_found_names', default=None)
 
 
 def _agency_line(line):
@@ -321,7 +326,8 @@ def mask_accounts(lines):
     def mask_generic(value):
         account, rest = _split_at_next_field(value)
         rest, rest_count = _mask_other_fields(rest)
-        if any(word in account for word in PAYMENT_ACCOUNT_WORDS) or AGENCY_HOLDER.search(account):
+        # "예금주: 아산시"처럼 괄호 없이 이어진 예금주는 뒤 항목으로 나뉘므로, 기관 예금주는 전체 값에서 찾는다.
+        if any(word in account for word in PAYMENT_ACCOUNT_WORDS) or AGENCY_HOLDER.search(value):
             return account + rest, rest_count
         account, masked = ACCOUNT_NUMBER.subn(ACCOUNT_MARK, account)
         return account + rest, masked + rest_count
@@ -430,7 +436,17 @@ def mask_names(lines):
         lines[following] = NAME_MARK
         count += 1
 
-    parts = sorted({part for name in found for part in _name_parts(name)}, key=len, reverse=True)
+    # 뒤 항목 안에서 찾은 이름도 문서 전체에서 가릴 수 있게 mask_text()로 넘긴다.
+    collected = _found_names.get()
+    if collected is not None:
+        collected.extend(found)
+    return count + _mask_repeated_names(lines, found)
+
+
+def _mask_repeated_names(lines, names):
+    """라벨로 확인한 이름이 다른 곳에 다시 나오면 가린다. 가린 수를 돌려준다."""
+    count = 0
+    parts = sorted({part for name in names for part in _name_parts(name)}, key=len, reverse=True)
     for part in parts:
         pattern = _name_pattern(part)
         for index, line in enumerate(lines):
@@ -455,5 +471,12 @@ def mask_text(text):
     if not isinstance(text, str):
         raise TypeError('마스킹할 값은 문자열이어야 합니다.')
     lines = text.split('\n')
-    count = sum(rule(lines) for rule in MASKING_RULES)
+    names = []
+    token = _found_names.set(names)
+    try:
+        count = sum(rule(lines) for rule in MASKING_RULES)
+    finally:
+        _found_names.reset(token)
+    # 줄 중간의 "성명:"처럼 뒤 항목에서 찾은 이름은 그 줄 안에서만 가려졌다. 문서 전체에 한 번 더 적용한다.
+    count += _mask_repeated_names(lines, names)
     return {'masked_text': '\n'.join(lines), 'masked_count': count}
