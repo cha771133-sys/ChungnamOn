@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck } from 'lucide-react'
-import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, isVisibleSchedule, docDeadline } from '../store.js'
+import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck, RefreshCw } from 'lucide-react'
+import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, docDeadline, docScheduleState } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
 import { T } from '../i18n.js'
+import { useServerChecklist } from '../lib/useServerChecklist.js'
 
 /* 원문 속 행정용어는 버튼으로, 가린 개인정보(●)는 마스킹 표시로 바꿔 렌더링 */
 function RichText({ text, terms = [], onTerm }) {
@@ -49,6 +50,8 @@ export default function Result({ docId }) {
   // 서버 문서는 해석할 때의 프로필 언어 하나로만 번역이 오므로 그 언어로 보여준다
   const [view, setView] = useState(doc?.contentLang ?? contentLang)
   const [showOriginal, setShowOriginal] = useState(false)
+  // 서버 문서는 체크리스트를 따로 받아 둔다 (하단 버튼과 담당기관 화면의 '기관에 확인할 것'에 쓴다)
+  const checklistSync = useServerChecklist(doc)
   if (!doc) return null
 
   const v = doc.verification
@@ -63,12 +66,11 @@ export default function Result({ docId }) {
   const openTerm = (term) => setSheet({ type: 'term', payload: { term } })
   const openEvidence = (itemId) => setSheet({ type: 'evidence', payload: { docId, itemId } })
 
-  // 서버 문서의 마감일(같은 날짜는 하나로)과, 지금 계정에 보이는 일정 중 그 마감일에 등록된 것
-  const deadlineDates = doc.source === 'api' ? [...new Set((doc.deadlines ?? []).map((x) => x?.date).filter(Boolean))] : []
-  const docSchedules = data.schedules.filter((x) => x.docId === docId && isVisibleSchedule(x, data.user))
-  const registered = deadlineDates.map((date) => docSchedules.find((x) => x.date === date)).filter(Boolean)
-  // 모두 등록됐으면 아직 끝나지 않은 가장 가까운 일정을 보여준다
-  const nextRegistered = [...registered].sort((a, b) => Number(a.done) - Number(b.done) || a.date.localeCompare(b.date))[0]
+  // 서버 문서의 마감일 일정 등록 상태 (체크리스트 화면과 같은 기준)
+  const sched = docScheduleState(doc, data.schedules, data.user)
+  const deadlineDates = doc.source === 'api' ? sched.dates : []
+  const registered = sched.registered
+  const nextRegistered = sched.next
 
   return (
     <>
@@ -239,6 +241,16 @@ export default function Result({ docId }) {
           </p>
         </div>
 
+        {/* 체크리스트를 못 받아 왔으면 '없음'과 구분되도록 알리고 다시 받을 수 있게 한다 */}
+        {checklistSync.status === 'error' && doc.checklist.length === 0 && (
+          <div className="chat-retry">
+            <p>{T('체크리스트를 불러오지 못했어요.')}</p>
+            <button className="btn btn-small btn-outline" onClick={checklistSync.retry}>
+              <RefreshCw size={14} /> {T('다시 불러오기')}
+            </button>
+          </div>
+        )}
+
         <Disclaimer />
       </main>
 
@@ -246,9 +258,12 @@ export default function Result({ docId }) {
         <button className="btn btn-outline" onClick={() => nav('chat', { docId })}>
           <MessageCircle size={18} /> {T('질문하기')}
         </button>
-        {/* 유저 플로우 n34: 절차 정보가 충분하면 체크리스트, 아니면 담당기관 안내 */}
-        {doc.source === 'api' && deadlineDates.length > 0 ? (
-          // 서버 문서는 체크리스트(A6) 연결 전까지 마감일 일정 등록으로 바로 이어준다.
+        {/* 유저 플로우 n34: 절차 정보가 충분하면 체크리스트, 없으면 마감일 일정 등록, 그것도 없으면 담당기관 안내 */}
+        {doc.checklist.length > 0 ? (
+          <button className="btn btn-primary" onClick={() => nav('checklist', { docId })}>
+            <ListChecks size={18} /> {T('할 일 체크리스트')}
+          </button>
+        ) : doc.source === 'api' && deadlineDates.length > 0 ? (
           // 마감일이 여러 개면 모두 등록됐을 때만 "등록된 일정 보기", 하나라도 남았으면 등록으로 보낸다
           registered.length === deadlineDates.length ? (
             <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: nextRegistered.id })}>
@@ -259,10 +274,6 @@ export default function Result({ docId }) {
               <CalendarPlus size={18} /> {registered.length ? T('남은 마감일 등록') : T('마감일 일정 등록')}
             </button>
           )
-        ) : doc.checklist.length > 0 ? (
-          <button className="btn btn-primary" onClick={() => nav('checklist', { docId })}>
-            <ListChecks size={18} /> {T('할 일 체크리스트')}
-          </button>
         ) : (
           <button className="btn btn-primary" onClick={() => nav('agency', { docId })}>
             <Building2 size={18} /> {T('담당기관 안내')}

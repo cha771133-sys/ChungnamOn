@@ -110,6 +110,20 @@ export function isVisibleSchedule(schedule, user) {
   return user?.id != null && schedule.ownerId === user.id && user.session === tokenStore.marker()
 }
 
+/**
+ * 문서의 마감일 일정 등록 상태. 결과·체크리스트 화면의 일정 버튼이 같은 기준을 쓴다.
+ * 서버 문서는 마감일 목록(같은 날짜는 하나로), 목업 문서는 대표 마감일 하나가 대상이다.
+ * @returns {{ dates: string[], registered: object[], allRegistered: boolean, next: object|undefined }}
+ *   next: 모두 등록됐을 때 보여줄 일정 (끝나지 않은 가장 가까운 일정)
+ */
+export function docScheduleState(doc, schedules, user) {
+  const dates = doc.source === 'api' ? [...new Set((doc.deadlines ?? []).map((x) => x?.date).filter(Boolean))] : doc.deadline ? [doc.deadline] : []
+  const mine = schedules.filter((x) => x.docId === doc.id && isVisibleSchedule(x, user))
+  const registered = dates.map((date) => mine.find((x) => x.date === date)).filter(Boolean)
+  const next = [...registered].sort((a, b) => Number(a.done) - Number(b.done) || a.date.localeCompare(b.date))[0]
+  return { dates, registered, allRegistered: dates.length > 0 && registered.length === dates.length, next }
+}
+
 /** 일정까지 남은 일수. 서버 일정은 받은 날에는 서버 값(한국 날짜 기준)을, 날이 바뀌면 기기 날짜로 계산한다. */
 export function scheduleDaysLeft(schedule) {
   if (schedule.source === 'api' && typeof schedule.daysLeft === 'number' && schedule.fetchedOn === todayString()) {
