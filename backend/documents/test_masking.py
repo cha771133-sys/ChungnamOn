@@ -439,6 +439,12 @@ class AccountNumberTests(SimpleTestCase):
                 self.assertIn('[계좌 가림]', masked(text))
                 self.assertNotIn('123-456789-01234', masked(text))
 
+    def test_agency_holder_of_another_account_does_not_keep_personal_account(self):
+        """같은 줄 뒤쪽에 있는 다른 계좌(가상계좌)의 기관 예금주로 앞의 개인 계좌를 남기지 않는다."""
+        text = '계좌번호: 하나은행 123-456789-01234 가상계좌: 농협 790-1234-5678-90 예금주: 아산시'
+
+        self.assertEqual(masked(text), '계좌번호: 하나은행 [계좌 가림] 가상계좌: 농협 790-1234-5678-90 예금주: 아산시')
+
     def test_keeps_payment_accounts(self):
         for text in (
             '가상계좌\n국민은행 123456-78-901234',

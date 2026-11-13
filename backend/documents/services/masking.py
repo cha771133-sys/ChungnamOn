@@ -325,9 +325,13 @@ def mask_accounts(lines):
 
     def mask_generic(value):
         account, rest = _split_at_next_field(value)
+        # "예금주: 아산시"처럼 괄호 없이 이어진 예금주는 뒤 항목으로 나뉜다. 이 계좌 바로 다음 항목이
+        # 예금주일 때만 함께 본다. 더 뒤에 있는 다른 계좌(가상계좌 등)의 예금주는 이 계좌와 관계없다.
+        holder, _ = _split_at_next_field(rest.lstrip())
+        if not re.match(r'예금주[ \t]*[:：]', holder):
+            holder = ''
         rest, rest_count = _mask_other_fields(rest)
-        # "예금주: 아산시"처럼 괄호 없이 이어진 예금주는 뒤 항목으로 나뉘므로, 기관 예금주는 전체 값에서 찾는다.
-        if any(word in account for word in PAYMENT_ACCOUNT_WORDS) or AGENCY_HOLDER.search(value):
+        if any(word in account for word in PAYMENT_ACCOUNT_WORDS) or AGENCY_HOLDER.search(account + ' ' + holder):
             return account + rest, rest_count
         account, masked = ACCOUNT_NUMBER.subn(ACCOUNT_MARK, account)
         return account + rest, masked + rest_count
