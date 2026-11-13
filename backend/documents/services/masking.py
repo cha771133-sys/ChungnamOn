@@ -336,6 +336,16 @@ def _name_pattern(part):
     return re.compile(rf'(?<![가-힣A-Za-z]){body}(?:(?![가-힣A-Za-z])|(?=님|씨))')
 
 
+def _mask_other_fields(text):
+    """이름 뒤에 이어진 같은 줄의 다른 항목을 이름 외 규칙으로 가린다. → (새 글자, 가린 수)"""
+    if not text.strip():
+        return text, 0
+    stripped = text.lstrip()
+    lines = [stripped]
+    count = sum(rule(lines) for rule in MASKING_RULES if rule is not mask_names)
+    return text[:len(text) - len(stripped)] + '\n'.join(lines), count
+
+
 def mask_names(lines):
     """이름. 라벨 뒤의 이름(괄호 안 영문 이름 포함) 전체를 가리고, 같은 이름이 다른 곳에 나오면 함께 가린다."""
     count = 0
@@ -357,8 +367,11 @@ def mask_names(lines):
                     or (not has_colon and not _looks_like_name(name)):
                 continue
             found.append(name)
+            # 뒤에 남기는 부분도 다른 규칙으로 가린다. 줄 맨 앞 라벨만 보는 규칙(계좌·일반 전화·여권번호)은
+            # "성명: 홍길동 계좌번호: …"처럼 줄 중간에 온 라벨을 앞에서 지나쳤기 때문이다.
+            rest, rest_count = _mask_other_fields(rest)
             lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
-            count += 1
+            count += 1 + rest_count
             continue
         following = _next_value_index(lines, index)
         if following is None:

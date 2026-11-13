@@ -323,6 +323,20 @@ class NameTests(SimpleTestCase):
             '성명: [이름 가림] 연락처: [전화번호 가림]',
         )
 
+    def test_masks_other_fields_after_name_on_same_line(self):
+        """이름 뒤에 남기는 같은 줄의 계좌·일반 전화·여권번호도 가린다."""
+        for text, expected in (
+            ('성명: 홍길동 계좌번호: 하나은행 123-456789-01234', '성명: [이름 가림] 계좌번호: 하나은행 [계좌 가림]'),
+            ('성명: 홍길동 연락처: 041-555-1234', '성명: [이름 가림] 연락처: [전화번호 가림]'),
+            ('성명: 홍길동 여권번호: M12345678', '성명: [이름 가림] 여권번호: [여권번호 가림]'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], expected)
+                self.assertEqual(result['masked_count'], 2)
+                self.assertEqual(mask_personal_info(expected)['masked_text'], expected)
+
 
 class PhoneNumberTests(SimpleTestCase):
     def test_masks_mobile_numbers_anywhere(self):
