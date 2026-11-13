@@ -58,7 +58,8 @@ NOTICE_PAGE = page(
     field('아산시', line_break=True),
     field('외국인등록번호', line_break=True),
     field(REGISTRATION_NUMBER, line_break=True),
-    field('주소:'), field('충청남도'), field('아산시', line_break=True),
+    field('주소:'), field('충청남도'), field('아산시'), field('배방읍'), field('가상로'), field('123,'),
+    field('101동', line_break=True),
     field('세액', line_break=True),
     field('6,250원', 0.95, line_break=True),
     field('납부기한', line_break=True),
@@ -67,6 +68,8 @@ NOTICE_PAGE = page(
 )
 
 
+# 마스킹 결과는 기본값(MASK_MODE=dummy) 기준이다. 로컬 .env의 OCR_MODE=clova에 막히지 않게 고정한다.
+@override_settings(OCR_MODE='dummy')
 class BuildTextTests(SimpleTestCase):
     def test_restores_lines_from_line_break(self):
         images = [page(field('납부기한:'), field('2026년'), field('8월', line_break=True), field('세액', line_break=True))]
@@ -95,9 +98,11 @@ class BuildTextTests(SimpleTestCase):
         masked = mask_personal_info(build_text([NOTICE_PAGE]))
 
         self.assertIn('주소: [주소 가림]\n세액', masked['masked_text'])
-        self.assertNotIn('충청남도', masked['masked_text'])
+        for detail in ('배방읍', '가상로 123', '101동'):
+            self.assertNotIn(detail, masked['masked_text'])
 
 
+@override_settings(OCR_MODE='dummy')
 class NormalizeRegistrationNumberTests(SimpleTestCase):
     def test_joins_split_numbers_and_masking_finds_them(self):
         """쪼개진 번호가 이어지고 마스킹 정규식에 걸린다."""
@@ -224,6 +229,8 @@ class ClovaTestCase(TestCase):
             MEDIA_ROOT=media.name,
             DOCUMENTS_STEP_DELAY=0,
             OCR_MODE='clova',
+            # 실제 OCR에는 실제 마스킹 규칙이 필요하다(pipeline.mask_personal_info 안전장치).
+            MASK_MODE='rules',
             CLOVA_OCR_INVOKE_URL=INVOKE_URL,
             CLOVA_OCR_SECRET=SECRET,
         )
@@ -458,7 +465,8 @@ class PipelineIntegrationTests(ClovaTestCase):
         self.assertFalse(document.low_confidence)
         self.assertEqual(document.masked_count, 2)
         self.assertNotIn(REGISTRATION_NUMBER, document.result.original_text)
-        self.assertNotIn('충청남도', document.result.original_text)
+        for detail in ('배방읍', '가상로 123', '101동'):
+            self.assertNotIn(detail, document.result.original_text)
 
     def test_split_registration_number_is_masked(self):
         self.post.return_value = clova_response([

@@ -70,18 +70,29 @@ def run_ocr(document):
 
 
 def mask_personal_info(text):
-    """원문에서 외국인등록번호·주소 같은 개인정보를 가린다. (더미: 정규식)
+    """원문에서 외국인등록번호·주소 같은 개인정보를 가린다. MASK_MODE가 dummy면 더미 정규식, rules면 masking.py를 쓴다.
 
-    입력: text (str) — OCR 원문
+    입력: text (str) — OCR 원문. 챗봇(prepare_ai_payload)도 질문·이력·해석에 이 함수를 쓴다.
     출력: {
         "masked_text": str,   # 개인정보를 가린 원문
         "masked_count": int,  # 가린 항목 수
     }
     마스킹에 실패하면 예외를 던진다. 실패한 문서는 결과를 내보내지 않는다(F1-4).
+    dummy는 등록번호와 "주소:" 줄만 가린다. 실제 문서(OCR_MODE=clova)에는 rules를 쓴다.
     """
-    masked_text, registration_count = REGISTRATION_NUMBER_PATTERN.subn('******-*******', text)
-    masked_text, address_count = ADDRESS_PATTERN.subn(r'\1[주소 가림]', masked_text)
-    return {'masked_text': masked_text, 'masked_count': registration_count + address_count}
+    mode = getattr(settings, 'MASK_MODE', 'dummy')
+    if mode == 'dummy':
+        # 실제 문서를 읽으면서 더미 마스킹을 쓰면 이름·연락처 등이 그대로 남는다. 설정 누락을 처리 실패로 드러낸다.
+        if getattr(settings, 'OCR_MODE', 'dummy') != 'dummy':
+            raise ValueError('실제 OCR을 쓸 때는 MASK_MODE=rules가 필요합니다.')
+        masked_text, registration_count = REGISTRATION_NUMBER_PATTERN.subn('******-*******', text)
+        masked_text, address_count = ADDRESS_PATTERN.subn(r'\1[주소 가림]', masked_text)
+        return {'masked_text': masked_text, 'masked_count': registration_count + address_count}
+    if mode == 'rules':
+        from .masking import mask_text
+
+        return mask_text(text)
+    raise ValueError('지원하지 않는 MASK_MODE입니다.')
 
 
 def interpret(masked_text, language):
