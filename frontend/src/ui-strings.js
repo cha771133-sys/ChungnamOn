@@ -477,6 +477,7 @@ export const UI = {
   '체크리스트를 만들 정보가 부족해요': { en: 'Not enough information to make a checklist', vi: 'Không đủ thông tin để tạo danh sách kiểm tra' },
   '체크리스트를 불러오는 중이에요...': { en: 'Loading the checklist...', vi: 'Đang tải danh sách việc cần làm...' },
   '체크리스트를 불러오지 못했어요.': { en: "Couldn't load the checklist.", vi: 'Không tải được danh sách việc cần làm.' },
+  '체크리스트를 불러오지 못했어요. 다시 시도하세요': { en: "Couldn't load the checklist. Try again", vi: 'Không tải được danh sách việc cần làm. Hãy thử lại' },
   '최근 문서': { en: 'Recent documents', vi: 'Giấy tờ gần đây' },
   추가: { en: 'Add', vi: 'Thêm' },
   '추가할 할 일': { en: 'Task to add', vi: 'Việc cần thêm' },

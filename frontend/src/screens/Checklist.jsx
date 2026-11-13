@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Check, Trash2, Plus, CalendarPlus, Building2, Pencil, CalendarCheck, RefreshCw, ShieldCheck } from 'lucide-react'
-import { useApp, dday, ddayLabel, fmtDate, isVisibleDoc, isVisibleSchedule, docDeadline } from '../store.js'
+import { useApp, dday, ddayLabel, fmtDate, isVisibleDoc, docScheduleState } from '../store.js'
 import { useServerChecklist } from '../lib/useServerChecklist.js'
 import { TopBar, Badge, Empty } from '../components/ui.jsx'
 import { T } from '../i18n.js'
@@ -18,8 +18,9 @@ export default function Checklist({ docId }) {
   const items = doc.checklist
   const done = items.filter((i) => i.done).length
   const pct = items.length ? Math.round((done / items.length) * 100) : 0
-  const deadline = docDeadline(doc)
-  const schedule = data.schedules.find((s) => s.docId === docId && s.date === deadline && isVisibleSchedule(s, data.user))
+  // 마감일 일정 등록 상태: 남은 마감일이 있으면 등록, 모두 등록됐으면 일정 보기 (결과 화면과 같은 기준)
+  const sched = docScheduleState(doc, data.schedules, data.user)
+  const hasDeadline = sched.dates.length > 0
 
   const toggle = async (id) => {
     const item = items.find((i) => i.id === id)
@@ -190,19 +191,19 @@ export default function Checklist({ docId }) {
         )}
       </main>
 
-      <div className="bottom-actions" style={deadline ? undefined : { gridTemplateColumns: '1fr' }}>
+      <div className="bottom-actions" style={hasDeadline ? undefined : { gridTemplateColumns: '1fr' }}>
         {/* 유저 플로우 n36: 마감일이 있으면 일정 등록, 없으면 담당기관 안내만 */}
-        <button className={`btn ${deadline ? 'btn-outline' : 'btn-primary'}`} onClick={() => nav('agency', { docId })}>
+        <button className={`btn ${hasDeadline ? 'btn-outline' : 'btn-primary'}`} onClick={() => nav('agency', { docId })}>
           <Building2 size={18} /> {T('담당기관')}
         </button>
-        {deadline &&
-          (schedule ? (
-            <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: schedule.id })}>
+        {hasDeadline &&
+          (sched.allRegistered ? (
+            <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: sched.next.id })}>
               <CalendarCheck size={18} /> {T('등록된 일정 보기')}
             </button>
           ) : (
             <button className="btn btn-primary" onClick={() => nav('scheduleNew', { docId })}>
-              <CalendarPlus size={18} /> {T('마감일 일정 등록')}
+              <CalendarPlus size={18} /> {sched.registered.length ? T('남은 마감일 등록') : T('마감일 일정 등록')}
             </button>
           ))}
       </div>

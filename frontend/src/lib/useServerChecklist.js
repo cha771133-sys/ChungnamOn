@@ -29,18 +29,21 @@ export function useServerChecklist(doc) {
     }
   }, [])
 
+  /** 목록을 받아 문서에 저장한다. 받지 못했으면 false (늦게 와서 버린 응답은 true) */
   const load = useCallback(() => {
-    if (serverId == null) return Promise.resolve()
+    if (serverId == null) return Promise.resolve(true)
     const session = tokenStore.session()
     const seq = changeSeq.current
     return getChecklist(serverId)
       .then((raw) => {
-        if (!alive.current || tokenStore.session() !== session || seq !== changeSeq.current) return
+        if (!alive.current || tokenStore.session() !== session || seq !== changeSeq.current) return true
         updateDoc(docId, (d) => ({ checklist: adaptChecklist(raw, d.sourceKeyOf) }))
         setStatus('ready')
+        return true
       })
       .catch(() => {
         if (alive.current) setStatus((s) => (s === 'ready' ? s : 'error'))
+        return false
       })
   }, [serverId, docId, updateDoc])
 
@@ -73,10 +76,14 @@ export function useServerChecklist(doc) {
     } catch (err) {
       if (err instanceof StaleSessionError || tokenStore.session() !== session) return
       if (parseApiError(err).status === 404) {
-        // 문서를 다시 처리해 항목이 바뀌었다
-        showToast(T('체크리스트가 바뀌어 다시 불러왔어요'))
+        // 문서를 다시 처리해 항목이 바뀌었다. 새 목록을 받지 못하면 체크를 되돌리고 다시 시도하게 한다
         changeSeq.current += 1
-        load()
+        if (await load()) {
+          showToast(T('체크리스트가 바뀌어 다시 불러왔어요'))
+        } else {
+          setItem({ done: item.done })
+          showToast(T('체크리스트를 불러오지 못했어요. 다시 시도하세요'))
+        }
         return
       }
       setItem({ done: item.done })

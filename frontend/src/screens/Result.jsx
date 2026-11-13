@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck } from 'lucide-react'
-import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, isVisibleSchedule, docDeadline } from '../store.js'
+import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck, RefreshCw } from 'lucide-react'
+import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, docDeadline, docScheduleState } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
 import { T } from '../i18n.js'
@@ -51,7 +51,7 @@ export default function Result({ docId }) {
   const [view, setView] = useState(doc?.contentLang ?? contentLang)
   const [showOriginal, setShowOriginal] = useState(false)
   // 서버 문서는 체크리스트를 따로 받아 둔다 (하단 버튼과 담당기관 화면의 '기관에 확인할 것'에 쓴다)
-  useServerChecklist(doc)
+  const checklistSync = useServerChecklist(doc)
   if (!doc) return null
 
   const v = doc.verification
@@ -66,12 +66,11 @@ export default function Result({ docId }) {
   const openTerm = (term) => setSheet({ type: 'term', payload: { term } })
   const openEvidence = (itemId) => setSheet({ type: 'evidence', payload: { docId, itemId } })
 
-  // 서버 문서의 마감일(같은 날짜는 하나로)과, 지금 계정에 보이는 일정 중 그 마감일에 등록된 것
-  const deadlineDates = doc.source === 'api' ? [...new Set((doc.deadlines ?? []).map((x) => x?.date).filter(Boolean))] : []
-  const docSchedules = data.schedules.filter((x) => x.docId === docId && isVisibleSchedule(x, data.user))
-  const registered = deadlineDates.map((date) => docSchedules.find((x) => x.date === date)).filter(Boolean)
-  // 모두 등록됐으면 아직 끝나지 않은 가장 가까운 일정을 보여준다
-  const nextRegistered = [...registered].sort((a, b) => Number(a.done) - Number(b.done) || a.date.localeCompare(b.date))[0]
+  // 서버 문서의 마감일 일정 등록 상태 (체크리스트 화면과 같은 기준)
+  const sched = docScheduleState(doc, data.schedules, data.user)
+  const deadlineDates = doc.source === 'api' ? sched.dates : []
+  const registered = sched.registered
+  const nextRegistered = sched.next
 
   return (
     <>
@@ -241,6 +240,16 @@ export default function Result({ docId }) {
             })}
           </p>
         </div>
+
+        {/* 체크리스트를 못 받아 왔으면 '없음'과 구분되도록 알리고 다시 받을 수 있게 한다 */}
+        {checklistSync.status === 'error' && doc.checklist.length === 0 && (
+          <div className="chat-retry">
+            <p>{T('체크리스트를 불러오지 못했어요.')}</p>
+            <button className="btn btn-small btn-outline" onClick={checklistSync.retry}>
+              <RefreshCw size={14} /> {T('다시 불러오기')}
+            </button>
+          </div>
+        )}
 
         <Disclaimer />
       </main>
