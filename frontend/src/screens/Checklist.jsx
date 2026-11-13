@@ -1,24 +1,37 @@
 import { useState } from 'react'
-import { Check, Trash2, Plus, CalendarPlus, Building2, Pencil, CalendarCheck } from 'lucide-react'
-import { useApp, dday, ddayLabel, fmtDate } from '../store.js'
+import { Check, Trash2, Plus, CalendarPlus, Building2, Pencil, CalendarCheck, RefreshCw, ShieldCheck } from 'lucide-react'
+import { useApp, dday, ddayLabel, fmtDate, isVisibleDoc, isVisibleSchedule, docDeadline } from '../store.js'
+import { useServerChecklist } from '../lib/useServerChecklist.js'
 import { TopBar, Badge, Empty } from '../components/ui.jsx'
 import { T } from '../i18n.js'
 
 export default function Checklist({ docId }) {
-  const { data, updateDoc, nav, back, showToast } = useApp()
+  const { data, updateDoc, nav, back, showToast, setSheet } = useApp()
   const [edit, setEdit] = useState(false)
   const [text, setText] = useState('')
-  const doc = data.docs.find((d) => d.id === docId)
+  const found = data.docs.find((d) => d.id === docId)
+  // 다른 계정이 올린 서버 문서는 보여주지 않는다
+  const doc = found && isVisibleDoc(found, data.user) ? found : null
+  // 서버 문서는 체크리스트 API로 받고 완료 체크도 서버에 저장한다
+  const sync = useServerChecklist(doc)
   if (!doc) return null
   const items = doc.checklist
   const done = items.filter((i) => i.done).length
   const pct = items.length ? Math.round((done / items.length) * 100) : 0
-  const schedule = data.schedules.find((s) => s.docId === docId && s.date === doc.deadline)
+  const deadline = docDeadline(doc)
+  const schedule = data.schedules.find((s) => s.docId === docId && s.date === deadline && isVisibleSchedule(s, data.user))
 
-  const toggle = (id) => {
-    updateDoc(docId, (d) => ({ checklist: d.checklist.map((i) => (i.id === id ? { ...i, done: !i.done } : i)) }))
+  const toggle = async (id) => {
     const item = items.find((i) => i.id === id)
-    if (!item.done && done + 1 === items.length) showToast(T('모든 항목을 완료했어요'))
+    if (!item) return
+    const willFinish = !item.done && done + 1 === items.length
+    if (sync.isServer) {
+      const ok = await sync.toggle(item)
+      if (ok && willFinish) showToast(T('모든 항목을 완료했어요'))
+      return
+    }
+    updateDoc(docId, (d) => ({ checklist: d.checklist.map((i) => (i.id === id ? { ...i, done: !i.done } : i)) }))
+    if (willFinish) showToast(T('모든 항목을 완료했어요'))
   }
   const remove = (id) => updateDoc(docId, (d) => ({ checklist: d.checklist.filter((i) => i.id !== id) }))
   const add = (e) => {
@@ -36,7 +49,9 @@ export default function Checklist({ docId }) {
         title={T('할 일 체크리스트')}
         onBack={back}
         right={
-          items.length > 0 && (
+          // 서버 체크리스트는 항목 추가·삭제 API가 없어 편집을 막는다
+          items.length > 0 &&
+          !sync.isServer && (
             <button className="icon-btn" onClick={() => setEdit(!edit)} aria-label={edit ? T('편집 마치기') : T('항목 편집')}>
               {edit ? <Check size={22} /> : <Pencil size={20} />}
             </button>
@@ -46,7 +61,18 @@ export default function Checklist({ docId }) {
       <main className="screen has-actions">
         <p className="screen-sub">{doc.title}</p>
 
-        {items.length === 0 ? (
+        {items.length === 0 && sync.status === 'loading' ? (
+          <p className="lead" role="status">
+            {T('체크리스트를 불러오는 중이에요...')}
+          </p>
+        ) : items.length === 0 && sync.status === 'error' ? (
+          <div className="chat-retry">
+            <p>{T('체크리스트를 불러오지 못했어요.')}</p>
+            <button className="btn btn-small btn-outline" onClick={sync.retry}>
+              <RefreshCw size={14} /> {T('다시 불러오기')}
+            </button>
+          </div>
+        ) : items.length === 0 ? (
           <Empty
             icon={Building2}
             title={T('체크리스트를 만들 정보가 부족해요')}
@@ -83,7 +109,13 @@ export default function Checklist({ docId }) {
                     <span className="check-step" aria-hidden="true">
                       {idx + 1}
                     </span>
-                    <button className="check-box" onClick={() => toggle(it.id)} aria-pressed={it.done} aria-label={`${T(it.text)} ${it.done ? T('완료 취소') : T('완료로 표시')}`}>
+                    <button
+                      className="check-box"
+                      onClick={() => toggle(it.id)}
+                      disabled={sync.pending.has(it.id)}
+                      aria-pressed={it.done}
+                      aria-label={`${T(it.text)} ${it.done ? T('완료 취소') : T('완료로 표시')}`}
+                    >
                       {it.done && <Check size={16} strokeWidth={3} />}
                     </button>
                     <div className="check-body">
@@ -92,7 +124,7 @@ export default function Checklist({ docId }) {
                         {!it.custom && <Badge status={it.state} />}
                       </div>
                       {it.detail && <p>{T(it.detail)}</p>}
-                      {it.docs && (
+                      {it.docs?.length > 0 && (
                         <p className="check-meta">
                           {T('준비서류: {v0}', {
                             v0: it.docs.map((d) => T(d)).join(', '),
@@ -113,6 +145,11 @@ export default function Checklist({ docId }) {
                             v1: overdue ? T('기한 경과') : ddayLabel(n),
                           })}
                         </p>
+                      )}
+                      {it.sources?.length > 0 && (
+                        <button className="text-btn check-src" onClick={() => setSheet({ type: 'source', payload: { ids: it.sources, docId, title: '근거 자료' } })}>
+                          <ShieldCheck size={14} /> {T('근거 자료 보기')}
+                        </button>
                       )}
                       {it.note && (
                         <div className={`check-note tone-${it.state}`}>
@@ -153,12 +190,12 @@ export default function Checklist({ docId }) {
         )}
       </main>
 
-      <div className="bottom-actions" style={doc.deadline ? undefined : { gridTemplateColumns: '1fr' }}>
+      <div className="bottom-actions" style={deadline ? undefined : { gridTemplateColumns: '1fr' }}>
         {/* 유저 플로우 n36: 마감일이 있으면 일정 등록, 없으면 담당기관 안내만 */}
-        <button className={`btn ${doc.deadline ? 'btn-outline' : 'btn-primary'}`} onClick={() => nav('agency', { docId })}>
+        <button className={`btn ${deadline ? 'btn-outline' : 'btn-primary'}`} onClick={() => nav('agency', { docId })}>
           <Building2 size={18} /> {T('담당기관')}
         </button>
-        {doc.deadline &&
+        {deadline &&
           (schedule ? (
             <button className="btn btn-primary" onClick={() => nav('scheduleDetail', { scheduleId: schedule.id })}>
               <CalendarCheck size={18} /> {T('등록된 일정 보기')}

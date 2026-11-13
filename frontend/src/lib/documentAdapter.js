@@ -61,11 +61,12 @@ function verifyStatus(value) {
 export function adaptVerification(verification, docKey, docTitle) {
   const v = verification ?? {}
   const sourceMap = {}
-  const keyOf = {}
+  // 서버 출처 id → 화면 출처 키. 일반 객체는 toString 같은 상속 속성 이름도 찾아지므로 Map을 쓴다
+  const keyOf = new Map()
   ;(Array.isArray(v.sources) ? v.sources : []).forEach((s, i) => {
     if (!s || typeof s !== 'object') return
     const key = `${docKey}-src${i}`
-    if (s.id != null) keyOf[String(s.id)] = key
+    if (s.id != null) keyOf.set(String(s.id), key)
     sourceMap[key] = {
       agency: hostOf(s.url),
       title: s.title || '공식 자료',
@@ -81,19 +82,20 @@ export function adaptVerification(verification, docKey, docTitle) {
     const shown = status !== 'UNVERIFIED' && !sources.length ? 'UNVERIFIED' : status
     return {
       sourceMap,
+      sourceKeyOf: Object.fromEntries(keyOf),
       verification: [{ id: 'overall', label: '문서 내용 전체', docValue: docTitle || '문서 내용', status: shown, reason: VERIFY_REASON[shown], genericReason: VERIFY_REASON[shown], sources }],
     }
   }
   const verificationItems = items.map((it, i) => {
-    const sources = (Array.isArray(it.sourceIds) ? it.sourceIds : []).map((sid) => keyOf[String(sid)]).filter(Boolean)
+    const sources = (Array.isArray(it.sourceIds) ? it.sourceIds : []).map((sid) => keyOf.get(String(sid))).filter(Boolean)
     const raw = verifyStatus(it.status)
     const status = raw !== 'UNVERIFIED' && !sources.length ? 'UNVERIFIED' : raw
-    // 서버 설명은 대조 결과와 맞을 때만 쓴다 (상태를 낮췄으면 일반 안내로 바꾼다)
-    const serverReason = status === raw && typeof it.reason === 'string' && it.reason.trim() ? it.reason.trim() : ''
+    // 서버 설명은 서버가 보낸 상태 그대로 보여줄 때만 쓴다 (알 수 없는 상태였거나 근거가 없어 낮췄으면 일반 안내로 바꾼다)
+    const serverReason = it.status === status && typeof it.reason === 'string' && it.reason.trim() ? it.reason.trim() : ''
     return {
       id: it.key ? String(it.key).toLowerCase() : `item${i}`,
       key: it.key ?? null,
-      label: VERIFY_LABEL[it.key] ?? it.label ?? '확인 항목',
+      label: (Object.hasOwn(VERIFY_LABEL, it.key) ? VERIFY_LABEL[it.key] : it.label) || '확인 항목',
       docValue: it.docValue ?? '',
       officialValue: it.officialValue ?? '',
       status,
@@ -105,7 +107,7 @@ export function adaptVerification(verification, docKey, docTitle) {
       sources,
     }
   })
-  return { sourceMap, verification: verificationItems }
+  return { sourceMap, sourceKeyOf: Object.fromEntries(keyOf), verification: verificationItems }
 }
 
 /**
@@ -118,7 +120,7 @@ export function adaptVerification(verification, docKey, docTitle) {
 export function adaptResult(raw, meta) {
   const lang = meta.language
   const id = localDocId(raw.documentId)
-  const { sourceMap, verification } = adaptVerification(raw.verification, id, raw.title)
+  const { sourceMap, sourceKeyOf, verification } = adaptVerification(raw.verification, id, raw.title)
   // 문의 연락처가 공식 자료와 다르면 담당기관 화면에서 두 번호를 나란히 보여준다
   const contact = verification.find((it) => it.key === 'AGENCY_CONTACT')
   const summary = raw.summary ?? []
@@ -152,7 +154,9 @@ export function adaptResult(raw, meta) {
     terms: (raw.terms ?? []).filter((t) => typeof t?.word === 'string' && t.word.trim()).map((t) => ({ word: t.word.trim(), explain: { [lang]: t.explain ?? '' } })),
     verification,
     sourceMap,
-    // 체크리스트는 백엔드 체크리스트 API(A6) 연결 전까지 비워 둔다
+    // 체크리스트 항목의 sourceIds(서버 출처 id)를 화면 출처 키로 바꿀 때 쓴다
+    sourceKeyOf,
+    // 체크리스트는 결과 API에 없어 체크리스트 API로 따로 받는다 (lib/checklist.ts)
     checklist: [],
     agency: {
       name: agency.name || '확인되지 않음',

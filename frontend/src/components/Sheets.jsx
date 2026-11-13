@@ -148,11 +148,11 @@ function EvidenceSheet({ docId, itemId }) {
 
 /** 챗봇 답변 근거 자료 목록 시트 */
 /** 답변 근거 시트. ids는 문서 출처 키, items는 서버 챗봇 답변에 담겨 온 출처 */
-function SourceSheet({ ids = [], items = [], docId }) {
+function SourceSheet({ ids = [], items = [], docId, title = '답변 근거' }) {
   const { setSheet, data } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
   return (
-    <Sheet title={T('답변 근거')} onClose={() => setSheet(null)}>
+    <Sheet title={T(title)} onClose={() => setSheet(null)}>
       {ids.map((id) => (
         <SourceCard key={id} id={id} doc={doc} />
       ))}

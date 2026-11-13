@@ -801,6 +801,16 @@ ol {
   text-align: center;
 }
 
+.check-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+.check-box:disabled {
+  opacity: 0.6;
+}
 .notify-note {
   display: flex;
   align-items: center;
