@@ -200,7 +200,7 @@ class DocumentProcessingTests(TestCase):
         self.assertEqual(self.document.step, Document.Step.DONE)
         self.assertEqual(self.document.doc_type, '고지서')
         self.assertEqual(self.document.title, '주민세 납부 안내')
-        self.assertEqual(self.document.masked_count, 2)
+        self.assertEqual(self.document.masked_count, 3)
         self.assertFalse(self.document.low_confidence)
         result = self.document.result
         self.assertNotIn('900101-5123456', result.original_text)
@@ -383,7 +383,7 @@ class DocumentResultTests(APITestCase):
         self.assertEqual(data['verification']['status'], 'MISMATCH')
         self.assertEqual(len(data['verification']['items']), 4)
         self.assertEqual([source['id'] for source in data['verification']['sources']], ['s1', 's2'])
-        self.assertEqual(data['maskedCount'], 2)
+        self.assertEqual(data['maskedCount'], 3)
         self.assertFalse(data['lowConfidence'])
 
     def test_legacy_result_is_normalized(self):
@@ -709,7 +709,7 @@ class DocumentDetailTests(APITestCase):
         self.assertEqual(data['documentId'], self.document.id)
         self.assertEqual(data['status'], 'DONE')
         self.assertEqual(data['failReason'], '')
-        self.assertEqual(data['maskedCount'], 2)
+        self.assertEqual(data['maskedCount'], 3)
         self.assertTrue(data['hasResult'])
 
     def test_pending_document_has_no_result(self):

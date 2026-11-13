@@ -58,7 +58,8 @@ NOTICE_PAGE = page(
     field('아산시', line_break=True),
     field('외국인등록번호', line_break=True),
     field(REGISTRATION_NUMBER, line_break=True),
-    field('주소:'), field('충청남도'), field('아산시', line_break=True),
+    field('주소:'), field('충청남도'), field('아산시'), field('배방읍'), field('가상로'), field('123,'),
+    field('101동', line_break=True),
     field('세액', line_break=True),
     field('6,250원', 0.95, line_break=True),
     field('납부기한', line_break=True),
@@ -94,8 +95,9 @@ class BuildTextTests(SimpleTestCase):
     def test_address_line_is_masked_by_existing_pattern(self):
         masked = mask_personal_info(build_text([NOTICE_PAGE]))
 
-        self.assertIn('주소: [주소 가림]\n세액', masked['masked_text'])
-        self.assertNotIn('충청남도', masked['masked_text'])
+        self.assertIn('주소: 충청남도 아산시 [주소 가림]\n세액', masked['masked_text'])
+        for detail in ('배방읍', '가상로 123', '101동'):
+            self.assertNotIn(detail, masked['masked_text'])
 
 
 class NormalizeRegistrationNumberTests(SimpleTestCase):
@@ -458,7 +460,8 @@ class PipelineIntegrationTests(ClovaTestCase):
         self.assertFalse(document.low_confidence)
         self.assertEqual(document.masked_count, 2)
         self.assertNotIn(REGISTRATION_NUMBER, document.result.original_text)
-        self.assertNotIn('충청남도', document.result.original_text)
+        for detail in ('배방읍', '가상로 123', '101동'):
+            self.assertNotIn(detail, document.result.original_text)
 
     def test_split_registration_number_is_masked(self):
         self.post.return_value = clova_response([

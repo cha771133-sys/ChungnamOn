@@ -10,7 +10,6 @@ AI 모듈이 준비되면 docstring의 입출력 형식을 지키면서 함수 �
 """
 
 import logging
-import re
 import time
 
 from django.conf import settings
@@ -46,9 +45,6 @@ DUMMY_OCR_TEXT = """2026년도 주민세(개인분) 납부 안내
 납부 방법: 은행 창구, 가상계좌, 위택스(www.wetax.go.kr)
 문의: 아산시청 세무과 041-000-0000"""
 
-REGISTRATION_NUMBER_PATTERN = re.compile(r'\d{6}-\d{7}')
-ADDRESS_PATTERN = re.compile(r'(주소\s*[:：]\s*)[^\n]+')
-
 
 def run_ocr(document):
     """문서 파일에서 글자를 읽는다. OCR_MODE가 dummy면 더미, clova면 CLOVA OCR을 쓴다.
@@ -70,18 +66,18 @@ def run_ocr(document):
 
 
 def mask_personal_info(text):
-    """원문에서 외국인등록번호·주소 같은 개인정보를 가린다. (더미: 정규식)
+    """원문에서 외국인등록번호·주소·이름 같은 개인정보를 가린다. 규칙은 masking.py에 있다.
 
-    입력: text (str) — OCR 원문
+    입력: text (str) — OCR 원문. 챗봇(prepare_ai_payload)도 질문·이력·해석에 이 함수를 쓴다.
     출력: {
         "masked_text": str,   # 개인정보를 가린 원문
         "masked_count": int,  # 가린 항목 수
     }
     마스킹에 실패하면 예외를 던진다. 실패한 문서는 결과를 내보내지 않는다(F1-4).
     """
-    masked_text, registration_count = REGISTRATION_NUMBER_PATTERN.subn('******-*******', text)
-    masked_text, address_count = ADDRESS_PATTERN.subn(r'\1[주소 가림]', masked_text)
-    return {'masked_text': masked_text, 'masked_count': registration_count + address_count}
+    from .masking import mask_text
+
+    return mask_text(text)
 
 
 def interpret(masked_text, language):
