@@ -4,7 +4,7 @@ import { useApp, fmtDate, getSource, isVisibleDoc, safeHttpUrl } from '../store.
 import { TopBar, Badge, Disclaimer } from '../components/ui.jsx'
 import { findOfficialAgency, phonesDiffer, PHONE_TYPE_LABEL, agencyTitle, buildCallScript } from '../lib/agencyAdapter.js'
 import { parseApiError, tokenStore } from '../lib/api'
-import { T } from '../i18n.js'
+import { T, getUiLang } from '../i18n.js'
 
 export default function Agency({ docId }) {
   const { data, back, showToast, setSheet } = useApp()
@@ -20,13 +20,18 @@ export default function Agency({ docId }) {
   const callScript = doc.callScript ?? (isServer ? buildCallScript(doc) : null)
   // 공식 자료에서 찾은 번호가 문서의 번호와 다르면 둘을 나란히 보여준다 (어느 쪽도 단정하지 않음)
   const officialAgency = official.result?.lookupStatus === 'FOUND' ? official.result.agency : null
-  const officialConflict = isServer && officialAgency && phonesDiffer(a.phone, officialAgency.phone)
+  // 검증 결과에서 이미 같은 번호 차이를 보여주고 있으면 한 번만 보여준다
+  const officialConflict = isServer && officialAgency && phonesDiffer(a.phone, officialAgency.phone) && !(a.conflict && !phonesDiffer(a.conflict.phone, officialAgency.phone))
   const src = getSource(doc, a.sourceId)
   const conflictSrc = a.conflict ? getSource(doc, a.conflict.sourceId) : null
 
   // 체크리스트의 조건부·확인 필요 항목을 우선 모으고, 없으면 미확인 검증 항목을 보여줌
   const fromChecklist = doc.checklist.filter((c) => c.state === 'CONDITIONAL' || c.state === 'NEEDS_CHECK').map((c) => ({ id: c.id, text: c.text, note: c.note, state: c.state }))
-  const toAsk = fromChecklist.length ? fromChecklist : doc.verification.filter((v) => v.status === 'UNVERIFIED').map((v) => ({ id: v.id, text: v.label, note: v.reason, state: v.status }))
+  const toAsk = fromChecklist.length
+    ? fromChecklist
+    : doc.verification
+        .filter((v) => v.status === 'UNVERIFIED' || v.status === 'MISMATCH')
+        .map((v) => ({ id: v.id, text: v.label, note: v.serverReason && getUiLang() !== 'ko' ? v.genericReason : v.reason, state: v.status }))
 
   const copy = async () => {
     try {
@@ -81,9 +86,11 @@ export default function Agency({ docId }) {
               </div>
               <div>
                 <dt>
-                  {T('{v0} 홈페이지 번호', {
-                    v0: conflictSrc.agency,
-                  })}
+                  {conflictSrc
+                    ? T('{v0} 홈페이지 번호', {
+                        v0: conflictSrc.agency,
+                      })
+                    : T('공식 자료의 번호')}
                 </dt>
                 <dd>
                   <a href={`tel:${a.conflict.phone}`}>{a.conflict.phone}</a>
@@ -103,7 +110,7 @@ export default function Agency({ docId }) {
               {toAsk.map((q) => (
                 <li key={q.id}>
                   <div className="ask-top">
-                    <strong>{q.text}</strong>
+                    <strong>{T(q.text)}</strong>
                     <Badge status={q.state} />
                   </div>
                   {q.note && <p>{T(q.note)}</p>}

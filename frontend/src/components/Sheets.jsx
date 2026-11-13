@@ -7,7 +7,7 @@ import { deleteDocument } from '../lib/documents'
 import { parseApiError } from '../lib/api'
 import { useState } from 'react'
 import { Sheet, Badge } from './ui.jsx'
-import { T } from '../i18n.js'
+import { T, getUiLang } from '../i18n.js'
 
 /** 공식 근거 자료 카드: 기관, 제목, 확인일, 기준일, 원문 링크 */
 /** 근거 자료 카드. id로 문서의 출처를 찾거나, 챗봇 답변처럼 출처 객체(source)를 바로 받는다. */
@@ -86,6 +86,20 @@ function TermSheet({ term }) {
 }
 
 /** 교차 검증 항목의 문서 내용·공식 자료 비교와 근거를 보여주는 시트 */
+/** 대조 결과 설명. 서버 설명은 한국어라 다른 언어 화면에서는 상태별 안내를 먼저 보여주고 원문 설명을 덧붙인다 */
+function EvidenceReason({ item }) {
+  const tone = `callout tone-${item.status === 'MISMATCH' ? 'amber' : item.status === 'MATCHED' ? 'green' : 'slate'}`
+  if (!item.serverReason || getUiLang() === 'ko') return <p className={tone}>{T(item.reason)}</p>
+  return (
+    <div className={tone}>
+      <p>{T(item.genericReason)}</p>
+      <p className="evidence-original" lang="ko">
+        <span>{T('원문 설명 (한국어)')}</span> {item.reason}
+      </p>
+    </div>
+  )
+}
+
 function EvidenceSheet({ docId, itemId }) {
   const { data, setSheet, nav } = useApp()
   const doc = data.docs.find((d) => d.id === docId)
@@ -103,7 +117,7 @@ function EvidenceSheet({ docId, itemId }) {
       <div className={`compare${item.status === 'MISMATCH' ? ' is-split' : ''}`}>
         <div>
           <span className="compare-label">{T('문서에 적힌 내용')}</span>
-          <strong>{item.docValue}</strong>
+          <strong>{item.docValue || T('확인되지 않음')}</strong>
         </div>
         {item.officialValue && (
           <div>
@@ -112,7 +126,7 @@ function EvidenceSheet({ docId, itemId }) {
           </div>
         )}
       </div>
-      {item.reason && <p className={`callout tone-${item.status === 'MISMATCH' ? 'amber' : 'slate'}`}>{T(item.reason)}</p>}
+      {item.reason && <EvidenceReason item={item} />}
       {item.sources.length > 0 ? (
         <>
           <h3 className="sheet-sub">{T('근거 자료')}</h3>
