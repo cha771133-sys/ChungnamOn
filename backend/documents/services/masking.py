@@ -122,6 +122,11 @@ INLINE_NEXT_LABEL = re.compile(
     r'[ \t]+(?=(?:연\s*락\s*처|전화\s*번호|휴대\s*(?:전화|폰)|주\s*소|외국인\s*등록\s*번호|주민\s*등록\s*번호|여권\s*번호'
     r'|생년월일|국적|계좌\s*번호|출금|환급|이메일)[ \t]*[:：])'
 )
+# 같은 줄에 이어진 다음 항목의 라벨(예: "… 납부기한: 2026년 8월 31일", "… 세액: 6,250원").
+# 값을 가릴 때 이 라벨 앞에서 멈춰 뒤의 기한·금액을 남긴다. 이름 조각("반 안")을 라벨로 오해하지 않도록
+# 라벨 낱말은 두 글자 이상이고, 두 낱말 라벨은 앞 낱말이 아래 목록일 때만 인정한다(예: "납부 기한:").
+_TWO_WORD_LABEL_HEADS = '납부|출금|환급|신청|납기|고지|휴대|외국인|주민|여권|과세|합계|전자|문의|담당|발행|처리'
+NEXT_FIELD_LABEL = re.compile(rf'[ \t]+(?=(?:(?:{_TWO_WORD_LABEL_HEADS})[ \t]+)?[가-힣]{{2,10}}[ \t]*[:：])')
 # 라벨 뒤에 이름이 아니라 이런 단어가 오면 표 머리글로 본다(예: "신청인 정보").
 NOT_NAME_WORDS = ('정보', '성명', '이름', '서명', '구분', '현황', '내역', '본인', '확인', '번호', '주소', '연락처')
 # 문장 끝. 이름이 "다"·"요"로 끝날 수 있어 한 글자 어미는 넣지 않는다.
@@ -176,6 +181,15 @@ def _digit_count(text):
     return sum(char.isdigit() for char in text)
 
 
+def _split_at_next_field(value):
+    """값을 (이 항목의 값, 같은 줄에 이어진 다음 항목)으로 나눈다. 다음 항목이 없으면 뒤는 빈 문자열."""
+    candidates = [match.start() for match in (NEXT_FIELD_LABEL.search(value), INLINE_NEXT_LABEL.search(value)) if match]
+    if not candidates:
+        return value, ''
+    cut = min(candidates)
+    return value[:cut], value[cut:]
+
+
 # ── 규칙 ─────────────────────────────────────────────────────
 
 def mask_registration_numbers(lines):
@@ -185,9 +199,11 @@ def mask_registration_numbers(lines):
 
     def mask_value(value):
         # 숫자 일부를 글자로 잘못 읽어도(예: 9OO101) 숫자가 6개 이상이면 번호로 본다.
-        if REGISTRATION_MARK in value or _digit_count(value) < 6:
+        # 같은 줄에 이어진 다음 항목(예: "세액: 6,250원")은 남긴다.
+        number, rest = _split_at_next_field(value)
+        if REGISTRATION_MARK in number or _digit_count(number) < 6:
             return value, 0
-        return REGISTRATION_MARK, 1
+        return REGISTRATION_MARK + rest, 1
 
     return count + _labeled_lines(lines, REGISTRATION_LABEL, mask_value)
 
@@ -195,9 +211,11 @@ def mask_registration_numbers(lines):
 def mask_passport_numbers(lines):
     """여권번호. 라벨이 있는 값만 가린다."""
     def mask_value(value):
-        if PASSPORT_MARK in value or not any(char.isdigit() for char in value):
+        # 같은 줄에 이어진 다음 항목(예: "납부기한: …")은 남긴다.
+        number, rest = _split_at_next_field(value)
+        if PASSPORT_MARK in number or not any(char.isdigit() for char in number):
             return value, 0
-        return PASSPORT_MARK, 1
+        return PASSPORT_MARK + rest, 1
 
     return _labeled_lines(lines, PASSPORT_LABEL, mask_value)
 
@@ -248,15 +266,19 @@ def mask_addresses(lines):
         # 개인 주소 라벨이 있으면 도로명 등에 기관 단어가 있어도 가린다. 기관 주소는 제출처·문의 등 기관 라벨 줄로 남긴다.
         value = match.group('value')
         value_index = index
+        # 같은 줄에 이어진 다음 항목(예: "납부기한: …")은 주소가 아니므로 남긴다.
         if value.strip():
-            new_value, masked, detail_may_follow = _mask_address_value(value, require_address_form=require_form)
-            new_line = line[:match.start('value')] + new_value
+            address, rest = _split_at_next_field(value)
+            new_value, masked, detail_may_follow = _mask_address_value(address, require_address_form=require_form)
+            new_line = line[:match.start('value')] + new_value + rest
         else:
             # 라벨만 있는 줄: 다음 줄이 값이다.
             value_index = _next_value_index(lines, index)
             if value_index is None:
                 continue
-            new_line, masked, detail_may_follow = _mask_address_value(lines[value_index], require_address_form=False)
+            address, rest = _split_at_next_field(lines[value_index])
+            new_value, masked, detail_may_follow = _mask_address_value(address, require_address_form=False)
+            new_line = new_value + rest
         if masked:
             lines[value_index] = new_line
             count += masked
@@ -272,7 +294,8 @@ def mask_addresses(lines):
             continue
         match = ADDRESS_IN_LINE.search(line)
         if match:
-            lines[index] = line[:match.start('rest')] + ADDRESS_MARK
+            _, rest = _split_at_next_field(line[match.start('rest'):])
+            lines[index] = line[:match.start('rest')] + ADDRESS_MARK + rest
             count += 1
     return count
 
@@ -357,11 +380,8 @@ def mask_names(lines):
         value = match.group('value')
         has_colon = ':' in match.group('sep') or '：' in match.group('sep')
         if value.strip():
-            # 같은 줄에 다른 라벨이 이어지면 이름은 그 앞에서 끝난다. 뒤의 내용은 그대로 둔다.
-            name, rest = value, ''
-            next_label = INLINE_NEXT_LABEL.search(value)
-            if next_label:
-                name, rest = value[:next_label.start()], value[next_label.start():]
+            # 같은 줄에 다른 라벨이 이어지면 이름은 그 앞에서 끝난다(예: "연락처:", "납부기한:").
+            name, rest = _split_at_next_field(value)
             # 이름 자체가 이미 가려졌는지만 본다. 뒤에 이어진 다른 항목의 가림 표시는 상관없다.
             if not name.strip() or any(mark in name for mark in _ALL_MARKS) \
                     or (not has_colon and not _looks_like_name(name)):

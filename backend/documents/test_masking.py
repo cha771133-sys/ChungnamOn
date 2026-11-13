@@ -67,6 +67,9 @@ def masked(text):
 rules_mode = override_settings(MASK_MODE='rules')
 
 
+# 로컬 .env에 OCR_MODE=clova가 있어도 dummy 마스킹 확인이 안전장치에 막히지 않게 고정한다.
+# 메서드에 지정한 OCR_MODE='clova'가 이 설정보다 우선한다.
+@override_settings(OCR_MODE='dummy')
 class MaskModeTests(SimpleTestCase):
     def test_default_is_dummy_regex(self):
         """MASK_MODE가 없으면 dummy: 등록번호와 "주소:" 줄만 가린다(기존 동작)."""
@@ -479,6 +482,30 @@ class KeepGuidanceInfoTests(SimpleTestCase):
         ):
             with self.subTest(hidden=hidden):
                 self.assertNotIn(hidden, result)
+
+    def test_keeps_following_fields_on_same_line(self):
+        """개인정보 값만 가리고 같은 줄에 이어진 기한·금액은 남긴다."""
+        for text, expected in (
+            ('성명: 홍길동 여권번호: M12345678 납부기한: 2026년 8월 31일',
+             '성명: [이름 가림] 여권번호: [여권번호 가림] 납부기한: 2026년 8월 31일'),
+            ('여권번호: M12345678 납부기한: 2026년 8월 31일', '여권번호: [여권번호 가림] 납부기한: 2026년 8월 31일'),
+            ('외국인등록번호: 9OO1O1-5123456 세액: 6,250원', '외국인등록번호: ******-******* 세액: 6,250원'),
+            ('주소: 충청남도 아산시 배방읍 가상로 1 납부기한: 2026년 8월 31일',
+             '주소: 충청남도 아산시 [주소 가림] 납부기한: 2026년 8월 31일'),
+            ('충청남도 아산시 배방읍 가상로 1 세액: 6,250원', '충청남도 아산시 [주소 가림] 세액: 6,250원'),
+            ('성명: 홍길동 납부기한: 2026년 8월 31일 금액: 11,000원', '성명: [이름 가림] 납부기한: 2026년 8월 31일 금액: 11,000원'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+
+    def test_name_parts_are_not_mistaken_for_next_label(self):
+        """이름 조각("반 안")을 다음 항목 라벨로 오해해 이름 일부를 남기지 않는다."""
+        for text in ('성명: 응우옌 반 안 납부 기한: 2026년 8월 31일', '성명: 스리 라하유 납부기한: 2026년 8월 31일'):
+            with self.subTest(text=text):
+                result = masked(text)
+
+                self.assertTrue(result.startswith('성명: [이름 가림] 납부'))
+                self.assertIn('2026년 8월 31일', result)
 
     def test_keeps_application_dates_and_bank(self):
         result = masked(APPLICATION)
