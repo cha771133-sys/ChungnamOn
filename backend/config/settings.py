@@ -232,6 +232,10 @@ OCR_MODE = os.environ.get('OCR_MODE') or 'dummy'
 CLOVA_OCR_INVOKE_URL = os.environ.get('CLOVA_OCR_INVOKE_URL', '')
 CLOVA_OCR_SECRET = os.environ.get('CLOVA_OCR_SECRET', '')
 
+# 개인정보 마스킹. dummy는 등록번호·"주소:" 줄만 가리는 더미, rules는 documents/services/masking.py 규칙.
+# 실제 문서(OCR_MODE=clova)를 처리할 때는 rules를 쓴다. 값이 비어 있으면 dummy로 동작한다.
+MASK_MODE = os.environ.get('MASK_MODE') or 'dummy'
+
 # 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
 

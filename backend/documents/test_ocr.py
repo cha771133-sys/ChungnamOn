@@ -95,7 +95,7 @@ class BuildTextTests(SimpleTestCase):
     def test_address_line_is_masked_by_existing_pattern(self):
         masked = mask_personal_info(build_text([NOTICE_PAGE]))
 
-        self.assertIn('주소: 충청남도 아산시 [주소 가림]\n세액', masked['masked_text'])
+        self.assertIn('주소: [주소 가림]\n세액', masked['masked_text'])
         for detail in ('배방읍', '가상로 123', '101동'):
             self.assertNotIn(detail, masked['masked_text'])
 
@@ -226,6 +226,8 @@ class ClovaTestCase(TestCase):
             MEDIA_ROOT=media.name,
             DOCUMENTS_STEP_DELAY=0,
             OCR_MODE='clova',
+            # 실제 OCR에는 실제 마스킹 규칙이 필요하다(pipeline.mask_personal_info 안전장치).
+            MASK_MODE='rules',
             CLOVA_OCR_INVOKE_URL=INVOKE_URL,
             CLOVA_OCR_SECRET=SECRET,
         )

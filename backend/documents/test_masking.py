@@ -63,6 +63,49 @@ def masked(text):
     return mask_personal_info(text)['masked_text']
 
 
+# 아래 테스트는 실제 규칙(masking.py)을 확인한다. 기본값 dummy는 MaskModeTests에서 확인한다.
+rules_mode = override_settings(MASK_MODE='rules')
+
+
+class MaskModeTests(SimpleTestCase):
+    def test_default_is_dummy_regex(self):
+        """MASK_MODE가 없으면 dummy: 등록번호와 "주소:" 줄만 가린다(기존 동작)."""
+        with override_settings():
+            from django.conf import settings
+
+            del settings.MASK_MODE
+            result = mask_personal_info(NOTICE)
+
+        self.assertIn('******-*******', result['masked_text'])
+        self.assertIn('주소: [주소 가림]', result['masked_text'])
+        self.assertIn('응우옌 반 안', result['masked_text'])
+        self.assertEqual(result['masked_count'], 2)
+
+    @override_settings(MASK_MODE='dummy')
+    def test_dummy_mode(self):
+        self.assertEqual(mask_personal_info(NOTICE)['masked_count'], 2)
+
+    @rules_mode
+    def test_rules_mode_uses_masking_module(self):
+        self.assertEqual(mask_personal_info(NOTICE), masking.mask_text(NOTICE))
+
+    @override_settings(MASK_MODE='rule')
+    def test_unknown_mode_raises(self):
+        with self.assertRaises(ValueError):
+            mask_personal_info(NOTICE)
+
+    @override_settings(MASK_MODE='dummy', OCR_MODE='clova')
+    def test_dummy_masking_with_real_ocr_raises(self):
+        """실제 문서를 읽는데 더미 마스킹이면 설정 누락으로 보고 처리하지 않는다."""
+        with self.assertRaises(ValueError):
+            mask_personal_info(NOTICE)
+
+    @override_settings(MASK_MODE='rules', OCR_MODE='clova')
+    def test_rules_masking_with_real_ocr_is_allowed(self):
+        self.assertEqual(mask_personal_info(NOTICE)['masked_count'], 3)
+
+
+@rules_mode
 class ContractTests(SimpleTestCase):
     def test_returns_masked_text_and_count(self):
         result = mask_personal_info(NOTICE)
@@ -103,6 +146,7 @@ class ContractTests(SimpleTestCase):
         )
 
 
+@rules_mode
 class RegistrationNumberTests(SimpleTestCase):
     def test_masks_number_forms(self):
         for text in (
@@ -157,6 +201,7 @@ class RegistrationNumberTests(SimpleTestCase):
         self.assertEqual(masked('외국인등록번호\n과세연도\n2026년'), '외국인등록번호\n과세연도\n2026년')
 
 
+@rules_mode
 class PassportNumberTests(SimpleTestCase):
     def test_masks_labeled_passport_number(self):
         for text, expected in (
@@ -174,6 +219,7 @@ class PassportNumberTests(SimpleTestCase):
                 self.assertEqual(masked(text), text)
 
 
+@rules_mode
 class AddressTests(SimpleTestCase):
     def test_keeps_region_and_masks_detail(self):
         for text, expected in (
@@ -271,6 +317,7 @@ class AddressTests(SimpleTestCase):
         self.assertEqual(masked(text), '주소: 충청남도 아산시 [주소 가림]\n2026년 8월 31일')
 
 
+@rules_mode
 class NameTests(SimpleTestCase):
     def test_masks_name_on_next_line_with_english_name(self):
         """sample1: 라벨 다음 줄의 이름과 괄호 안 영문 이름."""
@@ -338,6 +385,7 @@ class NameTests(SimpleTestCase):
                 self.assertEqual(mask_personal_info(expected)['masked_text'], expected)
 
 
+@rules_mode
 class PhoneNumberTests(SimpleTestCase):
     def test_masks_mobile_numbers_anywhere(self):
         for text in ('010-0000-4321', '01000004321', '010 0000 4321', '+82-10-0000-4321', '연락 주실 곳 010-0000-4321'):
@@ -365,6 +413,7 @@ class PhoneNumberTests(SimpleTestCase):
                 self.assertEqual(masked(text), text)
 
 
+@rules_mode
 class AccountNumberTests(SimpleTestCase):
     def test_masks_personal_accounts(self):
         for text, expected in (
@@ -398,6 +447,7 @@ class AccountNumberTests(SimpleTestCase):
                 self.assertEqual(masked(text), text)
 
 
+@rules_mode
 class KeepGuidanceInfoTests(SimpleTestCase):
     """해석·검증에 필요한 기관·납부 정보는 가리지 않는다."""
 
@@ -438,6 +488,7 @@ class KeepGuidanceInfoTests(SimpleTestCase):
                 self.assertIn(kept, result)
 
 
+@rules_mode
 class ChatbotBoundaryTests(SimpleTestCase):
     """챗봇(prepare_ai_payload)도 같은 함수를 쓴다. 기존 계약과 질문 문장을 지킨다."""
 
@@ -469,7 +520,7 @@ class ChatbotBoundaryTests(SimpleTestCase):
         self.assertNotIn('라하유', prepared)
 
 
-@override_settings(DOCUMENTS_STEP_DELAY=0, OCR_MODE='dummy')
+@override_settings(DOCUMENTS_STEP_DELAY=0, OCR_MODE='dummy', MASK_MODE='rules')
 class PipelineMaskingTests(TestCase):
     def setUp(self):
         media = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -513,3 +564,26 @@ class PipelineMaskingTests(TestCase):
         self.assertEqual(self.document.step, Document.Step.MASKING)
         self.assertEqual(self.document.fail_reason, pipeline.FAIL_MESSAGES[Document.Step.MASKING])
         self.assertFalse(Document.objects.filter(id=self.document.id, result__isnull=False).exists())
+
+    def test_dummy_masking_with_real_ocr_fails_document_at_masking_step(self):
+        """배포에서 MASK_MODE를 빠뜨리면 약한 마스킹 결과를 저장하지 않고 문서를 실패시킨다."""
+        with (
+            override_settings(MASK_MODE='dummy', OCR_MODE='clova'),
+            mock.patch.object(pipeline, 'run_ocr', return_value={'text': NOTICE, 'confidence': 0.9}),
+            self.assertLogs(pipeline.logger, 'ERROR'),
+        ):
+            pipeline.process_document(self.document.id)
+        self.document.refresh_from_db()
+
+        self.assertEqual(self.document.status, Document.Status.FAILED)
+        self.assertEqual(self.document.step, Document.Step.MASKING)
+        self.assertFalse(Document.objects.filter(id=self.document.id, result__isnull=False).exists())
+
+    def test_unknown_mask_mode_fails_document_at_masking_step(self):
+        """MASK_MODE 오타는 약한 마스킹으로 넘어가지 않고 문서를 실패시킨다."""
+        with override_settings(MASK_MODE='rule'), self.assertLogs(pipeline.logger, 'ERROR'):
+            pipeline.process_document(self.document.id)
+        self.document.refresh_from_db()
+
+        self.assertEqual(self.document.status, Document.Status.FAILED)
+        self.assertEqual(self.document.step, Document.Step.MASKING)
