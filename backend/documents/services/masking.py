@@ -29,6 +29,8 @@ AGENCY_WORDS = (
     '출입국', '민원실', '청사', '주민센터', '행정복지센터',
 )
 AGENCY_LABELS = ('문의', '제출처', '접수처', '담당', '찾아오는', '오시는', '발신', '콜센터', '대표번호', '위치', '기관')
+# 기관 단어 바로 뒤에 로·길이 오면 도로명(예: 시청로)이라 기관 단어로 보지 않는다.
+_AGENCY_WORD_PATTERN = re.compile(f'(?:{"|".join(AGENCY_WORDS)})(?![로길])')
 
 # 표 형식 문서에서 다음 줄을 값으로 읽을 때, 그 줄이 다른 라벨이면 값이 빈칸인 것으로 본다.
 _TABLE_LABELS = (
@@ -71,7 +73,11 @@ _REGION = rf'(?:(?:{_SIDO}[ \t]+)?{_SIGUNGU}(?:[ \t]+[가-힣]{{1,6}}구)?|[가-
 # 읍·면·동·리, 도로명(…로·…길), 번지 숫자
 _DETAIL_START = r'(?:[가-힣0-9]+(?:읍|면|동|리|로|길)(?=[ \t\d,]|$)|\d)'
 REGION_PREFIX = re.compile(rf'^[ \t]*(?P<keep>{_REGION})(?=[ \t,]|$)(?P<rest>.*)$')
-DETAIL_LINE = re.compile(rf'^[ \t]*{_DETAIL_START}')
+# 주소 다음 줄로 이어진 상세주소: 읍·면·동·도로명으로 시작하거나 "101동 1001호"처럼 동·호·층·번지로 시작한다.
+# "2026년 8월 31일" 같은 날짜 줄은 이어진 주소로 보지 않는다.
+DETAIL_LINE = re.compile(
+    r'^[ \t]*(?:[가-힣0-9]+(?:읍|면|동|리|로|길)(?=[ \t\d,]|$)|\d+(?:-\d+)?(?:번지|동|호|층)(?=[ \t,]|$))'
+)
 # 라벨 없이 줄 안에 나온 주소: 시·군·구 + 읍·면·동·도로명 + 숫자
 ADDRESS_IN_LINE = re.compile(
     rf'(?:(?<=[ \t:：(])|^)(?P<keep>{_REGION})[ \t]+(?P<rest>{_DETAIL_START}[^\n]*\d[^\n]*)$'
@@ -84,13 +90,17 @@ ADDRESS_LABEL = re.compile(
 FUZZY_ADDRESS_LABEL = re.compile(rf'^(?P<label>{_BULLET}(?:[가-힣]\s*소|주\s*[가-힣])[ \t]*[:：][ \t]*)(?P<value>.+)$')
 
 # ── 개인 계좌 ─────────────────────────────────────────────────
-# 출금·환급 계좌만 가린다. 납부용 가상계좌와 기관 예금주 계좌는 남긴다.
-ACCOUNT_LABEL = re.compile(
-    rf'^(?P<label>{_BULLET}(?:(?:출금|환급|본인|신청인|자동\s*이체)\s*계좌(?:\s*번호)?|계좌\s*번호)[ \t]*[:：]?[ \t]*)'
-    rf'(?P<value>.*)$'
+# 출금·환급 등 개인 계좌 라벨은 예금주 표기와 관계없이 가린다.
+PERSONAL_ACCOUNT_LABEL = re.compile(
+    rf'^(?P<label>{_BULLET}(?:출금|환급|본인|신청인|자동\s*이체)\s*계좌(?:\s*번호)?[ \t]*[:：]?[ \t]*)(?P<value>.*)$'
 )
+# 일반 "계좌번호" 라벨은 납부용 가상계좌이거나 예금주가 기관일 때만 남긴다.
+GENERIC_ACCOUNT_LABEL = re.compile(rf'^(?P<label>{_BULLET}계좌\s*번호[ \t]*[:：]?[ \t]*)(?P<value>.*)$')
 ACCOUNT_NUMBER = re.compile(r'\d[\d \t\-]{6,}\d')
-ACCOUNT_KEEP_WORDS = ('가상계좌', '가상 계좌', '예금주', '납부')
+PAYMENT_ACCOUNT_WORDS = ('가상계좌', '가상 계좌', '납부')
+AGENCY_HOLDER = re.compile(
+    r'예금주[ \t]*[:：]?[ \t]*[가-힣]*(?:특별자치도|특별자치시|특별시|광역시|도|시|군|구|청|공단|공사|세무서|센터|사무소|지사)(?=[ \t)\],]|$)'
+)
 
 # ── 개인 연락처 ───────────────────────────────────────────────
 # 휴대전화 번호는 어디에 있든 가린다. 일반 전화번호는 연락처 라벨이 있을 때만 가린다.
@@ -107,6 +117,11 @@ NAME_LABEL = re.compile(
     rf'^(?P<label>{_BULLET}(?:납세자|납부자|가입자|신청인|성\s*명|이\s*름)(?:[ \t]*(?:성명|이름))?)'
     rf'(?P<sep>[ \t]*[:：][ \t]*|[ \t]+|[ \t]*$)(?P<value>.*)$'
 )
+# 이름과 같은 줄에 이어 나온 다른 라벨(예: "성명: 홍길동 연락처: …"). 이름은 이 라벨 앞에서 끝난다.
+INLINE_NEXT_LABEL = re.compile(
+    r'[ \t]+(?=(?:연\s*락\s*처|전화\s*번호|휴대\s*(?:전화|폰)|주\s*소|외국인\s*등록\s*번호|주민\s*등록\s*번호|여권\s*번호'
+    r'|생년월일|국적|계좌\s*번호|출금|환급|이메일)[ \t]*[:：])'
+)
 # 라벨 뒤에 이름이 아니라 이런 단어가 오면 표 머리글로 본다(예: "신청인 정보").
 NOT_NAME_WORDS = ('정보', '성명', '이름', '서명', '구분', '현황', '내역', '본인', '확인', '번호', '주소', '연락처')
 # 문장 끝. 이름이 "다"·"요"로 끝날 수 있어 한 글자 어미는 넣지 않는다.
@@ -115,7 +130,7 @@ _ALL_MARKS = (REGISTRATION_MARK, PASSPORT_MARK, ADDRESS_MARK, ACCOUNT_MARK, PHON
 
 
 def _agency_line(line):
-    return any(word in line for word in AGENCY_WORDS) or any(label in line for label in AGENCY_LABELS)
+    return bool(_AGENCY_WORD_PATTERN.search(line)) or any(label in line for label in AGENCY_LABELS)
 
 
 def _is_table_label(line):
@@ -206,6 +221,16 @@ def _mask_address_value(value, *, require_address_form):
     return ADDRESS_MARK, 1, False
 
 
+def _mask_detail_lines(lines, start):
+    """start 줄부터 상세주소 모양의 줄을 다음 필드 전까지 가린다. 하나라도 가렸으면 True."""
+    index = start
+    while (index < len(lines) and DETAIL_LINE.match(lines[index]) and ADDRESS_MARK not in lines[index]
+           and not _is_table_label(lines[index])):
+        lines[index] = ADDRESS_MARK
+        index += 1
+    return index > start
+
+
 def mask_addresses(lines):
     """개인 주소. 라벨(띄어 쓴 라벨·잘못 읽은 라벨 포함)과 줄 안의 주소 형태로 찾는다."""
     count = 0
@@ -220,25 +245,25 @@ def mask_addresses(lines):
             require_form = True
         if not match:
             continue
+        # 개인 주소 라벨이 있으면 도로명 등에 기관 단어가 있어도 가린다. 기관 주소는 제출처·문의 등 기관 라벨 줄로 남긴다.
         value = match.group('value')
-        if not value.strip():
+        value_index = index
+        if value.strip():
+            new_value, masked, detail_may_follow = _mask_address_value(value, require_address_form=require_form)
+            new_line = line[:match.start('value')] + new_value
+        else:
             # 라벨만 있는 줄: 다음 줄이 값이다.
-            following = _next_value_index(lines, index)
-            if following is not None and not _agency_line(lines[following]):
-                lines[following], masked, _ = _mask_address_value(lines[following], require_address_form=False)
-                count += masked
-            continue
-        # 기관 주소(발신기관·제출처)는 남긴다.
-        if _agency_line(value):
-            continue
-        new_value, masked, detail_may_follow = _mask_address_value(value, require_address_form=require_form)
+            value_index = _next_value_index(lines, index)
+            if value_index is None:
+                continue
+            new_line, masked, detail_may_follow = _mask_address_value(lines[value_index], require_address_form=False)
         if masked:
-            lines[index] = line[:match.start('value')] + new_value
+            lines[value_index] = new_line
             count += masked
-        elif detail_may_follow and index + 1 < len(lines) and DETAIL_LINE.match(lines[index + 1]) \
-                and ADDRESS_MARK not in lines[index + 1]:
+            # 상세주소가 다음 줄로 이어지면 다음 필드 전까지 함께 가린다. 같은 주소라 개수는 늘리지 않는다.
+            _mask_detail_lines(lines, value_index + 1)
+        elif detail_may_follow and _mask_detail_lines(lines, value_index + 1):
             # 시·군·구 뒤에서 줄이 바뀐 주소: 다음 줄의 상세주소를 가린다.
-            lines[index + 1] = ADDRESS_MARK
             count += 1
 
     # 라벨 없이 나온 개인 주소. 기관 안내 줄은 남긴다.
@@ -253,13 +278,18 @@ def mask_addresses(lines):
 
 
 def mask_accounts(lines):
-    """개인 계좌번호. 출금·환급 계좌 라벨이 있는 값만 가린다."""
-    def mask_value(value):
-        if any(word in value for word in ACCOUNT_KEEP_WORDS):
+    """개인 계좌번호. 출금·환급 등 개인 계좌 라벨은 항상 가리고, 일반 계좌번호 라벨은 납부용 계좌만 남긴다."""
+    def mask_personal(value):
+        # 예금주 표기는 기관 계좌라는 근거가 아니다.
+        return ACCOUNT_NUMBER.subn(ACCOUNT_MARK, value)
+
+    def mask_generic(value):
+        if any(word in value for word in PAYMENT_ACCOUNT_WORDS) or AGENCY_HOLDER.search(value):
             return value, 0
         return ACCOUNT_NUMBER.subn(ACCOUNT_MARK, value)
 
-    return _labeled_lines(lines, ACCOUNT_LABEL, mask_value)
+    return (_labeled_lines(lines, PERSONAL_ACCOUNT_LABEL, mask_personal)
+            + _labeled_lines(lines, GENERIC_ACCOUNT_LABEL, mask_generic))
 
 
 def mask_phone_numbers(lines):
@@ -293,8 +323,17 @@ def _name_parts(name):
     before, _, inside = name.partition('(')
     parts.add(before.strip())
     parts.add(inside.rstrip(') \t').strip())
-    # 너무 짧은 조각은 다른 낱말까지 가릴 수 있어 쓰지 않는다.
-    return sorted((part for part in parts if len(part.replace(' ', '')) >= 3), key=len, reverse=True)
+    # 한 글자 조각은 다른 낱말까지 가릴 수 있어 쓰지 않는다. 두 글자는 _name_pattern()의 경계 조건으로 제한한다.
+    return sorted((part for part in parts if len(part.replace(' ', '')) >= 2), key=len, reverse=True)
+
+
+def _name_pattern(part):
+    """다른 곳에 다시 나온 이름을 찾는 정규식. 두 글자 이름은 다른 낱말의 일부일 때 가리지 않는다."""
+    body = r'[ \t]+'.join(re.escape(word) for word in part.split())
+    if len(part.replace(' ', '')) >= 3:
+        return re.compile(body)
+    # 예: "이안 님께", "이안님", "이안씨"는 가리고 "이안경", "보이안"은 가리지 않는다.
+    return re.compile(rf'(?<![가-힣A-Za-z]){body}(?:(?![가-힣A-Za-z])|(?=님|씨))')
 
 
 def mask_names(lines):
@@ -308,10 +347,17 @@ def mask_names(lines):
         value = match.group('value')
         has_colon = ':' in match.group('sep') or '：' in match.group('sep')
         if value.strip():
-            if any(mark in value for mark in _ALL_MARKS) or (not has_colon and not _looks_like_name(value)):
+            # 같은 줄에 다른 라벨이 이어지면 이름은 그 앞에서 끝난다. 뒤의 내용은 그대로 둔다.
+            name, rest = value, ''
+            next_label = INLINE_NEXT_LABEL.search(value)
+            if next_label:
+                name, rest = value[:next_label.start()], value[next_label.start():]
+            # 이름 자체가 이미 가려졌는지만 본다. 뒤에 이어진 다른 항목의 가림 표시는 상관없다.
+            if not name.strip() or any(mark in name for mark in _ALL_MARKS) \
+                    or (not has_colon and not _looks_like_name(name)):
                 continue
-            found.append(value)
-            lines[index] = match.group('label') + match.group('sep') + NAME_MARK
+            found.append(name)
+            lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
             count += 1
             continue
         following = _next_value_index(lines, index)
@@ -327,7 +373,7 @@ def mask_names(lines):
 
     parts = sorted({part for name in found for part in _name_parts(name)}, key=len, reverse=True)
     for part in parts:
-        pattern = re.compile(r'[ \t]+'.join(re.escape(word) for word in part.split()))
+        pattern = _name_pattern(part)
         for index, line in enumerate(lines):
             lines[index], masked = pattern.subn(NAME_MARK, line)
             count += masked

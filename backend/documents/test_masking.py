@@ -242,6 +242,34 @@ class AddressTests(SimpleTestCase):
             with self.subTest(text=text):
                 self.assertEqual(masked(text), text)
 
+    def test_masks_personal_address_with_agency_word_in_road_name(self):
+        """도로명(시청로)에 기관 단어가 있어도 개인 주소는 가린다."""
+        for text, expected in (
+            ('주소: 충청남도 아산시 시청로 123, 101동 1001호', '주소: 충청남도 아산시 [주소 가림]'),
+            ('충청남도 아산시 시청로 123, 101동 1001호', '충청남도 아산시 [주소 가림]'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+
+    def test_masks_detail_after_region_on_next_value_line(self):
+        """라벨 다음 줄이 시·군·구뿐이면 그다음 줄의 상세주소를 가린다."""
+        result = mask_personal_info('주소\n충청남도 아산시\n배방읍 가상로 123')
+
+        self.assertEqual(result['masked_text'], '주소\n충청남도 아산시\n[주소 가림]')
+        self.assertEqual(result['masked_count'], 1)
+
+    def test_masks_detail_continued_on_next_lines(self):
+        """상세주소가 다음 줄로 이어지면 다음 필드 전까지 함께 가린다. 같은 주소라 1개로 센다."""
+        result = mask_personal_info('주소: 충청남도 아산시 배방읍 가상로 123\n101동 1001호\n세액')
+
+        self.assertEqual(result['masked_text'], '주소: 충청남도 아산시 [주소 가림]\n[주소 가림]\n세액')
+        self.assertEqual(result['masked_count'], 1)
+
+    def test_date_line_after_address_is_not_detail(self):
+        text = '주소: 충청남도 아산시 배방읍 가상로 123\n2026년 8월 31일'
+
+        self.assertEqual(masked(text), '주소: 충청남도 아산시 [주소 가림]\n2026년 8월 31일')
+
 
 class NameTests(SimpleTestCase):
     def test_masks_name_on_next_line_with_english_name(self):
@@ -279,6 +307,21 @@ class NameTests(SimpleTestCase):
     def test_heading_then_label_then_name(self):
         """sample3 3쪽: "신청인 정보" 다음 "성명", 그다음 이름."""
         self.assertEqual(masked('신청인 정보\n성명\n스리 라하유'), '신청인 정보\n성명\n[이름 가림]')
+
+    def test_masks_repeated_two_letter_name(self):
+        text = '성명: 이안\n이안 님께 안내드립니다.\n이안님 확인 부탁드립니다.'
+
+        self.assertEqual(masked(text), '성명: [이름 가림]\n[이름 가림] 님께 안내드립니다.\n[이름 가림]님 확인 부탁드립니다.')
+
+    def test_two_letter_name_inside_other_word_is_kept(self):
+        self.assertEqual(masked('성명: 이안\n보이안경을 챙기세요.'), '성명: [이름 가림]\n보이안경을 챙기세요.')
+
+    def test_masks_name_followed_by_other_label_on_same_line(self):
+        """같은 줄의 다른 항목이 먼저 가려져도 이름은 이름대로 가린다."""
+        self.assertEqual(
+            masked('성명: 홍길동 연락처: 010-0000-4321'),
+            '성명: [이름 가림] 연락처: [전화번호 가림]',
+        )
 
 
 class PhoneNumberTests(SimpleTestCase):
@@ -318,6 +361,17 @@ class AccountNumberTests(SimpleTestCase):
         ):
             with self.subTest(text=text):
                 self.assertEqual(masked(text), expected)
+
+    def test_masks_personal_account_with_holder_name(self):
+        """예금주 표기만으로 기관 계좌로 보지 않는다."""
+        for text in (
+            '환급 계좌: 하나은행 123-456789-01234 (예금주: 홍길동)',
+            '출금 계좌: 하나은행 123-456789-01234 예금주 홍길동',
+            '계좌번호: 하나은행 123-456789-01234 (예금주: 홍길동)',
+        ):
+            with self.subTest(text=text):
+                self.assertIn('[계좌 가림]', masked(text))
+                self.assertNotIn('123-456789-01234', masked(text))
 
     def test_keeps_payment_accounts(self):
         for text in (
