@@ -20,7 +20,7 @@ FE Chat.jsx ──POST /api/chat/──▶ chatbot 앱
 
 | 교체 자리 | 설정 | 호출 | 하는 일 |
 |---|---|---|---|
-| `documents.services.pipeline.verify` | `DOCUMENTS_VERIFY_MODE=rag` | `integration.verify_interpretation` | 해석 결과로 관련 공식 자료 검색 (자료당 1개, 관련도 순 최대 10개) → LLM 대조로 `MATCHED/MISMATCH/UNVERIFIED`. 기존 출력 형식 + 각 출처에 `sourceDocumentId` |
+| `documents.services.pipeline.verify` | `DOCUMENTS_VERIFY_MODE=rag` | `integration.verify_interpretation` | 해석 결과로 관련 공식 자료 검색 (자료당 1개, 관련도 순 최대 10개) → LLM이 **항목별로** 대조 (C1 형식, 아래 참고) |
 | `chatbot.services.ai_client.generate_answer` | `CHATBOT_AI_MODE=rag` | `integration.chat_answer` | RAG 답변을 `backend/chatbot/README.md` 계약 형식으로 변환 |
 
 챗봇 출처 규칙 (chatbot 앱 계약):
@@ -35,17 +35,52 @@ FE Chat.jsx ──POST /api/chat/──▶ chatbot 앱
 python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks())"
 python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks([3, 5]))"  # 특정 자료만
 ```
-`sources/REFRESH.md`의 'AI 경계' 계약을 따름:
+`sources/REFRESH.md`의 'AI 경계' 계약과 자동 `ACTIVE` 전환 정책(#60)을 따름:
 - 대상: 관리자 승인(`APPROVED`)·공식 링크 있음·`INACTIVE` 아님·본문 있음 (승인 후 재처리 대기라 `PENDING`인 자료 포함)
-- 현재 승인 본문 해시로 만든 청크가 있고 임베딩 차원이 `AI_EMBED_DIM`과 같으면 건너뜀(임베딩 API도 안 부름)
+- 자료마다 처리를 시작할 때 본문 해시·`version`(승인 정보 버전)·상태를 다시 읽어 기억함
+- 현재 승인 본문 해시로 만든 청크가 있고 임베딩 차원이 `AI_EMBED_DIM`과 같으면 청크 생성을 건너뜀(임베딩 API도 안 부름)
 - 새 청크는 기존 청크 **뒤 순서에 추가**하고 `source_content_hash`에 읽은 본문 해시를 기록. 이전 청크는 삭제·ID 재사용 안 함
-- 저장 직전 본문 해시를 다시 확인. 임베딩하는 동안 새 본문이 승인됐으면 저장하지 않음(`changed`)
-- 재처리 대기 자료는 완료 시 `ai_reprocessing_required`를 해제하고 `version`을 올림. **`ACTIVE` 전환은 관리자가 Admin에서**
+- **완료 직전 검사**: 같은 트랜잭션에서 자료 행을 잠그고, 완료 처리가 `version`을 올리기 전에
+  시작 시점의 해시·`version`과 비교하고 관리자 승인·`INACTIVE` 여부를 다시 확인. 청크 생성을 건너뛰는 경로도 똑같이 검사
+  - 다 맞으면: 청크 저장 + 재처리 대기 자료는 **재처리 완료(`ai_reprocessing_required=False`)·자동 `ACTIVE` 전환·`version+1`을 함께** 반영
+  - 하나라도 다르면(`changed`): 청크를 저장하지 않고 자료도 건드리지 않음. 이 작업의 청크는 최신으로 인정하지 않고,
+    최신 상태·재처리 플래그는 그대로 둠. 다음 실행이 새 시작 값으로 다시 처리
+- 완료 처리는 `status`·`ai_reprocessing_required`·`version`·`updated_at`만 바꿈 (제목·기관 등 관리자 입력은 그대로)
+- 이미 재처리가 끝난 자료(플래그 `False`)는 상태·`version`을 바꾸지 않음. 여러 번 실행해도 청크 중복·`version` 중복 증가 없음
+- 임베딩이 실패하면 예외가 나고 자료는 기존 상태 그대로
+- 반환값: `documents`·`chunks`·`skipped`·`completed`·`activated`(그중 `ACTIVE`로 바꾼 수)·`changed`
 
 검색(`DbRetriever`)·verify 후보도 같은 계약: `ai_eligible`(ACTIVE·승인·재처리 완료·공식 링크) 자료의
 `source_content_hash`가 현재 본문 해시와 같은 청크만 씀. 승인 전 자료와 이전 본문 청크는 검색되지 않음.
 
-verify(rag)는 검색·임베딩·LLM 오류가 나면 문서 처리를 실패시키지 않고 `UNVERIFIED`, `sources=[]`를 돌려줌.
+### verify 결과 형식 (C1, 관련 이슈 #62)
+
+`InterpretationResult.verification`에 그대로 저장되고 결과 API에 그대로 나간다 (자동 camelCase 변환이 없어서 저장 키가 camelCase).
+
+```json
+{
+  "overall": "MATCHED | MISMATCH | UNVERIFIED",
+  "status": "overall과 같은 값 (기존 코드·챗봇 호환)",
+  "items": [
+    {"key": "DEADLINE", "label": "납부 기한", "docValue": "납부 마감 2026-08-31",
+     "officialValue": "8월 16일 ~ 8월 31일", "status": "MATCHED", "reason": "…", "sourceIds": ["s1"]}
+  ],
+  "sources": [
+    {"id": "s1", "title": "…", "url": "https://…", "checkedAt": "2026-11-05", "publishedAt": "2026-03-02",
+     "sourceDocumentId": 12}
+  ]
+}
+```
+- **items**: `AMOUNT`·`DEADLINE`·`PAYMENT_METHOD`·`AGENCY_CONTACT` 순서. 문서에 값이 없는 항목은 뺌
+  - 문서 값: `amount`(문자열 또는 null) / `deadlines` / `payment_methods`(문자열 목록) / `agency.phone`
+  - 지금 더미 interpret에는 `amount`·`payment_methods`가 없어서 `DEADLINE`·`AGENCY_CONTACT`만 나옴
+  - `officialValue`·`reason`은 한국어. `UNVERIFIED`면 `officialValue`는 null, `sourceIds`는 빈 목록
+  - `AGENCY_CONTACT`도 검색된 공식 자료로만 판정 (담당기관 조회 #55 연동은 추후)
+- **overall**: LLM이 아니라 코드가 items로 계산. 하나라도 `MISMATCH`면 `MISMATCH`, 모두 `MATCHED`면 `MATCHED`, 그 외(항목 0개 포함) `UNVERIFIED`
+- **LLM 판정 검사**: status가 이상한 값이거나, `sourceIds`에 `sources`에 없는 id가 있거나, `MATCHED`·`MISMATCH`인데 근거 id·공식 값이 없으면 **그 항목만** `UNVERIFIED`. LLM이 빠뜨린 항목도 `UNVERIFIED`
+- **sources**: 결과에 한 번만. `id`는 `s1`부터. `publishedAt`은 자료 기준일이 있을 때만. 챗봇은 지금처럼 `status`가 `MATCHED`/`MISMATCH`일 때 `sources[].sourceDocumentId`를 공식 출처로 씀
+- 발신기관·지역을 모르면 검색하지 않고 항목을 모두 `UNVERIFIED`로. 관련 자료가 없어도 같음
+- **오류**: 검색·임베딩·LLM 등 어떤 오류든 `verify_interpretation()`이 직접 잡아 `{"overall": "UNVERIFIED", "status": "UNVERIFIED", "items": [], "sources": []}`를 돌려줌. 문서 처리는 계속되고, 로그에는 오류 종류만 남김
 
 실제 Ollama로 끝까지 확인 (샘플 자료를 테스트 DB에만 넣음, CPU면 몇 분 걸림):
 ```bash
