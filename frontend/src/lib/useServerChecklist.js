@@ -29,21 +29,25 @@ export function useServerChecklist(doc) {
     }
   }, [])
 
-  /** 목록을 받아 문서에 저장한다. 받지 못했으면 false (늦게 와서 버린 응답은 true) */
+  /**
+   * 목록을 받아 문서에 저장한다.
+   * @returns {Promise<'applied'|'discarded'|'failed'>}
+   *   applied: 화면에 반영 / discarded: 받았지만 그사이 화면 이탈·계정 전환·새 체크가 있어 버림 / failed: 받지 못함
+   */
   const load = useCallback(() => {
-    if (serverId == null) return Promise.resolve(true)
+    if (serverId == null) return Promise.resolve('discarded')
     const session = tokenStore.session()
     const seq = changeSeq.current
     return getChecklist(serverId)
       .then((raw) => {
-        if (!alive.current || tokenStore.session() !== session || seq !== changeSeq.current) return true
+        if (!alive.current || tokenStore.session() !== session || seq !== changeSeq.current) return 'discarded'
         updateDoc(docId, (d) => ({ checklist: adaptChecklist(raw, d.sourceKeyOf) }))
         setStatus('ready')
-        return true
+        return 'applied'
       })
       .catch(() => {
         if (alive.current) setStatus((s) => (s === 'ready' ? s : 'error'))
-        return false
+        return 'failed'
       })
   }, [serverId, docId, updateDoc])
 
@@ -76,14 +80,18 @@ export function useServerChecklist(doc) {
     } catch (err) {
       if (err instanceof StaleSessionError || tokenStore.session() !== session) return
       if (parseApiError(err).status === 404) {
-        // 문서를 다시 처리해 항목이 바뀌었다. 새 목록을 받지 못하면 체크를 되돌리고 다시 시도하게 한다
+        // 문서를 다시 처리해 항목이 바뀌었다. 새 목록을 받아 바꾼다
         changeSeq.current += 1
-        if (await load()) {
+        const result = await load()
+        // 기다리는 사이 화면을 나갔거나 계정이 바뀌었으면 아무것도 바꾸지 않는다 (다시 들어오면 새로 받는다)
+        if (!alive.current || tokenStore.session() !== session) return
+        if (result === 'applied') {
           showToast(T('체크리스트가 바뀌어 다시 불러왔어요'))
-        } else {
-          setItem({ done: item.done })
-          showToast(T('체크리스트를 불러오지 못했어요. 다시 시도하세요'))
+          return
         }
+        // 새 목록을 반영하지 못했으면(실패 또는 그사이 다른 체크로 버림) 이 항목의 체크를 되돌린다
+        setItem({ done: item.done })
+        showToast(result === 'failed' ? T('체크리스트를 불러오지 못했어요. 다시 시도하세요') : T('체크리스트가 바뀌었어요. 다시 시도하세요'))
         return
       }
       setItem({ done: item.done })

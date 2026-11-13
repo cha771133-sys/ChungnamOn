@@ -474,6 +474,7 @@ export const UI = {
   '체류자격이나 상황에 따라 달라질 수 있어요.': { en: 'This may differ by visa status or situation.', vi: 'Có thể khác nhau tùy tư cách lưu trú hoặc hoàn cảnh.' },
   '체크리스트 {v0}/{v1} 완료': { en: 'Checklist {v0}/{v1} done', vi: 'Danh sách kiểm tra xong {v0}/{v1}' },
   '체크리스트가 바뀌어 다시 불러왔어요': { en: 'The checklist changed, so it was reloaded', vi: 'Danh sách việc cần làm đã thay đổi nên đã được tải lại' },
+  '체크리스트가 바뀌었어요. 다시 시도하세요': { en: 'The checklist changed. Try again', vi: 'Danh sách việc cần làm đã thay đổi. Hãy thử lại' },
   '체크리스트를 만들 정보가 부족해요': { en: 'Not enough information to make a checklist', vi: 'Không đủ thông tin để tạo danh sách kiểm tra' },
   '체크리스트를 불러오는 중이에요...': { en: 'Loading the checklist...', vi: 'Đang tải danh sách việc cần làm...' },
   '체크리스트를 불러오지 못했어요.': { en: "Couldn't load the checklist.", vi: 'Không tải được danh sách việc cần làm.' },
