@@ -126,7 +126,8 @@ XML 파서에서 DTD·엔티티 선언을 거부한다. 응답 전문·외부 �
 원문 해시 저장 공간이며 이 값이 비어 있는 기존 청크는 최신성이 확인되지 않은 상태다.
 `is_current`와 문서 `ai_eligible`은 해시·검토·사용 상태·재처리·공식 링크를 함께 확인한다.
 
-[AI PR #36](https://github.com/cha771133-sys/ChungnamOn/pull/36)은 2026년 11월 8일 병합되었다.
+[AI PR #36](https://github.com/cha771133-sys/ChungnamOn/pull/36)의 청크 생성·검색 연동에 이어
+[AI PR #64](https://github.com/cha771133-sys/ChungnamOn/pull/64)에서 재처리 완료 시 자동 `ACTIVE` 전환이 구현되었다.
 `build_source_chunks()`는 관리자 승인·공식 링크·본문·해시가 있고 `INACTIVE`가 아닌 자료를
 처리하며, 승인 후 재처리 대기 중인 `PENDING` 자료도 포함한다. 검색은 `ACTIVE`·관리자 승인·
 재처리 완료·공식 링크 조건을 충족하는 자료의 현재 승인 본문 해시와 일치하는 청크만 사용한다.
@@ -134,25 +135,57 @@ XML 파서에서 DTD·엔티티 선언을 거부한다. 응답 전문·외부 �
 두고 `INACTIVE`는 유지한다. 같은 본문의 출처 등 메타데이터만 검토한 경우에는 완료된
 재처리를 다시 요청하지 않는다. 과거 청크를 삭제하거나 ID를 재사용해서 완료 처리하면 안 된다.
 
-현재 AI 완료 처리는 본문 해시 일치·관리자 승인·재처리 필요 여부를 확인하여
-`ai_reprocessing_required=True`인 자료의 플래그를 해제하고 `version`을 1 증가시킨다.
-`INACTIVE` 제외는 처리 대상 조회 시점의 조건이며, 현재 완료 처리에는 시작 버전 비교와
-`INACTIVE` 재확인이 없다. **자동 `ACTIVE` 전환은 아직 구현되지 않았다.** 재처리가
-완료되어도 상태는 그대로이며, 현재는 관리자가 Admin에서 활성화한다.
+**자동 상태 전환과 AI 재처리 실행은 별개다.** `review_revision()`과 Admin 승인 액션은
+재처리 필요 상태만 저장하며, `build_source_chunks()`를 호출하거나 작업 큐에 등록하지 않는다.
+현재 승인 후 재처리는 아래 명령으로 **수동 실행**한다. 자동 `ACTIVE` 전환은 이 함수가 실행되어
+정상 완료 조건을 만족할 때 수행되며, 승인만으로 재처리가 자동 실행되지는 않는다.
 
-**향후 적용할 자동 `ACTIVE` 전환 정책(미구현):** 공식 링크와 청크 최신성 등 기존 검색
-조건은 유지하며, 다음 정책을 적용한다. 자료별 AI 처리 시작 시점의 본문 해시와 승인 정보
-버전(`version`)을 보관한다. 완료 직전에는 상태 갱신과 같은 트랜잭션에서 최신 자료 행을
+```powershell
+python manage.py shell -c "from ai.chatbot import build_source_chunks; print(build_source_chunks())"
+```
+
+수집·검토·AI 처리 단계별 상태와 변경 필드는 다음과 같다.
+
+| 단계 | 상태 및 변경 필드 |
+| --- | --- |
+| 신규 공식자료 수집 | 문서는 `status=PENDING`, `review_status=PENDING_REVIEW`, `version=0`, `ai_reprocessing_required=False`이며 승인 본문·해시는 비어 있다. 수집 본문·해시는 검토 대기 `SourceRevision`에 저장한다. 문서의 `last_success_at`·`observed_started_at`·`observed_hash`·`updated_at`을 기록하며 승인 본문 확인일 `collected_at`은 아직 없다. |
+| 관리자 승인·AI 재처리 대기 | 후보의 본문·해시·출처 메타데이터와 `collected_at`을 문서에 반영한다. 문서와 후보의 `review_status=APPROVED`·`reviewed_by`·`reviewed_at`을 기록하고, 문서의 `version`을 1 증가시키며 `updated_at`을 갱신한다. 최초·본문 변경 승인 시 `ai_reprocessing_required=True`, `status=PENDING`으로 두되 기존 `INACTIVE`는 유지한다. |
+| AI 재처리 성공 | 아래 완료 검증을 통과한 재처리 대기 자료만 `status=ACTIVE`, `ai_reprocessing_required=False`, `version+1`, `updated_at`을 함께 반영한다. 청크는 승인 본문 해시를 기록하여 추가하고 기존 청크·ID는 보존한다. |
+| AI 재처리 실패·청크 없음 | 임베딩 예외가 나면 해당 자료의 저장·완료 처리를 하지 않고 예외를 반환한다. 분할 결과가 비어 있어도 완료로 기록하지 않는다. 문서의 기존 상태·버전·재처리 플래그와 기존 청크는 유지하며 별도 실패 상태로 바꾸지 않는다. 앞서 완료된 다른 자료까지 되돌리지는 않는다. |
+| 관리자의 사용 중지 | Admin에서 `status=INACTIVE`로 저장하면 `version+1`·`updated_at`을 반영하며 승인 정보와 재처리 플래그는 유지한다. 수집·재승인·AI 완료가 자동으로 재활성화하지 않으며 검색에서도 제외한다. |
+| 본문 변경 후 재승인 | 변경 수집만으로 승인 본문·해시·청크는 바꾸지 않는다. 변경 후보 승인 시 새 본문·해시와 검토 정보를 반영하고 `version+1`, `ai_reprocessing_required=True`, `status=PENDING`(기존 `INACTIVE` 유지)으로 전환한다. 이전 청크는 남지만 재처리 플래그·상태·해시 조건으로 최신 검색에서 제외된다. |
+
+같은 본문의 메타데이터만 승인하고 이미 재처리가 끝났다면 플래그를 다시 켜지 않는다.
+단, 공식 링크가 없으면 `PENDING`으로 두며 AI 처리 대상에서도 제외한다. 같은 후보의 중복
+승인은 `REVIEW_CONFLICT`로 거부하여 버전·상태를 다시 변경하지 않는다.
+
+**구현된 자동 `ACTIVE` 전환 조건:** `indexing.py`의 `build_source_chunks()`는 자료별 처리
+시작 시점의 본문 해시와 승인 정보 버전(`version`)을 보관한다. 완료 직전에는
+`_lock_if_unchanged()`가 청크 저장·상태 갱신과 같은 트랜잭션에서 최신 자료 행을
 잠그고, **완료 처리 자체가 `version`을 증가시키기 전에** 시작 시점의 해시·버전과 비교한다.
-이때 관리자 승인 여부와 `INACTIVE` 여부도 다시 확인한다. 검증 조건이 모두 맞을 때만
-재처리 완료 기록과 자동 `ACTIVE` 전환을 함께 반영한다. 이미 최신 청크가 있어 청크 생성을
-건너뛰고 재처리 완료만 기록하는 경로에도 같은 검증을 적용한다.
+이때 `review_status=APPROVED`와 현재 `status != INACTIVE`도 다시 확인한다.
+새 청크·임베딩을 저장하거나 현재 본문 해시와 설정된 임베딩 차원의 청크가 이미 있음을
+확인한 뒤, `_finish()`·`_complete_and_activate()`가 `ai_reprocessing_required=True`인 경우에만
+재처리 완료와 자동 `ACTIVE` 전환을 함께 반영한다. 조건부 UPDATE에도 해시·버전·승인·
+`INACTIVE` 제외·재처리 필요 조건을 다시 적용한다. 최신 청크가 있어 청크 생성을 건너뛰고
+완료만 기록하는 경로에도 같은 검증을 적용한다.
 
-완료 직전 검증에서 해시·버전이 일치하지 않으면 해당 작업의 재처리 완료 기록과 자동 `ACTIVE`
+완료 처리가 문서에서 변경하는 필드는 **`status`·`ai_reprocessing_required`·`version`·`updated_at`뿐**이다.
+본문·해시·제목·기관·승인자·승인일·수집 확인일은 변경하지 않는다. 이미 플래그가 `False`인
+자료는 완료로 다시 기록하거나 상태·버전을 바꾸지 않는다. 이미 `ACTIVE`지만 재처리 대기라면
+완료와 `version+1`만 반영하며 새 활성화 수(`activated`)에는 포함하지 않는다.
+
+단, 새 청크 경로는 임베딩 함수가 예외 없이 반환하면 성공으로 간주하며, `indexing.py`는
+반환된 벡터 개수·차원을 직접 검증하지 않는다. Gemini 임베더는 이를 검증하지만 Ollama
+임베더에는 같은 검사가 없다. 비정상 Ollama 응답(`embeddings=[]`)을 모의하면 청크가 없어도
+완료·`ACTIVE`로 기록되는 문제가 재현되었다. 이는 AI 담당 범위의 미해결 결함이며,
+실제 외부 서비스에서의 발생 여부는 미검증이다.
+
+완료 직전 해시·버전이 일치하지 않거나 승인이 취소·반려되었거나 `INACTIVE`라면 해당 작업의 재처리 완료 기록과 자동 `ACTIVE`
 전환을 수행하지 않는다. 이전 작업은 최신 자료의 상태·재처리 플래그·완료 기록을 덮어쓰지 않는다.
 최신 본문의 재처리가 아직 완료되지 않았다면 `ai_reprocessing_required=True`를 유지한다.
 최신 본문의 재처리가 이미 완료되어 플래그가 `False`라면 그 값과 최신 작업의 완료 기록을 보존한다.
-해당 작업에서 생성한 청크는 최신 청크로 인정하지 않는다.
+해당 작업에서 계산한 청크는 DB에 저장하지 않는다.
 
 - 관리자가 승인한 공식자료는 AI 재처리가 정상적으로 완료되면 자동으로 `ACTIVE` 상태로 전환한다.
 - 관리자가 사용 중지한 `INACTIVE` 자료는 자동 전환하지 않는다. 시작 시점에 제외했더라도
