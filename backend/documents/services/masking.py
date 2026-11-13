@@ -201,9 +201,10 @@ def mask_registration_numbers(lines):
         # 숫자 일부를 글자로 잘못 읽어도(예: 9OO101) 숫자가 6개 이상이면 번호로 본다.
         # 같은 줄에 이어진 다음 항목(예: "세액: 6,250원")은 남긴다.
         number, rest = _split_at_next_field(value)
+        rest, rest_count = _mask_other_fields(rest)
         if REGISTRATION_MARK in number or _digit_count(number) < 6:
-            return value, 0
-        return REGISTRATION_MARK + rest, 1
+            return number + rest, rest_count
+        return REGISTRATION_MARK + rest, 1 + rest_count
 
     return count + _labeled_lines(lines, REGISTRATION_LABEL, mask_value)
 
@@ -213,9 +214,10 @@ def mask_passport_numbers(lines):
     def mask_value(value):
         # 같은 줄에 이어진 다음 항목(예: "납부기한: …")은 남긴다.
         number, rest = _split_at_next_field(value)
+        rest, rest_count = _mask_other_fields(rest)
         if PASSPORT_MARK in number or not any(char.isdigit() for char in number):
-            return value, 0
-        return PASSPORT_MARK + rest, 1
+            return number + rest, rest_count
+        return PASSPORT_MARK + rest, 1 + rest_count
 
     return _labeled_lines(lines, PASSPORT_LABEL, mask_value)
 
@@ -279,6 +281,12 @@ def mask_addresses(lines):
             address, rest = _split_at_next_field(lines[value_index])
             new_value, masked, detail_may_follow = _mask_address_value(address, require_address_form=False)
             new_line = new_value + rest
+        # 남기는 뒤 항목에도 개인정보가 있을 수 있다(예: "… 여권번호: M12345678").
+        masked_rest, rest_count = _mask_other_fields(rest)
+        if rest_count:
+            new_line = new_line[:len(new_line) - len(rest)] + masked_rest
+            lines[value_index] = new_line
+            count += rest_count
         if masked:
             lines[value_index] = new_line
             count += masked
@@ -295,21 +303,28 @@ def mask_addresses(lines):
         match = ADDRESS_IN_LINE.search(line)
         if match:
             _, rest = _split_at_next_field(line[match.start('rest'):])
+            rest, rest_count = _mask_other_fields(rest)
             lines[index] = line[:match.start('rest')] + ADDRESS_MARK + rest
-            count += 1
+            count += 1 + rest_count
     return count
 
 
 def mask_accounts(lines):
     """개인 계좌번호. 출금·환급 등 개인 계좌 라벨은 항상 가리고, 일반 계좌번호 라벨은 납부용 계좌만 남긴다."""
     def mask_personal(value):
-        # 예금주 표기는 기관 계좌라는 근거가 아니다.
-        return ACCOUNT_NUMBER.subn(ACCOUNT_MARK, value)
+        # 예금주 표기는 기관 계좌라는 근거가 아니다. 같은 줄에 이어진 다음 항목도 따로 가린다.
+        account, rest = _split_at_next_field(value)
+        account, masked = ACCOUNT_NUMBER.subn(ACCOUNT_MARK, account)
+        rest, rest_count = _mask_other_fields(rest)
+        return account + rest, masked + rest_count
 
     def mask_generic(value):
-        if any(word in value for word in PAYMENT_ACCOUNT_WORDS) or AGENCY_HOLDER.search(value):
-            return value, 0
-        return ACCOUNT_NUMBER.subn(ACCOUNT_MARK, value)
+        account, rest = _split_at_next_field(value)
+        rest, rest_count = _mask_other_fields(rest)
+        if any(word in account for word in PAYMENT_ACCOUNT_WORDS) or AGENCY_HOLDER.search(account):
+            return account + rest, rest_count
+        account, masked = ACCOUNT_NUMBER.subn(ACCOUNT_MARK, account)
+        return account + rest, masked + rest_count
 
     return (_labeled_lines(lines, PERSONAL_ACCOUNT_LABEL, mask_personal)
             + _labeled_lines(lines, GENERIC_ACCOUNT_LABEL, mask_generic))
@@ -323,9 +338,13 @@ def mask_phone_numbers(lines):
         count += masked
 
     def mask_value(value):
-        if _agency_line(value):
-            return value, 0
-        return LANDLINE_PATTERN.subn(PHONE_MARK, value)
+        # 같은 줄에 이어진 다음 항목도 따로 가린다. 기관 번호는 이 항목 안에서만 판단한다.
+        number, rest = _split_at_next_field(value)
+        rest, rest_count = _mask_other_fields(rest)
+        if _agency_line(number):
+            return number + rest, rest_count
+        number, masked = LANDLINE_PATTERN.subn(PHONE_MARK, number)
+        return number + rest, masked + rest_count
 
     return count + _labeled_lines(lines, PHONE_LABEL, mask_value)
 
@@ -360,12 +379,16 @@ def _name_pattern(part):
 
 
 def _mask_other_fields(text):
-    """이름 뒤에 이어진 같은 줄의 다른 항목을 이름 외 규칙으로 가린다. → (새 글자, 가린 수)"""
+    """값을 가린 뒤 남기는 같은 줄의 다음 항목(예: "여권번호: …")에 모든 규칙을 다시 적용한다. → (새 글자, 가린 수)
+
+    줄 맨 앞 라벨만 보는 규칙은 줄 중간에 온 라벨을 지나치므로, 뒤 항목을 남길 때는 반드시 이 함수를 거친다.
+    뒤 항목은 원래 값보다 항상 짧아 반복이 끝난다.
+    """
     if not text.strip():
         return text, 0
     stripped = text.lstrip()
     lines = [stripped]
-    count = sum(rule(lines) for rule in MASKING_RULES if rule is not mask_names)
+    count = sum(rule(lines) for rule in MASKING_RULES)
     return text[:len(text) - len(stripped)] + '\n'.join(lines), count
 
 
@@ -382,16 +405,19 @@ def mask_names(lines):
         if value.strip():
             # 같은 줄에 다른 라벨이 이어지면 이름은 그 앞에서 끝난다(예: "연락처:", "납부기한:").
             name, rest = _split_at_next_field(value)
+            # 뒤에 남기는 부분도 다른 규칙으로 가린다. 줄 맨 앞 라벨만 보는 규칙(계좌·일반 전화·여권번호)은
+            # "성명: 홍길동 계좌번호: …"처럼 줄 중간에 온 라벨을 앞에서 지나쳤기 때문이다.
+            # 이름을 가리지 않는 경우에도 뒤 항목은 가린다.
+            rest, rest_count = _mask_other_fields(rest)
+            count += rest_count
             # 이름 자체가 이미 가려졌는지만 본다. 뒤에 이어진 다른 항목의 가림 표시는 상관없다.
             if not name.strip() or any(mark in name for mark in _ALL_MARKS) \
                     or (not has_colon and not _looks_like_name(name)):
+                lines[index] = line[:match.start('value')] + name + rest
                 continue
             found.append(name)
-            # 뒤에 남기는 부분도 다른 규칙으로 가린다. 줄 맨 앞 라벨만 보는 규칙(계좌·일반 전화·여권번호)은
-            # "성명: 홍길동 계좌번호: …"처럼 줄 중간에 온 라벨을 앞에서 지나쳤기 때문이다.
-            rest, rest_count = _mask_other_fields(rest)
             lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
-            count += 1 + rest_count
+            count += 1
             continue
         following = _next_value_index(lines, index)
         if following is None:
