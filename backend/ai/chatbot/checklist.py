@@ -197,7 +197,7 @@ state 규칙 (확실하지 않으면 원래 state 그대로):
 - 그 밖의 CHECK_NEEDED 항목은 바꾸지 마.
 - CONDITIONAL이면 note에 조건을 {lang}로 한 문장으로 써. 개인 자격(비자·국적 등)은 단정하지 마.
 - CONFIRMED·CONDITIONAL로 판단했으면 sourceIds에 근거로 쓴 [공식 자료] id(s1, s2 ...)를 꼭 넣어.
-- 마스킹(***)된 개인정보를 추측하지 마.
+- 마스킹된 개인정보(***, ******-*******, [이름 가림], [주소 가림], [전화번호 가림], [계좌 가림], [여권번호 가림])를 추측하지 마.
 반드시 JSON 하나만 출력:
 {"items": [{"index": 0, "text": "...", "detail": "...", "method": "...", "note": "...",
             "state": "CONFIRMED|CONDITIONAL|CHECK_NEEDED", "sourceIds": ["s1"]}]}"""

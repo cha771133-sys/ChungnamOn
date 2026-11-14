@@ -207,6 +207,15 @@ class ChecklistLLMTests(ChecklistBase, TestCase):
     def llm(*entries):
         return {"items": [dict(e) for e in entries]}
 
+    def test_prompt_lists_every_mask_mark(self):
+        """체크리스트 프롬프트도 챗봇·verify와 같은 가림 표시 7개를 직접 적어 둔다 (#76)."""
+        self.build(v=self.v(), language="vi")
+        system = self.complete.call_args.args[0]
+        for mark in ("***", "******-*******", "[이름 가림]", "[주소 가림]", "[전화번호 가림]", "[계좌 가림]",
+                     "[여권번호 가림]"):
+            with self.subTest(mark=mark):
+                self.assertIn(mark, system)
+
     def test_llm_gets_source_texts_and_one_call(self):
         self.build(v=self.v(), language="vi")
         self.assertEqual(self.complete.call_count, 1)
