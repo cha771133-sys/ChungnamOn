@@ -236,6 +236,13 @@ CLOVA_OCR_SECRET = os.environ.get('CLOVA_OCR_SECRET', '')
 # 실제 문서(OCR_MODE=clova)를 처리할 때는 rules를 쓴다. 값이 비어 있으면 dummy로 동작한다.
 MASK_MODE = os.environ.get('MASK_MODE') or 'dummy'
 
+# 문서 해석. dummy는 외부 호출 없이 고정 결과를 쓰고, llm은 documents/services/interpret.py로 AI를 호출한다.
+# llm은 DOCUMENTS_VERIFY_MODE=rag와 함께 쓴다. 검증이 dummy면 문서가 FAILED(INTERPRETING)가 된다.
+# 키는 INTERPRET_API_KEY가 있으면 그 값을, 없으면 챗봇과 같은 ANTHROPIC_API_KEY를 쓴다.
+INTERPRET_MODE = os.environ.get('INTERPRET_MODE') or 'dummy'
+INTERPRET_API_KEY = os.environ.get('INTERPRET_API_KEY') or os.environ.get('ANTHROPIC_API_KEY', '')
+INTERPRET_MODEL = os.environ.get('INTERPRET_MODEL') or 'claude-haiku-5-5'
+
 # 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
 
