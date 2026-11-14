@@ -76,6 +76,29 @@ REGISTRATION_PAYLOAD = {
     'payment_methods': [],
 }
 
+# 언어별 번역문·요약(짧게 줄인 것). 가림 표시와 괄호 안 한국어 기관 이름은 어느 언어에서나 남을 수 있다.
+TRANSLATIONS = {
+    'vi': ('Thông báo nộp thuế cư trú\nHọ tên\n[이름 가림]\nSố tiền phải nộp: 11,000 won\nNếu quá hạn sẽ bị phạt.',
+           'Bạn phải nộp 11,000 won trước ngày 31 tháng 8 năm 2026.'),
+    'en': ('Resident Tax Notice\nName\n[이름 가림]\nAmount to pay: 11,000 won\nAsan City Hall (아산시청)\n'
+           'If you pay after the deadline, a surcharge will be added.',
+           'You must pay 11,000 won by August 31, 2026.'),
+    'zh': ('居民税纳税通知书\n姓名\n[이름 가림]\n应缴金额：11,000 won\n牙山市政府（아산시청）', '您需要缴纳11,000 won。'),
+    'uz': ("Aholi solig'i xabarnomasi\nIsmi\n[이름 가림]\nTo'lov: 11,000 won\nMuddat o'tsa, jarima qo'shiladi.",
+           "Siz 2026-yil 31-avgustgacha 11,000 won to'lashingiz kerak."),
+    'ne': ('बासिन्दा कर सूचना\nनाम\n[이름 가림]\nरकम: 11,000 won', 'तपाईंले 11,000 won तिर्नुपर्छ।'),
+    'th': ('ใบแจ้งภาษีผู้อยู่อาศัย\nชื่อ\n[이름 가림]\nจำนวนเงิน: 11,000 won', 'คุณต้องชำระ 11,000 won'),
+    'ko': ('주민세 내라는 안내\n이름\n[이름 가림]\n낼 돈: 11,000원', '11,000원을 내야 합니다.'),
+}
+
+
+def payload_in(language, **fields):
+    translated_text, summary = TRANSLATIONS[language]
+    # 용어 설명도 그 언어로 쓴다(예문은 요약 문장을 다시 쓴다).
+    terms = [{'word': '주민세(개인분)', 'explain': summary}]
+    return {**TAX_PAYLOAD, 'translated_text': translated_text, 'summary': [summary], 'terms': terms, **fields}
+
+
 llm_settings = override_settings(INTERPRET_API_KEY='test-key', INTERPRET_MODEL='test-model')
 
 
@@ -111,6 +134,8 @@ class MockedAnthropic:
         self.create = self.client_class.return_value.messages.create
         if self.error is not None:
             self.create.side_effect = self.error
+        elif isinstance(self.response, list):
+            self.create.side_effect = self.response  # 호출할 때마다 차례로 하나씩
         else:
             self.create.return_value = self.response
         return self
@@ -149,11 +174,18 @@ class InterpretResultTests(SimpleTestCase):
 
     def test_language_follows_request(self):
         for language, name in interpret_module.LANGUAGE_NAMES.items():
-            with self.subTest(language=language), MockedAnthropic(json_response(TAX_PAYLOAD)) as mocked:
+            with self.subTest(language=language), MockedAnthropic(json_response(payload_in(language))) as mocked:
                 result = interpret_document(TAX_NOTICE, language)
 
                 self.assertEqual(result['language'], language)
+                self.assertEqual(result['translated_text'], TRANSLATIONS[language][0])
                 self.assertIn(name, mocked.create.call_args.kwargs['system'])
+                # 언어 지시는 문서 뒤에도 한 번 더 넣는다(한국어 이름, 영어 이름, 그 언어로 쓴 문장).
+                after_document = mocked.create.call_args.kwargs['messages'][0]['content'].split('</document>')[1]
+                english_name, native_sentence = interpret_module.LANGUAGE_REMINDERS[language]
+                for expected in (name, english_name, native_sentence):
+                    self.assertIn(expected, after_document)
+                mocked.create.assert_called_once()
 
     def test_extracts_amount_deadline_agency(self):
         result = run(TAX_PAYLOAD)
@@ -179,9 +211,9 @@ class InterpretRequestTests(SimpleTestCase):
 
         kwargs = mocked.create.call_args.kwargs
         self.assertEqual(kwargs['model'], 'test-model')
-        self.assertEqual(kwargs['messages'], [
-            {'role': 'user', 'content': f'<document>\n{TAX_NOTICE}\n</document>'},
-        ])
+        self.assertEqual(len(kwargs['messages']), 1)
+        self.assertEqual(kwargs['messages'][0]['role'], 'user')
+        self.assertTrue(kwargs['messages'][0]['content'].startswith(f'<document>\n{TAX_NOTICE}\n</document>'))
         self.assertEqual(kwargs['output_config']['format']['type'], 'json_schema')
         self.assertEqual(kwargs['output_config']['format']['schema'], interpret_module.RESPONSE_SCHEMA)
         mocked.create.assert_called_once()
@@ -361,6 +393,61 @@ class InterpretMissingValueTests(SimpleTestCase):
 
                 self.assertEqual(run(payload, text=f'고지서\n{line}')['amount'], amount)
 
+    def test_empty_amount_is_read_from_amount_field(self):
+        # 실제로 나왔던 경우: 수수료가 적힌 문서인데 AI가 금액을 비워 보냈다. 금액 칸의 값을 읽는다.
+        cases = (
+            (REGISTRATION_NOTICE, '35,000원'), (TAX_NOTICE, '11,000원'),
+            ('안내문\n수수료\n35,000원', '35,000원'), ('고지서\n세액: 6,250원', '6,250원'),
+            ('고지서\n납부할금액\n150,990 원', '150,990원'), ('고지서\n납부할 금액 11000원', '11000원'),
+        )
+        for text, expected in cases:
+            with self.subTest(text=text), self.assertLogs(interpret_module.logger, 'WARNING') as logs:
+                payload = {**TAX_PAYLOAD, 'amount': '', 'deadlines': [], 'terms': [], 'payment_methods': [],
+                           'agency': {'name': '', 'phone': ''}}
+
+                self.assertEqual(run(payload, text=text)['amount'], expected)
+                self.assertNotIn(expected, ''.join(logs.output))
+
+    def test_empty_amount_stays_empty_without_single_amount_field(self):
+        texts = (
+            '안내문\n가까운 주민센터로 문의하세요.',           # 금액 칸이 없음
+            '안내문\n수수료 없음',                              # 칸은 있지만 금액이 아님
+            '고지서\n세액 10,000원\n납부할 금액 11,000원',      # 값이 두 가지라 정할 수 없음
+            '고지서\n주민세 10,000원 + 지방교육세 1,000원',     # 금액 칸이 아닌 세부 내역
+        )
+        for text in texts:
+            with self.subTest(text=text):
+                payload = {**TAX_PAYLOAD, 'amount': '', 'deadlines': [], 'terms': [], 'payment_methods': [],
+                           'agency': {'name': '', 'phone': ''}}
+
+                self.assertEqual(run(payload, text=text)['amount'], '')
+
+    def test_empty_amount_stays_empty_when_amount_field_is_not_single_value(self):
+        # 범위·선택·조건으로 적힌 금액은 하나로 정해지지 않는다. 앞의 값만 읽어 확정 금액처럼 쓰지 않는다.
+        texts = (
+            '안내문\n수수료 35,000원~50,000원', '안내문\n수수료 35,000원 ~ 50,000원', '안내문\n수수료 35,000원 또는 30,000원',
+            '안내문\n수수료: 35,000원 이상', '안내문\n수수료 35,000원 (전자 신청 시 30,000원)',
+            '안내문\n수수료\n35,000원부터', '고지서\n납부할 금액 11,000원 (주민세 10,000원 + 지방교육세 1,000원)',
+        )
+        for text in texts:
+            with self.subTest(text=text):
+                payload = {**TAX_PAYLOAD, 'amount': '', 'deadlines': [], 'terms': [], 'payment_methods': [],
+                           'agency': {'name': '', 'phone': ''}}
+
+                self.assertEqual(run(payload, text=text)['amount'], '')
+
+    def test_wrong_amount_is_not_replaced_from_amount_field(self):
+        # AI가 원문에 없는 금액을 보냈으면 비우기만 한다. 금액 칸에서 다시 읽어 채우는 것은 빈 값일 때뿐이다.
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(run({**TAX_PAYLOAD, 'amount': '12,000원'})['amount'], '')
+
+    def test_amount_in_other_digits_is_emptied_with_log(self):
+        # 태국 숫자·네팔 숫자로 온 금액은 원문의 숫자와 같지 않다. 비우고, 값 없이 사실만 로그에 남긴다.
+        for amount in ('๓๕,๐๐๐ วอน', '११,००० won'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING') as logs:
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+                self.assertNotIn(amount, ''.join(logs.output))
+
     def test_amount_without_number_must_be_written_in_document(self):
         # 금액이 적힌 문서에서 AI가 "무료"라고 지어내면 비운다.
         for amount in ('무료', '없음', '면제', '11,00'):
@@ -419,6 +506,146 @@ class InterpretMissingValueTests(SimpleTestCase):
         ]
 
         self.assertEqual(run({**TAX_PAYLOAD, 'terms': terms})['terms'], [{'word': '주민세(개인분)', 'explain': 'a'}])
+
+
+@llm_settings
+class InterpretPaymentMethodTests(SimpleTestCase):
+    def test_method_not_written_in_document_is_dropped(self):
+        # 견본1: 납부 방법 칸에는 '인터넷 지방세'만 있다. 계좌번호를 보고 덧붙인 방법은 뺀다.
+        methods = ['인터넷 지방세', '계좌이체', '가상계좌', '견본은행 계좌']
+
+        self.assertEqual(run({**TAX_PAYLOAD, 'payment_methods': methods})['payment_methods'], ['인터넷 지방세'])
+
+    def test_methods_written_in_document_are_kept(self):
+        text = '건강보험료 고지서\n납부방법\n· 가상계좌 입금\n· 자동이체\n· 은행 창구 납부'
+        methods = ['가상계좌', '자동이체', '은행 창구', '은행창구 납부']
+
+        result = run({**TAX_PAYLOAD, 'payment_methods': methods, 'deadlines': [], 'terms': [], 'amount': '',
+                      'agency': {'name': '', 'phone': ''}}, text=text)
+
+        self.assertEqual(result['payment_methods'], methods)
+
+
+# 실제로 나왔던 틀린 응답의 모양
+INTERLEAVED = '성명\n(ชื่อ-นามสกุล)\n[이름 가림]\n[이름 가림]\n외국인등록번호\n(เลขทะเบียน)\n주소\n(ที่อยู่)'
+KOREAN_SUMMARY = '2026년 8월 31일까지 주민세 11,000원을 내야 합니다.'
+# 우즈베크어를 요청했는데 영어로 나온 실제 응답을 줄인 것
+ENGLISH_TEXT = (
+    'National Health Insurance Premium Payment Notice\nSubscriber\nName\n[이름 가림]\nAmount to pay\n150,990 won\n'
+    'If you do not pay by the deadline, a late charge will be added.\n'
+    'Unpaid premiums may restrict your insurance benefits at hospitals and clinics.'
+)
+ENGLISH_SUMMARY = 'You must pay the health insurance premium of 150,990 won by November 25, 2026.'
+
+
+@llm_settings
+class InterpretLanguageTests(SimpleTestCase):
+    def interpret(self, language, *payloads):
+        with (
+            MockedAnthropic([json_response(payload) for payload in payloads]) as mocked,
+            self.assertLogs(interpret_module.logger, 'WARNING') as logs,
+        ):
+            try:
+                return interpret_document(TAX_NOTICE, language), mocked, logs
+            except InterpretError as error:
+                return error, mocked, logs
+
+    def test_wrong_language_is_requested_once_more(self):
+        wrong = payload_in('th', summary=[KOREAN_SUMMARY])
+
+        result, mocked, logs = self.interpret('th', wrong, payload_in('th'))
+
+        self.assertEqual(result['summary'], [TRANSLATIONS['th'][1]])
+        self.assertEqual(mocked.create.call_count, 2)
+        # 두 번째 요청에만 "직전 응답의 언어가 틀렸다"는 한 줄이 붙는다.
+        first, second = (call.kwargs['messages'][0]['content'] for call in mocked.create.call_args_list)
+        self.assertNotIn('직전 응답', first)
+        self.assertIn('직전 응답', second)
+        self.assertTrue(second.startswith(first))
+        # 로그에는 횟수만 남고 문서 내용은 남지 않는다.
+        self.assertNotIn('11,000', ''.join(logs.output))
+
+    def test_wrong_language_twice_fails(self):
+        wrong = payload_in('ne', summary=[KOREAN_SUMMARY])
+
+        error, mocked, _ = self.interpret('ne', wrong, wrong)
+
+        self.assertIsInstance(error, InterpretError)
+        self.assertNotIn('11,000', str(error))
+        self.assertEqual(mocked.create.call_count, 2)
+
+    def test_wrong_language_cases(self):
+        cases = {
+            '요약이 한국어': ('th', {'summary': [KOREAN_SUMMARY]}),
+            '원문과 번역이 번갈아 나옴': ('th', {'translated_text': INTERLEAVED}),
+            '한국어 원문 그대로': ('vi', {'translated_text': TAX_NOTICE}),
+            '네팔어 대신 영어': ('ne', {'translated_text': TRANSLATIONS['en'][0]}),
+            '태국어 대신 영어 요약': ('th', {'summary': ['You must pay 11,000 won.']}),
+            '중국어 대신 영어': ('zh', {'translated_text': TRANSLATIONS['en'][0]}),
+            '우즈베크어 대신 영어 번역문': ('uz', {'translated_text': ENGLISH_TEXT}),
+            '우즈베크어 대신 영어 요약': ('uz', {'summary': [ENGLISH_SUMMARY]}),
+            '베트남어 대신 영어': ('vi', {'translated_text': ENGLISH_TEXT, 'summary': [ENGLISH_SUMMARY]}),
+            '영어 대신 우즈베크어': ('en', {'translated_text': TRANSLATIONS['uz'][0]}),
+            '영어 대신 베트남어 요약': ('en', {'summary': [TRANSLATIONS['vi'][1]]}),
+            '쉬운 한국어에 영어가 섞임': ('ko', {'translated_text': 'Subscriber\n성명\nName\n[이름 가림]\nAddress\nPayment'}),
+            '글자가 없음': ('vi', {'translated_text': '[이름 가림]\n11,000'}),
+            # 라틴 문자 언어를 요청했는데 전혀 다른 문자로 온 응답
+            '영어 대신 중국어': ('en', {'translated_text': TRANSLATIONS['zh'][0], 'summary': [TRANSLATIONS['zh'][1]]}),
+            '베트남어 대신 태국어': ('vi', {'translated_text': TRANSLATIONS['th'][0]}),
+            '우즈베크어 대신 네팔어 요약': ('uz', {'summary': [TRANSLATIONS['ne'][1]]}),
+            '우즈베크어 대신 키릴 문자': ('uz', {'translated_text': 'Аҳоли солиғи хабарномаси\nИсми\nТўлов 11,000 won'}),
+            # 여러 항목 가운데 하나만 다른 언어인 응답. 항목마다 따로 본다.
+            '요약 한 문장만 한국어': ('th', {'summary': [TRANSLATIONS['th'][1], KOREAN_SUMMARY, TRANSLATIONS['th'][1]]}),
+            '용어 설명 하나만 영어': ('th', {'terms': [
+                {'word': '납부 기한', 'explain': TRANSLATIONS['th'][1]},
+                {'word': '주민세(개인분)', 'explain': 'The last day you can pay.'},
+                {'word': '납부 방법', 'explain': TRANSLATIONS['th'][1]},
+            ]}),
+            # 실제로 나왔던 경우: 네팔어 문서의 용어 설명만 한국어로 나왔다.
+            '용어 설명이 한국어': ('ne', {'terms': [{'word': '납부 기한', 'explain': '돈을 내야 하는 마지막 날입니다.'}]}),
+            '용어 설명이 영어': ('th', {'terms': [{'word': '납부 기한', 'explain': 'The last day you can pay.'}]}),
+        }
+        for name, (language, fields) in cases.items():
+            with self.subTest(name=name):
+                wrong = payload_in(language, **fields)
+
+                error, mocked, _ = self.interpret(language, wrong, wrong)
+
+                self.assertIsInstance(error, InterpretError)
+                self.assertEqual(mocked.create.call_count, 2)
+
+    def test_short_latin_text_with_few_common_words_is_accepted(self):
+        # 표처럼 낱말만 있는 번역문은 흔한 낱말이 적다. 영어의 흔한 낱말이 많지 않으면 통과시킨다.
+        for language in ('vi', 'uz'):
+            with self.subTest(language=language):
+                text = 'Asan\n[이름 가림]\n11,000 won\nInternet'
+                with MockedAnthropic(json_response(payload_in(language, translated_text=text))) as mocked:
+                    interpret_document(TAX_NOTICE, language)
+
+                mocked.create.assert_called_once()
+
+    def test_result_without_terms_is_accepted(self):
+        with MockedAnthropic(json_response(payload_in('th', terms=[]))) as mocked:
+            self.assertEqual(interpret_document(TAX_NOTICE, 'th')['terms'], [])
+
+        mocked.create.assert_called_once()
+
+    def test_format_error_is_not_retried(self):
+        with MockedAnthropic([json_response({**TAX_PAYLOAD, 'summary': '한 문장'})] * 2) as mocked:
+            with self.assertRaises(InterpretError):
+                interpret_document(TAX_NOTICE, 'vi')
+
+        mocked.create.assert_called_once()
+
+    def test_korean_names_in_brackets_and_marks_are_allowed(self):
+        text = (
+            'Health Insurance Premium Notice\nName\n[이름 가림]\nAddress\nAsan [주소 가림]\n'
+            'National Health Insurance Service (국민건강보험공단) 1577-1000\nDocument No. 견본-2026-0003'
+        )
+        with MockedAnthropic(json_response(payload_in('en', translated_text=text))) as mocked:
+            self.assertEqual(interpret_document(TAX_NOTICE, 'en')['translated_text'], text)
+
+        mocked.create.assert_called_once()
 
 
 @llm_settings
