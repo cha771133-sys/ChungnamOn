@@ -1,4 +1,143 @@
-# 공식 OpenAPI 및 재수집·검토 운영 (P3-17)
+# 공식자료 수집·TXT 수동 등록·검토 운영
+
+## 공식 TXT 수동 등록 (P1, #79)
+
+robots.txt 등으로 자동 수집하기 어려운 공식자료를 **합법적으로 별도 확보한 TXT**로 등록한다.
+`import_official_source_txt`는 파일만 읽으며 원본 URL·이용조건 URL에 접속하지 않는다.
+공식 도메인은 출처 허용 범위만 확인한다. TXT와 공식 원문의 일치·현재 유효성·AI 가공 허용은
+등록 담당자가 확인 자료를 준비하고 최종적으로 관리자가 직접 검토한다.
+
+### 파일 준비와 이용조건 확인
+
+- 로컬 `backend/sources/data/manual/` 폴더를 만든 뒤 UTF-8 또는 UTF-8 BOM `.txt`를 둔다.
+  파일은 BOM 포함 **2 MiB 이하**여야 한다. 빈 본문·잘못된 인코딩·바이너리·제어 문자는 거부한다.
+  BOM만 본문에서 제외하고 공백·줄바꿈·문구는 그대로 보존한다. 원본 파일은 수정하지 않는다.
+- 상대 경로는 `backend/` 기준이며, 지정 폴더 안의 절대 경로도 허용한다. 폴더 밖 경로,
+  `..`, 심볼릭 링크·Windows junction, UNC·장치 경로·대체 데이터 스트림은 거부한다.
+  테스트는 `SOURCE_TXT_IMPORT_ROOT` 설정을 임시 폴더로 바꾸어 사용한다. 공통 설정 변경은 없다.
+- 원본 상세 URL과 이용조건 URL은 기존 `source_registry.OFFICIAL_HOSTS`의 정확한 공식 호스트,
+  HTTPS·기본 포트만 허용한다. 인증정보·키·토큰이 있는 URL은 거부한다.
+  새 기관 도메인은 별도 코드 리뷰로 허용 목록에 추가해야 한다.
+- 원본에서 적용 라이선스·출처표시·상업 이용·변경/가공·재배포 조건과 별도 허가 범위를 직접 확인한다.
+  단순 열람·다운로드 허용을 AI 정제·청크·임베딩·검색 허용으로 간주하지 않는다.
+  확인 근거를 `--terms-note`에 쓰고 확인한 공식 정책 링크가 있으면 `--terms-url`로 남긴다.
+- `--terms-status unverified`가 기본이다. AI 가공이 불명확하면 그대로 등록하여 검토 대기한다.
+  `confirmed`는 위 AI 이용이 허용된다는 근거와 확인일이 있을 때만 사용한다.
+  가공 금지는 `prohibited`로 기록한다. `unverified`와 `prohibited`는 관리자 승인도 차단한다.
+  이용조건이 확정되면 같은 파일을 올바른 조건으로 다시 등록하여 기존 대기 후보를 갱신한다.
+- `source_urls.yaml`의 `enabled: false` 자료는 등록자의 `confirmed` 주장만으로 승인할 수 없다.
+  제외 여부는 등록 메타데이터의 `usage_terms.registry_excluded`에도 표시하고 승인 시 재검사한다.
+  추적 쿼리 추가·쿼리 순서·공식 www 별칭으로 제외를 해제하지 않는다. 아산 `/main/cms/` 공지는
+  같은 `pds_no`를 보수적으로 같은 제외 자료로 취급한다. 다른 자료의 URL 식별 규칙은 유지한다.
+  특히 **아산 주민세 변경금지 공지**와 공공누리 변경금지 자료를 이 명령으로 강제 활성화하지 않는다.
+  별도 이용 허락·정책 검토와 제외 목록의 코드 리뷰가 먼저 필요하다.
+
+### PowerShell 실행 예시와 인자
+
+아래 예시는 로컬 SQLite를 명시한다. 실제로 확보한 파일·공식 상세 주소·기관·제목으로 바꾸어
+실행한다. 예시의 `test-fixtures` 주소는 명령 형식을 보여 주는 가상 경로이며 공식 문서가 아니다.
+이 명령에는 dry-run 옵션이 없으며 실행하면 로컬 DB에 자료와 검토 후보가 저장된다.
+
+```powershell
+Set-Location backend
+$env:DATABASE_URL = "sqlite:///db.sqlite3"
+New-Item -ItemType Directory -Force "sources/data/manual" | Out-Null
+# 합법적으로 확보한 official.txt를 위 폴더에 복사한 뒤 실행
+python manage.py import_official_source_txt `
+  --file "sources/data/manual/official.txt" `
+  --url "https://www.immigration.go.kr/test-fixtures/official-document" `
+  --agency "법무부" `
+  --title "확보한 공식자료의 실제 제목" `
+  --region "전국" `
+  --category "출입국·체류" `
+  --registered-by "등록 담당자 식별명" `
+  --terms-status "unverified" `
+  --terms-note "적용 이용조건과 AI 가공 허용 범위를 확인 중"
+```
+
+| 인자 | 필수·기본값 | 의미 |
+| --- | --- | --- |
+| `--file` | 필수 | 허용 폴더 안의 TXT |
+| `--url` | 필수 | 공식 원본 상세 HTTPS URL, 정규화한 URL이 HTML 자료 식별자 |
+| `--agency`, `--title` | 필수 | 공식 기관명(255자 이하)·문서 제목(500자 이하) |
+| `--region` | 기본 `전국` | `충청남도`, `천안시`, `아산시`, `전국` |
+| `--category` | 필수 | `지방세`, `건강보험`, `출입국·체류` |
+| `--published-at` | 생략 가능 | 확인된 발행일 또는 기준일 `YYYY-MM-DD`, 미상은 생략 |
+| `--registered-by` | 필수 | 실제 등록자를 추적할 식별명(255자 이하), 로그인 인증을 대신하지 않음 |
+| `--terms-status` | 기본 `unverified` | `unverified`, `confirmed`, `prohibited` |
+| `--terms-note` | 필수 | 원본 조건과 AI 가공 허용 근거 또는 미확인 사유(4,000자 이하, 한 줄) |
+| `--terms-url` | 생략 가능 | 확인한 공식 이용조건 URL |
+| `--terms-checked-on` | `confirmed`일 때 필수 | 실제 조건 확인일 `YYYY-MM-DD`, 미래 날짜 금지 |
+
+허용 범위를 확인한 자료는 같은 명령의 조건 인자를 다음과 같이 바꾸고 다시 실행한다.
+아래 문구는 실제 근거로 대체해야 하며 명령 인자만으로 허가를 취득하지 않는다.
+
+```powershell
+# 위 명령의 --terms-status, --terms-note를 교체하고 확인일을 추가
+# --terms-status "confirmed" `
+# --terms-note "실제 적용 라이선스/별도 허가와 AI 가공·검색 허용 범위, 준수할 조건" `
+# --terms-checked-on "2026-11-14"
+```
+
+### 저장·중복·충돌 처리
+
+1. 파일·경로·인코딩·공식 URL·메타데이터를 검증한다. 실패하면 DB에 자료/후보를 만들지 않는다.
+2. 기존 `OfficialRecord`로 본문 UTF-8 바이트의 SHA-256을 계산한다. BOM은 본문 해시에서 제외한다.
+   별도로 원본 파일 전체 바이트의 SHA-256·파일명·크기·인코딩·등록자를
+   `metadata.manual_import`에, 이용조건과 확인자·확인일을 `metadata.usage_terms`에 기록한다.
+   등록 시각은 `SourceRevision.created_at`, 실제 파일 확인 시각은 후보의 `collected_at`이다.
+   호스트의 절대 파일 경로나 파일 자체를 DB에 저장하지 않는다.
+3. 수집기와 공통인 `stage_official_record`의 트랜잭션·문서 잠금으로 저장한다.
+   신규 `SourceDocument`는 본문/해시가 빈 `PENDING / PENDING_REVIEW`이고 TXT는
+   `SourceRevision(PENDING_REVIEW)`에만 들어간다. 새 수집 대상·스케줄·외부 요청을 만들지 않는다.
+4. 기존 HTML은 정규화한 공식 URL로 연결한다. API 자료와 URL이 겹쳐 식별자가 충돌하면 전체를 취소한다.
+   기존 승인 본문·해시·메타데이터·버전·ACTIVE/INACTIVE·청크는 후보 등록으로 바꾸지 않는다.
+5. 같은 파일·입력 메타데이터를 반복 등록하면 같은 대기 후보를 재사용한다. 같은 승인 본문과
+   메타데이터는 확인일만 갱신한다. 본문이 바뀌면 새 후보를 만들며, 같은 본문이어도 제목·조건·
+   등록자·파일 지문 등 메타데이터가 달라지면 검토한다. 메타데이터만 승인하면 AI 재처리를
+   불필요하게 다시 요구하지 않는다. 같은 본문의 대기 후보는 새 메타데이터와 확인일로 갱신한다.
+6. 승인은 기존 `review_revision`이 승인 버전·이전 해시·최신 관측 해시/확인일을 다시 검사한다.
+   오래된 후보·중복 승인·이전 관리 화면의 저장은 충돌로 거부한다. 최신 후보를 다시 확인한다.
+   DB 저장 충돌은 종료 코드 1과 `IMPORT_DB_FAILED`로 알리며, 상태 확인 후 같은 명령을 재시도한다.
+   파일 오류도 종료 코드 1이며, 오류에 파일 본문·인증정보가 있는 URL·DB 예외 원문을 출력하지 않는다.
+   파일은 수정하지 않는다. `[unchanged]`와 `revision=없음`은 이미 승인된 동일 자료일 수 있다.
+
+### 관리자 승인과 AI 담당자 인계
+
+Admin **공식자료 변경 후보**에 `수동 TXT`로 표시된다. 상세의 이전/새 본문, `metadata`의 공식
+출처·이용조건·원본 파일 지문·등록자와 안내문을 확인한다. 관리자가 공식 원문을 직접 대조하고
+가공 허용·적용 지역·발행일·최신성을 판단한 뒤 기존 **선택한 변경 후보 승인**을 사용한다.
+승인 동작은 원문 대조와 조건 검토를 마쳤다는 관리자 판단이며 URL 검증의 자동 판정이 아니다.
+검토 결과·로그인 관리자·검토일은 기존 승인 필드와 Admin 로그에 남는다. 메타데이터는 읽기 전용이다.
+조건을 수정하려면 TXT를 다시 등록한다. 기존 수동 자료를 자동 재수집해 조건 메타데이터를
+누락한 후보도 승인할 수 없다. 조건 확인 정보를 갖춘 TXT로 다시 등록해야 한다.
+기존 자동 자료의 같은 본문에 수동 대기 후보가 생긴 경우에도 자동 재수집은 그 후보의
+`manual_import`와 `usage_terms`를 지우지 않는다. 이용조건 정정은 수동 재등록으로만 반영한다.
+
+- 신규 승인: 본문/해시 반영 → `PENDING / APPROVED / ai_reprocessing_required=True`.
+- 반려: 신규 자료는 검색에서 제외한다. 변경 후보 반려는 기존 승인 자료를 보존한다.
+  반려 이력은 유지하며 재등록 시 새 검토 후보가 생길 수 있다.
+- 승인 전에는 기존 ACTIVE 자료만 계속 사용한다. 새 본문 승인 후에는 재처리 완료까지 검색에서 제외한다.
+  Admin에서도 미승인 TXT·미확인 조건·재처리 대기 자료를 ACTIVE로 강제 저장할 수 없다.
+- AI 담당자는 승인된 문서 ID, 공식 URL·조건, `content_hash`, `version`, 재처리 플래그를 전달받는다.
+  기존 `from ai.chatbot import build_source_chunks`의 `build_source_chunks([문서ID])`로 명시적으로
+  처리한다. 이 등록 명령은 AI를 호출하지 않는다. 실제 임베딩 환경·자격증명 구성은 AI 담당 범위다.
+- 기존 AI 완료 검증이 성공하면 `ACTIVE / APPROVED / ai_reprocessing_required=False`가 된다.
+  INACTIVE, 미승인, 실패, 처리 도중 해시/승인 버전 변경은 자동 활성화하지 않는다.
+  이 기능은 AI 청크·임베딩·RAG 알고리즘을 변경하지 않는다.
+
+기존 AI의 **비정상 임베딩 응답 검증은 미해결 [#78](https://github.com/cha771133-sys/ChungnamOn/issues/78)**
+범위다. Ollama 본문 임베딩이 빈 배열을 반환하면 청크 없이 완료·ACTIVE로 기록되는 사례가
+별도 mock으로 재현되어 있다. 이번 TXT 기능의 정상 응답·예외 테스트가 이 문제를 해결한 것은
+아니며, 실제 임베딩 운영 전 AI 담당자가 #78의 응답 검증과 완료 처리를 확인해야 한다.
+
+신규 모델 필드·마이그레이션은 없다. 테스트는 Django 격리 DB와 임시 TXT, 로컬 hash 임베딩 또는
+mock만 사용한다. Railway·운영 DB·실제 공식 사이트·외부 임베딩/LLM 서비스로 검증하지 않는다.
+
+```powershell
+$env:DATABASE_URL = "sqlite:///:memory:"
+python manage.py test sources.tests.test_manual_import sources.tests.test_approval_indexing
+```
 
 ## 구현 범위와 실행 상태
 

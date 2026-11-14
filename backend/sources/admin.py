@@ -9,7 +9,8 @@ from django.utils import timezone
 from .models import Agency, AgencyAlias, CrawlLog, SourceChunk, SourceDocument, SourceRefreshTarget, SourceRevision
 from .services.errors import CollectionError
 from .services.freshness import freshness, next_due_at, filter_freshness
-from .services.refresh_service import review_revision
+from .services.refresh_service import document_snapshot, review_revision
+from .services.usage_conditions import is_manual_metadata, validate_manual_approval
 
 
 class PipelineReadOnlyMixin:
@@ -66,6 +67,13 @@ class SourceDocumentAdminForm(forms.ModelForm):
                 self.add_error(None, '화면을 연 뒤 자료가 변경되었습니다. 최신 화면을 다시 열어 확인하세요.')
             if cleaned_data.get('status') == SourceDocument.Status.ACTIVE and current.ai_reprocessing_required:
                 self.add_error('status', 'AI 재처리가 끝날 때까지 자료를 사용 중으로 변경할 수 없습니다.')
+            if cleaned_data.get('status') == SourceDocument.Status.ACTIVE and is_manual_metadata(current.metadata):
+                if current.review_status != SourceDocument.ReviewStatus.APPROVED:
+                    self.add_error('status', 'TXT는 변경 후보의 관리자 승인 전 사용 중으로 변경할 수 없습니다.')
+                try:
+                    validate_manual_approval(document_snapshot(current))
+                except CollectionError as error:
+                    self.add_error('status', str(error))
         return cleaned_data
 
 
@@ -162,12 +170,27 @@ class SourceRefreshTargetAdmin(admin.ModelAdmin):
 
 @admin.register(SourceRevision)
 class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
-    list_display = ('id', 'document', 'provider', 'content_hash', 'collected_at', 'review_status', 'reviewed_by', 'reviewed_at')
+    list_display = ('id', 'document', 'provider', 'registration_method', 'content_hash', 'collected_at', 'review_status', 'reviewed_by', 'reviewed_at')
     list_filter = ('review_status', 'provider')
     search_fields = ('document__title', 'document__external_id', 'content_hash')
-    readonly_fields = tuple(field.name for field in SourceRevision._meta.fields)
+    readonly_fields = ('manual_review_notice', *tuple(field.name for field in SourceRevision._meta.fields))
     list_select_related = ('document', 'reviewed_by')
     actions = ('approve_candidates', 'reject_candidates')
+
+    @admin.display(description='등록 방식')
+    def registration_method(self, obj):
+        return '수동 TXT' if is_manual_metadata(obj.metadata.get('metadata', {})) else '자동 수집'
+
+    @admin.display(description='TXT 원문·이용조건 검토')
+    def manual_review_notice(self, obj):
+        if self.registration_method(obj) != '수동 TXT':
+            return '해당 없음'
+        return (
+            '공식 URL만으로 원문 일치를 보증하지 않습니다. 새 본문과 공식 원문을 직접 대조하고 '
+            'metadata의 manual_import(파일명·원본 해시·등록자), usage_terms(조건·근거·확인일)를 검토하세요. '
+            'AI 정제·청크·임베딩·검색 허용과 현재 적용 범위를 확인한 뒤 기존 승인 액션을 사용하세요. '
+            '이용조건 미확인·가공 금지·목록 제외 자료는 승인할 수 없습니다.'
+        )
 
     def has_review_permission(self, request):
         """활성 staff와 자료·후보 양쪽의 수정 권한이 있는 사용자만 검토하게 한다."""

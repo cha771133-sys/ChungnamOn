@@ -12,6 +12,7 @@ from .errors import CollectionError
 from .normalization import OfficialRecord, official_date, official_url
 from .parser import parse_html
 from .source_service import CollectionResult
+from .usage_conditions import is_manual_metadata, validate_manual_approval
 
 
 LEASE_DURATION = timedelta(minutes=30)
@@ -74,14 +75,24 @@ def _lookup(target):
 
 
 def _apply_observation(target, record, started_at, checked_at):
-    """호출자는 짧은 저장 트랜잭션과 대상 행의 쓰기 잠금을 확보해야 한다."""
-    identity = _lookup(target)
+    """재수집 대상의 식별자를 확인하며 공통 후보 저장 흐름에 위임한다."""
+    return stage_official_record(record, started_at, checked_at, document_id=target.document_id)
+
+
+@transaction.atomic
+def stage_official_record(record, started_at, checked_at, *, document_id=None):
+    """수집과 수동 입력을 같은 문서 잠금·중복·승인 버전 규칙으로 후보에 저장한다."""
     metadata = record.snapshot()
+    identity = {'source_url': metadata['source_url']} if record.provider == 'html' else {
+        'provider': record.provider, 'external_id': record.external_id,
+    }
+    # 대상 행이 없는 수동 입력도 승인과 직렬화한다. SQLite는 빈 UPDATE도 쓰기 잠금을 얻는다.
+    SourceDocument.objects.filter(**identity).update(updated_at=timezone.now())
     defaults = {**metadata, 'provider': record.provider, 'external_id': record.external_id}
     defaults['published_at'] = record.published_at
     defaults['effective_at'] = record.effective_at
     document, created = SourceDocument.objects.select_for_update().get_or_create(**identity, defaults=defaults)
-    if target.document_id and target.document_id != document.pk:
+    if document_id and document_id != document.pk:
         raise CollectionError('IDENTITY_CONFLICT', '등록 대상과 공식자료 식별자가 충돌합니다.')
     if document.provider != record.provider or document.external_id != record.external_id:
         raise CollectionError('IDENTITY_CONFLICT', '기존 출처 URL과 제공자 식별자가 충돌합니다.')
@@ -101,6 +112,14 @@ def _apply_observation(target, record, started_at, checked_at):
             },
         )
         if not revision_created:
+            previous = revision.metadata.get('metadata', {})
+            if is_manual_metadata(previous) and not is_manual_metadata(metadata['metadata']):
+                # 같은 본문의 자동 재수집이 수동 등록 이력과 미확인 조건을 지우지 못하게 한다.
+                # 조건을 정정하는 수동 재등록은 새 확인 정보로 갱신할 수 있다.
+                metadata = {**metadata, 'metadata': {
+                    **metadata['metadata'], 'manual_import': previous['manual_import'],
+                    'usage_terms': previous.get('usage_terms', {}),
+                }}
             # 본문은 같아도 공식 링크·공포일 등 메타데이터가 달라졌다면 최신 후보에 보존한다.
             revision.metadata, revision.collected_at = metadata, checked_at
             revision.save(update_fields=['metadata', 'collected_at'])
@@ -196,6 +215,7 @@ def review_revision(revision_id, user, *, approve):
             # 후보 확인일은 후보를 재확인할 때 함께 갱신하므로 최신 성공 관측과 일치해야 한다.
             if document.version != revision.base_version or document.content_hash != revision.previous_hash or document.observed_hash != revision.content_hash or document.last_success_at != revision.collected_at:
                 raise CollectionError('REVIEW_CONFLICT', '더 최근 자료 또는 관리자 수정이 있습니다. 최신 후보를 검토하세요.')
+            validate_manual_approval(revision.metadata, previous_metadata=document.metadata)
             needs_reprocessing = document.ai_reprocessing_required or document.review_status != 'APPROVED' or document.content_hash != revision.content_hash or document.content_text != revision.content_text
             for name, value in revision.metadata.items():
                 setattr(document, name, official_date(value) if name in ('published_at', 'effective_at') else value)
