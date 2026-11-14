@@ -272,7 +272,8 @@ def _dates_in_text(text):
         full.add((int(year), int(month), int(day)))
     for year, month, day in RANGE_END.findall(text):
         full.add((int(year), int(month), int(day)))
-    for start_month, start_day, end_month, end_day in YEARLESS_RANGE.findall(text):
+    # 연도가 적힌 기간은 위에서 읽었다. 그 부분을 연도 없는 기간으로 또 읽으면 문서의 다른 연도와 짝지어진다.
+    for start_month, start_day, end_month, end_day in YEARLESS_RANGE.findall(RANGE_END.sub(' ', text)):
         month_day.update({(int(start_month), int(start_day)), (int(end_month), int(end_day))})
     return full, month_day, {int(year) for year in YEAR.findall(text)}
 
@@ -342,8 +343,15 @@ def _amount(data, masked_text):
         return ''
     # 금액의 숫자가 원문에 적힌 숫자와 통째로 같아야 한다(일부만 같으면 안 됨). 아니면 지어낸 값으로 보고 비운다.
     # 검증(S2)이 이 값을 공식 자료와 대조한다.
+    numbers = _numbers(amount)
+    if not numbers:
+        # 숫자가 없는 값(무료, 면제 등)은 그 낱말이 원문에 그대로 있을 때만 쓴다.
+        # 숫자가 있는데 금액 모양이 아닌 값(11,00)은 쓰지 않는다.
+        if _digits(amount):
+            return ''
+        return amount if re.sub(r'\s+', '', amount) in re.sub(r'\s+', '', masked_text) else ''
     written = _numbers(masked_text)
-    if any(number not in written for number in _numbers(amount)):
+    if any(number not in written for number in numbers):
         return ''
     return amount
 

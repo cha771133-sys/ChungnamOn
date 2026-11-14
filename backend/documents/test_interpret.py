@@ -293,6 +293,20 @@ class InterpretDeadlineTests(SimpleTestCase):
 
                 self.assertEqual(self.deadlines(items, text='납부기간 2026. 8. 16. ~ 8. 31.'), [])
 
+    def test_range_with_year_is_not_paired_with_another_year(self):
+        # 귀속 연도와 납부 연도가 다른 문서. 기간에 적힌 연도만 쓴다.
+        for text in (
+            '2025년도 안내\n납부기간 2026. 8. 16. ~ 8. 31.', '2025년 귀속\n납부기간 2026.8.16.~8.31.',
+            '2025년 귀속\n납부기간 2026-08-16 ~ 8. 31.',
+        ):
+            with self.subTest(text=text):
+                right = [{'label': '납부 기한', 'date': '2026-08-31', 'kind': 'payment'}]
+                wrong = [{'label': '납부 기한', 'date': '2025-08-31', 'kind': 'payment'}]
+
+                self.assertEqual(len(self.deadlines(right, text=text)), 1)
+                with self.assertLogs(interpret_module.logger, 'WARNING'):
+                    self.assertEqual(self.deadlines(wrong, text=text), [])
+
     def test_dotted_numbers_outside_range_are_not_dates(self):
         items = [{'label': '제출 기한', 'date': '2026-03-05', 'kind': 'other'}]
 
@@ -338,7 +352,7 @@ class InterpretMissingValueTests(SimpleTestCase):
         cases = (
             ('납부할 금액 11,000원', '11,000원'), ('납부할 금액 11000원', '11,000원'),
             ('납부할 금액 11, 000원', '11,000원'), ('납부할 금액 11,000 원', '11,000 원'),
-            ('수수료 없음', '무료'),
+            ('수수료 무료', '무료'), ('수수료: 면 제', '면제'),
         )
         for line, amount in cases:
             with self.subTest(line=line):
@@ -346,6 +360,12 @@ class InterpretMissingValueTests(SimpleTestCase):
                            'agency': {'name': '', 'phone': ''}}
 
                 self.assertEqual(run(payload, text=f'고지서\n{line}')['amount'], amount)
+
+    def test_amount_without_number_must_be_written_in_document(self):
+        # 금액이 적힌 문서에서 AI가 "무료"라고 지어내면 비운다.
+        for amount in ('무료', '없음', '면제', '11,00'):
+            with self.subTest(amount=amount):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
 
     def phone(self, value, text=TAX_NOTICE):
         payload = {**TAX_PAYLOAD, 'agency': {'name': '아산시청', 'phone': value}, 'deadlines': [], 'terms': [],
