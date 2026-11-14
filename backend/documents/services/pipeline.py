@@ -96,7 +96,7 @@ def mask_personal_info(text):
 
 
 def interpret(masked_text, language):
-    """마스킹된 원문을 사용자 언어로 해석한다. (더미: 아산시 주민세 고지서)
+    """마스킹된 원문을 사용자 언어로 해석한다. INTERPRET_MODE가 dummy면 더미(아산시 주민세 고지서), llm이면 interpret.py를 쓴다.
 
     입력: masked_text (str), language (str, 언어 코드 예: "vi")
     출력: {
@@ -123,7 +123,16 @@ def interpret(masked_text, language):
             "sourceIds": [str],             # verify 결과 sources[].id
         }],
     }
+    해석에 실패하면 예외를 던진다. 실패한 문서는 더미 결과로 대체하지 않는다.
+    llm은 checklist를 만들지 않고 빈 목록을 돌려준다(체크리스트는 S4가 만든다).
     """
+    mode = getattr(settings, 'INTERPRET_MODE', 'dummy')
+    if mode == 'llm':
+        from .interpret import interpret_document
+
+        return interpret_document(masked_text, language)
+    if mode != 'dummy':
+        raise ValueError('지원하지 않는 INTERPRET_MODE입니다.')
     # 더미는 요청 언어와 상관없이 베트남어 번역만 돌려준다.
     return {
         'doc_type': '고지서',
