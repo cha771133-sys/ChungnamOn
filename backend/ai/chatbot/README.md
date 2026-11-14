@@ -170,13 +170,18 @@ AI_REQUEST_TIMEOUT=120        # LLM·임베딩 연결/읽기 timeout(초). CPU O
 ANTHROPIC_API_KEY=
 AI_ANTHROPIC_MODEL=claude-haiku-5-5
 
-# 임베딩: gemini(gemini-embedding-001, 768) / ollama(bge-m3, 1024) / fastembed / hash(테스트)
-AI_EMBEDDER=gemini
+# 임베딩: openai(text-embedding-3-large, 1536) / gemini(gemini-embedding-001, 768) / ollama(bge-m3, 1024) / fastembed / hash(테스트)
+AI_EMBEDDER=openai
+OPENAI_API_KEY=                          # OpenAI 키. Authorization 헤더로만 보내고 로그·오류에는 안 남김
+AI_OPENAI_EMBED_MODEL=text-embedding-3-large
+AI_EMBED_DIM=1536                        # openai는 dimensions로 요청 (기본 1536, 최대 3072)
+# Gemini로 쓸 때: AI_EMBEDDER=gemini, GEMINI_API_KEY=..., AI_GEMINI_EMBED_MODEL=gemini-embedding-001, AI_EMBED_DIM=768
 GEMINI_API_KEY=                          # Google AI Studio 키. 헤더(x-goog-api-key)로만 보냄
 AI_GEMINI_EMBED_MODEL=gemini-embedding-001
-AI_EMBED_DIM=768                         # gemini 기본 768 (권장 768/1536/3072)
 # Ollama로 개발할 때: AI_EMBEDDER=ollama, AI_EMBED_DIM=1024
 AI_OLLAMA_EMBED_MODEL=bge-m3
+# 임베딩 모델·차원을 바꾸면 build_source_chunks()를 다시 실행. 차원이 다른 옛 청크는 검색에서 빠지고(삭제는 안 함)
+# 새 차원 청크가 만들어짐. 같은 차원끼리 모델만 바꾸면 구분이 안 되니 차원도 함께 바꿀 것 (예: Gemini 768 → OpenAI 1536)
 
 # 검색: db(공식 자료 테이블) / memory(.md 폴더, Django 없이)
 AI_RETRIEVER=db
@@ -184,9 +189,10 @@ AI_KB_DIR=
 AI_TOP_K=5
 AI_MIN_SCORE=0.65
 ```
-- 배포(Railway)엔 Ollama가 없어서 `AI_LLM_PROVIDER=anthropic`, 임베딩은 `gemini`
+- 배포(Railway)엔 Ollama가 없어서 `AI_LLM_PROVIDER=anthropic`, 임베딩은 `openai`(1536차원). `gemini`도 선택지로 남겨 둠
+- openai: 429·5xx는 서버가 준 대기 시간(retry-after-ms·Retry-After)만큼 기다렸다가 재시도 (청크 생성 최대 5회·60초, 질문 검색 최대 1회·2초), 문장은 100개씩 묶어서 전송
 - gemini 무료 등급은 429(한도 초과)가 날 수 있음: 서버가 준 대기 시간(최대 60초)만큼 기다렸다가 최대 5번 재시도, 문장은 100개씩 묶어서 전송
-- `AI_MIN_SCORE=0.65`: Gemini 기준 (관련 없는 자료도 0.5~0.6이 나옴). 임베딩 모델을 바꾸면 `--search --db`로 다시 조정
+- `AI_MIN_SCORE=0.65`: Gemini 기준 (관련 없는 자료도 0.5~0.6이 나옴). 임베딩 모델을 바꾸면 `--search --db`로 다시 조정 (OpenAI 값은 데모 자료가 들어온 뒤 조정 예정)
 - 임베딩 모델·차원을 바꾸면 `build_source_chunks()`를 다시 실행 (차원이 다른 청크는 자동으로 다시 만듦)
 
 ## 4. 개발할 때
@@ -215,7 +221,7 @@ ai/chatbot/
   service.py      generate_answer, 더미, 근거 판정
   prompts.py      프롬프트 (근거 규칙)
   retriever.py    검색: db / memory
-  embedder.py     임베딩: gemini / ollama / fastembed(선택 설치) / hash
+  embedder.py     임베딩: openai / gemini / ollama / fastembed(선택 설치) / hash
   llm.py          LLM: anthropic / ollama / mock
   chunker.py      청크 분할
   config.py       환경변수
