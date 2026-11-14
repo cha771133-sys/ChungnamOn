@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from threading import Barrier
 from unittest import skipUnless
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.contrib.auth import get_user_model
 from django.contrib.admin.models import LogEntry
@@ -32,6 +33,7 @@ from sources.services.normalization import OfficialRecord
 from sources.services.refresh_service import refresh_target, review_revision, stage_official_record
 from sources.services.source_registry import load_registry
 from sources.services.source_service import collect_source
+from sources.services.usage_conditions import is_registry_excluded
 
 from .pipeline_helpers import collector, spec
 
@@ -374,6 +376,61 @@ class ManualImportTests(TestCase):
         candidate = SourceRevision.objects.get(content_hash=record.content_hash)
         with self.assertRaisesMessage(CollectionError, 'TERMS_UNCONFIRMED'):
             review_revision(candidate.pk, self.admin, approve=True)
+
+    def test_automatic_refresh_preserves_manual_policy_on_previously_automatic_document(self):
+        document = SourceDocument.objects.create(
+            source_url=self.url, title='기존 자동 자료', agency='법무부', region='전국', category='출입국·체류',
+            content_text=self.text, content_hash=hashlib.sha256(self.text.encode('utf-8')).hexdigest(),
+            status='ACTIVE', review_status='APPROVED', metadata={'upstream': 'previous'},
+        )
+        self.run_import(terms_status='unverified', terms_checked_on=None)
+        manual = self.pending()
+        trace = manual.metadata['metadata']['manual_import']
+        target = SourceRefreshTarget.objects.create(provider='html', source_url=self.url, document=document)
+        record = OfficialRecord(
+            provider='html', external_id='', source_url=self.url, title='자동 수집 제목 정정',
+            agency='법무부', region='전국', category='출입국·체류', content_text=self.text,
+            metadata={'upstream': 'changed'},
+        )
+        with patch('sources.services.refresh_service.fetch_record', return_value=record):
+            self.assertEqual(refresh_target(target, Mock()).outcome, 'unchanged')
+        candidate = self.pending()
+        self.assertEqual(candidate.pk, manual.pk)
+        with self.assertRaisesMessage(CollectionError, 'TERMS_UNCONFIRMED'):
+            review_revision(candidate.pk, self.admin, approve=True)
+        self.assertEqual(candidate.metadata['metadata']['manual_import'], trace)
+        self.assertEqual(candidate.metadata['metadata']['usage_terms']['status'], 'unverified')
+        self.assertEqual(candidate.metadata['metadata']['upstream'], 'changed')
+        self.assertEqual(candidate.metadata['title'], '자동 수집 제목 정정')
+
+    def test_disabled_notice_url_variants_cannot_bypass_exclusion(self):
+        disabled = next(item for item in load_registry() if not item.enabled and 'pds_no=' in item.url)
+        parts = urlsplit(disabled.url)
+        pairs = parse_qsl(parts.query)
+        notice_id = dict(pairs)['pds_no']
+        variants = (
+            disabled.url + '&utm_source=manual',
+            urlunsplit(parts._replace(query=urlencode(list(reversed(pairs))))),
+            urlunsplit(parts._replace(netloc='asan.go.kr', query='pds_no=' + notice_id)),
+            urlunsplit(parts._replace(query='%70ds_no=' + notice_id + '&utm_medium=txt')),
+        )
+        for url in variants:
+            with self.subTest(url=url):
+                document = self.run_import(url=url)
+                candidate = document.revisions.get(review_status='PENDING_REVIEW')
+                self.assertTrue(candidate.metadata['metadata']['usage_terms']['registry_excluded'])
+                with self.assertRaisesMessage(CollectionError, 'SOURCE_DISABLED'):
+                    review_revision(candidate.pk, self.admin, approve=True)
+                document.refresh_from_db()
+                self.assertEqual(document.status, 'PENDING')
+
+    def test_exclusion_identity_keeps_other_official_pages_available(self):
+        self.assertFalse(is_registry_excluded('https://www.asan.go.kr/main/cms/?no=93&utm_source=manual'))
+        self.assertFalse(is_registry_excluded('https://www.asan.go.kr/main/cms/?pds_no=test-fixture-other'))
+        disabled_paths = [spec for spec in load_registry() if not spec.enabled and not urlsplit(spec.url).query]
+        for disabled in disabled_paths:
+            with self.subTest(url=disabled.url):
+                self.assertTrue(is_registry_excluded(disabled.url + '?utm_source=manual'))
 
     def test_rejection_keeps_new_document_out_of_search_and_can_be_resubmitted(self):
         self.run_import()

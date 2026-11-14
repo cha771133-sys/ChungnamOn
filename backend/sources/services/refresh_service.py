@@ -12,7 +12,7 @@ from .errors import CollectionError
 from .normalization import OfficialRecord, official_date, official_url
 from .parser import parse_html
 from .source_service import CollectionResult
-from .usage_conditions import validate_manual_approval
+from .usage_conditions import is_manual_metadata, validate_manual_approval
 
 
 LEASE_DURATION = timedelta(minutes=30)
@@ -112,6 +112,14 @@ def stage_official_record(record, started_at, checked_at, *, document_id=None):
             },
         )
         if not revision_created:
+            previous = revision.metadata.get('metadata', {})
+            if is_manual_metadata(previous) and not is_manual_metadata(metadata['metadata']):
+                # 같은 본문의 자동 재수집이 수동 등록 이력과 미확인 조건을 지우지 못하게 한다.
+                # 조건을 정정하는 수동 재등록은 새 확인 정보로 갱신할 수 있다.
+                metadata = {**metadata, 'metadata': {
+                    **metadata['metadata'], 'manual_import': previous['manual_import'],
+                    'usage_terms': previous.get('usage_terms', {}),
+                }}
             # 본문은 같아도 공식 링크·공포일 등 메타데이터가 달라졌다면 최신 후보에 보존한다.
             revision.metadata, revision.collected_at = metadata, checked_at
             revision.save(update_fields=['metadata', 'collected_at'])

@@ -17,6 +17,7 @@ from .errors import CollectionError
 from .normalization import OfficialRecord, official_url
 from .refresh_service import stage_official_record
 from .source_registry import CATEGORIES, REGIONS
+from .usage_conditions import is_registry_excluded
 
 
 MAX_TXT_BYTES = 2 * 1024 * 1024
@@ -108,6 +109,7 @@ def import_official_txt(*, file, url, agency, title, region, category, registere
             'manual_import': trace,
             'usage_terms': {
                 'status': terms_status, 'note': note, 'url': terms_link,
+                'registry_excluded': is_registry_excluded(source_url),
                 'checked_by': actor if terms_checked_on else None,
                 'checked_on': terms_checked_on.isoformat() if terms_checked_on else None,
             },
