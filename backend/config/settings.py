@@ -237,6 +237,7 @@ CLOVA_OCR_SECRET = os.environ.get('CLOVA_OCR_SECRET', '')
 MASK_MODE = os.environ.get('MASK_MODE') or 'dummy'
 
 # 문서 해석. dummy는 외부 호출 없이 고정 결과를 쓰고, llm은 documents/services/interpret.py로 AI를 호출한다.
+# llm은 DOCUMENTS_VERIFY_MODE=rag와 함께 쓴다. 검증이 dummy면 문서가 FAILED(INTERPRETING)가 된다.
 # 키는 INTERPRET_API_KEY가 있으면 그 값을, 없으면 챗봇과 같은 ANTHROPIC_API_KEY를 쓴다.
 INTERPRET_MODE = os.environ.get('INTERPRET_MODE') or 'dummy'
 INTERPRET_API_KEY = os.environ.get('INTERPRET_API_KEY') or os.environ.get('ANTHROPIC_API_KEY', '')

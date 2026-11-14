@@ -276,6 +276,29 @@ class InterpretDeadlineTests(SimpleTestCase):
         with self.assertLogs(interpret_module.logger, 'WARNING'):
             self.assertEqual(self.deadlines(items, text='주민세\n8월 31일까지 납부'), [])
 
+    def test_range_end_without_year_uses_start_year(self):
+        # 고지서의 납부기간은 끝 날짜의 연도를 줄여 쓰기도 한다.
+        items = [{'label': '납부 기한', 'date': '2026-08-31', 'kind': 'payment'}]
+        for line in (
+            '납부기간 2026. 8. 16. ~ 8. 31.', '납부기간 2026.8.16 ~ 8.31', '납부기간 2026.08.16.~08.31.',
+            '납부기간 2026-08-16 ~ 08.31', '2026년도 주민세\n납기 8.16.~8.31.',
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(len(self.deadlines(items, text=f'주민세 고지서\n{line}')), 1)
+
+    def test_range_does_not_accept_other_dates(self):
+        for value in ('2026-08-30', '2027-08-31', '2026-09-01'):
+            with self.subTest(value=value), self.assertLogs(interpret_module.logger, 'WARNING'):
+                items = [{'label': '납부 기한', 'date': value, 'kind': 'payment'}]
+
+                self.assertEqual(self.deadlines(items, text='납부기간 2026. 8. 16. ~ 8. 31.'), [])
+
+    def test_dotted_numbers_outside_range_are_not_dates(self):
+        items = [{'label': '제출 기한', 'date': '2026-03-05', 'kind': 'other'}]
+
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(self.deadlines(items, text='2026년 안내\n컬러사진(3.5cm×4.5cm) 1장'), [])
+
     def test_invalid_date_fails(self):
         for value in ('2026년 8월 31일', '2026-8-31', '2026-02-30', ''):
             with self.subTest(value=value), self.assertRaises(InterpretError):
@@ -306,12 +329,54 @@ class InterpretMissingValueTests(SimpleTestCase):
         self.assertEqual(result['agency'], {'name': '', 'phone': '', 'source': 'unknown'})
 
     def test_amount_not_written_in_document_is_emptied(self):
-        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '12,000원'})['amount'], '')
+        # 숫자 일부만 같은 값(11,000원의 1,100·000)도 원문에 없는 값이다.
+        for amount in ('12,000원', '1,100원', '000원', '110,000원', '11,000원 + 2,000원'):
+            with self.subTest(amount=amount):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+
+    def test_amount_written_in_document_is_kept(self):
+        cases = (
+            ('납부할 금액 11,000원', '11,000원'), ('납부할 금액 11000원', '11,000원'),
+            ('납부할 금액 11, 000원', '11,000원'), ('납부할 금액 11,000 원', '11,000 원'),
+            ('수수료 없음', '무료'),
+        )
+        for line, amount in cases:
+            with self.subTest(line=line):
+                payload = {**TAX_PAYLOAD, 'amount': amount, 'deadlines': [], 'terms': [],
+                           'agency': {'name': '', 'phone': ''}}
+
+                self.assertEqual(run(payload, text=f'고지서\n{line}')['amount'], amount)
+
+    def phone(self, value, text=TAX_NOTICE):
+        payload = {**TAX_PAYLOAD, 'agency': {'name': '아산시청', 'phone': value}, 'deadlines': [], 'terms': [],
+                   'amount': ''}
+        return run(payload, text=text)['agency']['phone']
 
     def test_phone_not_written_in_document_is_emptied(self):
         payload = {**TAX_PAYLOAD, 'agency': {'name': '아산시청', 'phone': '041-540-2114'}}
 
         self.assertEqual(run(payload)['agency'], {'name': '아산시청', 'phone': '', 'source': 'document'})
+        # 자리 수가 빠진 번호, 지역번호 없는 번호도 원문의 전화번호와 같지 않다.
+        for value in ('041-537-300', '537-3001', '041-537-3002', '11,000'):
+            with self.subTest(value=value):
+                self.assertEqual(self.phone(value), '')
+
+    def test_phone_is_not_built_from_other_numbers(self):
+        text = '전자납부번호 0415-3730-0199-0000\n납부 계좌 견본은행 041-5373-0010-00\n문의 아산시청'
+
+        for value in ('0415-3730', '041-537-3001', '041-5373-0010'):
+            with self.subTest(value=value):
+                self.assertEqual(self.phone(value, text=text), '')
+
+    def test_phone_formats_in_document(self):
+        cases = (
+            ('문의 041)537-3001~5', '041-537-3001'), ('문의 (041) 537-3001', '041-537-3001'),
+            ('문의 041.537.3001', '041-537-3001'), ('문의 02-2110-4094', '02-2110-4094'),
+            ('고객센터 1577-1000', '1577-1000'), ('외국인종합안내센터 1345', '1345'),
+        )
+        for line, value in cases:
+            with self.subTest(line=line):
+                self.assertEqual(self.phone(value, text=f'안내문\n{line}'), value)
 
     def test_masked_values_are_not_used(self):
         payload = {
@@ -410,10 +475,12 @@ PIPELINE_PAYLOAD = {
     'payment_methods': ['은행 창구', '가상계좌', '위택스'],
 }
 
+# 실제 해석은 rag 검증과 함께 쓴다. 검증은 이 테스트의 대상이 아니라 setUp에서 가짜로 바꾼다.
 pipeline_settings = override_settings(
-    DOCUMENTS_STEP_DELAY=0, OCR_MODE='dummy', MASK_MODE='dummy', DOCUMENTS_VERIFY_MODE='dummy',
+    DOCUMENTS_STEP_DELAY=0, OCR_MODE='dummy', MASK_MODE='dummy', DOCUMENTS_VERIFY_MODE='rag',
     INTERPRET_API_KEY='test-key', INTERPRET_MODEL='test-model',
 )
+UNVERIFIED = {'overall': 'UNVERIFIED', 'status': 'UNVERIFIED', 'items': [], 'sources': []}
 
 
 @pipeline_settings
@@ -425,6 +492,9 @@ class InterpretPipelineTests(TestCase):
             owner=user, file='documents/notice.jpg', file_name='notice.jpg',
             file_type=Document.FileType.IMAGE, step=Document.Step.QUEUED,
         )
+        verify = mock.patch.object(pipeline, 'verify', return_value=UNVERIFIED)
+        self.verify = verify.start()
+        self.addCleanup(verify.stop)
 
     def assert_failed_at_interpreting(self, logs):
         self.document.refresh_from_db()
@@ -450,6 +520,7 @@ class InterpretPipelineTests(TestCase):
         self.assertEqual(result.deadlines, [{'label': '납부 기한', 'date': '2026-08-31'}])
         self.assertEqual(result.agency['phone'], '041-000-0000')
         self.assertEqual(result.language, pipeline.DEFAULT_LANGUAGE)
+        self.assertEqual(result.verification, UNVERIFIED)
         self.assertEqual(self.document.checklist_items.count(), 0)
         # AI로 나간 글자와 저장한 원문은 마스킹된 글자다.
         sent = mocked.create.call_args.kwargs['messages'][0]['content']
@@ -484,6 +555,23 @@ class InterpretPipelineTests(TestCase):
         self.assert_failed_at_interpreting(logs)
         mocked.client_class.assert_not_called()
 
+    def test_llm_with_dummy_verification_marks_failed(self):
+        # 더미 검증의 고정 결과(주민세 6,250원 일치)가 실제 문서에 붙지 않게 AI 호출 전에 막는다.
+        for verify_mode in ('dummy', '', 'RAG'):
+            with self.subTest(verify_mode=verify_mode):
+                Document.objects.filter(id=self.document.id).update(status=Document.Status.PENDING)
+
+                with (
+                    override_settings(INTERPRET_MODE='llm', DOCUMENTS_VERIFY_MODE=verify_mode),
+                    MockedAnthropic(json_response(PIPELINE_PAYLOAD)) as mocked,
+                    self.assertLogs(pipeline.logger, 'ERROR') as logs,
+                ):
+                    process_document(self.document.id)
+
+                self.assert_failed_at_interpreting(logs)
+                mocked.client_class.assert_not_called()
+                self.verify.assert_not_called()
+
     @override_settings(INTERPRET_MODE='claude')
     def test_unknown_mode_marks_failed(self):
         with MockedAnthropic() as mocked, self.assertLogs(pipeline.logger, 'ERROR') as logs:
@@ -492,8 +580,9 @@ class InterpretPipelineTests(TestCase):
         self.assert_failed_at_interpreting(logs)
         mocked.client_class.assert_not_called()
 
-    @override_settings(INTERPRET_MODE='dummy')
+    @override_settings(INTERPRET_MODE='dummy', DOCUMENTS_VERIFY_MODE='dummy')
     def test_dummy_mode_does_not_call_ai(self):
+        # 둘 다 dummy인 기본 설정은 그대로 동작한다.
         with MockedAnthropic() as mocked:
             process_document(self.document.id)
 

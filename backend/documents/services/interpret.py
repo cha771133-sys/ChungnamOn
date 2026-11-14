@@ -135,6 +135,25 @@ KOREAN_DATE = re.compile(r'(?:(?<!\d)(\d{4})\s*년\s*)?(?<!\d)(\d{1,2})\s*월\s*
 # 2026.8.31 / 2026-08-31 / 2026/08/31
 NUMERIC_DATE = re.compile(r'(?<!\d)(\d{4})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2})(?!\d)')
 YEAR = re.compile(r'(?<!\d)(20\d{2})(?!\d)')
+# 기간 표기(8.16.~8.31.)의 물결표·줄표
+RANGE_SEP = r'\s*[~∼〜～–-]\s*'
+# 2026.8.16.~8.31. 처럼 끝 날짜의 연도를 줄인 기간. 시작 날짜의 연도를 끝 날짜에 쓴다.
+RANGE_END = re.compile(
+    r'(?<!\d)(\d{4})\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{1,2}\s*\.?' + RANGE_SEP
+    + r'(\d{1,2})\s*[./]\s*(\d{1,2})(?!\d)'
+)
+# 8.16.~8.31. 처럼 양쪽 모두 연도가 없는 기간. 점으로만 적힌 월.일은 기간 모양일 때만 날짜로 본다.
+YEARLESS_RANGE = re.compile(
+    r'(?<![\d./-])(\d{1,2})\s*\.\s*(\d{1,2})\s*\.?' + RANGE_SEP + r'(\d{1,2})\s*\.\s*(\d{1,2})(?!\d)'
+)
+# 금액 숫자 하나. 11,000 / 11, 000(OCR 띄어쓰기) / 11000
+NUMBER = re.compile(r'(?<![\d,])\d{1,3}(?:,\s?\d{3})+(?!\d)|(?<![\d,])\d+(?!,?\d)')
+# 전화번호: 041-537-3001, 041)537-3001, (02) 2110-4094 / 1577-1000 / 1345
+PHONE_PATTERNS = (
+    re.compile(r'(?<![\d-])0\d{1,2}\s*[)\s.-]\s*\d{3,4}\s*[\s.-]\s*\d{4}(?![\d-])'),
+    re.compile(r'(?<![\d-])1[5-9]\d{2}\s*-\s*\d{4}(?![\d-])'),
+    re.compile(r'(?<![\d,.-])1\d{2,3}(?![\d,.-])'),
+)
 MASK_MARK = re.compile(r'\[[^\]]*가림\]|\*{2,}')
 HANGUL = re.compile(r'[가-힣]')
 
@@ -231,6 +250,16 @@ def _digits(text):
     return re.sub(r'\D', '', text)
 
 
+def _numbers(text):
+    """글자에 적힌 숫자들. 쉼표와 띄어쓰기를 뺀 모양으로 모은다."""
+    return {_digits(number) for number in NUMBER.findall(text)}
+
+
+def _phones_in_text(text):
+    """원문에 적힌 전화번호들(숫자만)."""
+    return {_digits(phone) for pattern in PHONE_PATTERNS for phone in pattern.findall(text)}
+
+
 def _dates_in_text(text):
     """원문에 적힌 날짜. (연·월·일이 다 있는 날짜 집합, 연도 없이 적힌 (월, 일) 집합, 원문에 나온 연도 집합)"""
     full, month_day = set(), set()
@@ -241,6 +270,10 @@ def _dates_in_text(text):
             month_day.add((int(month), int(day)))
     for year, month, day in NUMERIC_DATE.findall(text):
         full.add((int(year), int(month), int(day)))
+    for year, month, day in RANGE_END.findall(text):
+        full.add((int(year), int(month), int(day)))
+    for start_month, start_day, end_month, end_day in YEARLESS_RANGE.findall(text):
+        month_day.update({(int(start_month), int(start_day)), (int(end_month), int(end_day))})
     return full, month_day, {int(year) for year in YEAR.findall(text)}
 
 
@@ -297,9 +330,8 @@ def _agency(data, masked_text):
     name, phone = _string(agency, 'name'), _string(agency, 'phone')
     if MASK_MARK.search(name):
         name = ''
-    # 전화번호의 숫자가 원문에 그대로 이어져 있어야 한다. 아니면 지어낸 값으로 보고 비운다.
-    phone_digits = _digits(phone)
-    if MASK_MARK.search(phone) or not phone_digits or phone_digits not in _digits(masked_text):
+    # 원문에서 찾은 전화번호 가운데 하나와 숫자가 모두 같아야 한다. 아니면 지어낸 값으로 보고 비운다.
+    if MASK_MARK.search(phone) or _digits(phone) not in _phones_in_text(masked_text):
         phone = ''
     return {'name': name, 'phone': phone, 'source': 'document' if name or phone else 'unknown'}
 
@@ -308,9 +340,10 @@ def _amount(data, masked_text):
     amount = _string(data, 'amount')
     if MASK_MARK.search(amount):
         return ''
-    # 금액의 숫자가 원문에 없으면 지어낸 값으로 보고 비운다. 검증(S2)이 이 값을 공식 자료와 대조한다.
-    amount_digits = _digits(amount)
-    if amount_digits and amount_digits not in _digits(masked_text):
+    # 금액의 숫자가 원문에 적힌 숫자와 통째로 같아야 한다(일부만 같으면 안 됨). 아니면 지어낸 값으로 보고 비운다.
+    # 검증(S2)이 이 값을 공식 자료와 대조한다.
+    written = _numbers(masked_text)
+    if any(number not in written for number in _numbers(amount)):
         return ''
     return amount
 
