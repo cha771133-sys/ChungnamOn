@@ -15,7 +15,11 @@ Django 교체 자리 어댑터 (integration.py)
 
 청크·임베딩 생성 (indexing.py, manage.py shell에서)
     build_source_chunks(source_ids=None)
+
+S4 체크리스트·전화 대본 (checklist.py, DOCUMENTS_CHECKLIST_MODE=dummy|rag)
+    build_actions(result, verification, language) -> {"checklist": [...], "call_script": str}
 """
+from .checklist import build_actions
 from .chunker import prepare_chunks
 from .embedder import embed_passages
 from .indexing import build_source_chunks
@@ -24,5 +28,5 @@ from .service import GroundingStatus, generate_answer, generate_answer_dummy
 
 __all__ = [
     "generate_answer", "generate_answer_dummy", "GroundingStatus", "prepare_chunks", "embed_passages",
-    "build_source_chunks", "chat_answer", "verify_interpretation",
+    "build_source_chunks", "chat_answer", "verify_interpretation", "build_actions",
 ]
