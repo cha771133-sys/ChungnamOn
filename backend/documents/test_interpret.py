@@ -422,6 +422,20 @@ class InterpretMissingValueTests(SimpleTestCase):
 
                 self.assertEqual(run(payload, text=text)['amount'], '')
 
+    def test_empty_amount_stays_empty_when_amount_field_is_not_single_value(self):
+        # 범위·선택·조건으로 적힌 금액은 하나로 정해지지 않는다. 앞의 값만 읽어 확정 금액처럼 쓰지 않는다.
+        texts = (
+            '안내문\n수수료 35,000원~50,000원', '안내문\n수수료 35,000원 ~ 50,000원', '안내문\n수수료 35,000원 또는 30,000원',
+            '안내문\n수수료: 35,000원 이상', '안내문\n수수료 35,000원 (전자 신청 시 30,000원)',
+            '안내문\n수수료\n35,000원부터', '고지서\n납부할 금액 11,000원 (주민세 10,000원 + 지방교육세 1,000원)',
+        )
+        for text in texts:
+            with self.subTest(text=text):
+                payload = {**TAX_PAYLOAD, 'amount': '', 'deadlines': [], 'terms': [], 'payment_methods': [],
+                           'agency': {'name': '', 'phone': ''}}
+
+                self.assertEqual(run(payload, text=text)['amount'], '')
+
     def test_wrong_amount_is_not_replaced_from_amount_field(self):
         # AI가 원문에 없는 금액을 보냈으면 비우기만 한다. 금액 칸에서 다시 읽어 채우는 것은 빈 값일 때뿐이다.
         with self.assertLogs(interpret_module.logger, 'WARNING'):
@@ -575,6 +589,18 @@ class InterpretLanguageTests(SimpleTestCase):
             '영어 대신 베트남어 요약': ('en', {'summary': [TRANSLATIONS['vi'][1]]}),
             '쉬운 한국어에 영어가 섞임': ('ko', {'translated_text': 'Subscriber\n성명\nName\n[이름 가림]\nAddress\nPayment'}),
             '글자가 없음': ('vi', {'translated_text': '[이름 가림]\n11,000'}),
+            # 라틴 문자 언어를 요청했는데 전혀 다른 문자로 온 응답
+            '영어 대신 중국어': ('en', {'translated_text': TRANSLATIONS['zh'][0], 'summary': [TRANSLATIONS['zh'][1]]}),
+            '베트남어 대신 태국어': ('vi', {'translated_text': TRANSLATIONS['th'][0]}),
+            '우즈베크어 대신 네팔어 요약': ('uz', {'summary': [TRANSLATIONS['ne'][1]]}),
+            '우즈베크어 대신 키릴 문자': ('uz', {'translated_text': 'Аҳоли солиғи хабарномаси\nИсми\nТўлов 11,000 won'}),
+            # 여러 항목 가운데 하나만 다른 언어인 응답. 항목마다 따로 본다.
+            '요약 한 문장만 한국어': ('th', {'summary': [TRANSLATIONS['th'][1], KOREAN_SUMMARY, TRANSLATIONS['th'][1]]}),
+            '용어 설명 하나만 영어': ('th', {'terms': [
+                {'word': '납부 기한', 'explain': TRANSLATIONS['th'][1]},
+                {'word': '주민세(개인분)', 'explain': 'The last day you can pay.'},
+                {'word': '납부 방법', 'explain': TRANSLATIONS['th'][1]},
+            ]}),
             # 실제로 나왔던 경우: 네팔어 문서의 용어 설명만 한국어로 나왔다.
             '용어 설명이 한국어': ('ne', {'terms': [{'word': '납부 기한', 'explain': '돈을 내야 하는 마지막 날입니다.'}]}),
             '용어 설명이 영어': ('th', {'terms': [{'word': '납부 기한', 'explain': 'The last day you can pay.'}]}),

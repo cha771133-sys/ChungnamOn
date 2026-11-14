@@ -66,8 +66,13 @@ APOSTROPHES = re.compile(r'[ʻʼ‘’`]')
 # 다른 라틴 문자 언어의 흔한 낱말이 낱말의 이만큼을 넘고, 요청한 언어의 흔한 낱말보다도 많으면 그 언어로 쓴 것으로 본다.
 # 표처럼 낱말만 있는 짧은 번역문은 흔한 낱말이 적으므로, 요청한 언어의 낱말이 적다는 것만으로는 틀렸다고 보지 않는다.
 MAX_OTHER_LANGUAGE_WORD_RATIO = 0.15
-# 고유 문자가 있는 언어. 번역문·요약이 그 문자로 쓰였는지 확인하는 데 쓴다. (영어·베트남어·우즈베크어는 라틴 문자)
+# 언어별 문자. 번역문·요약·용어 설명이 그 문자로 쓰였는지 확인하는 데 쓴다.
+# 영어·베트남어·우즈베크어는 같은 라틴 문자라 여기서는 "다른 문자로 쓴 응답"만 걸러지고, 서로는 COMMON_WORDS로 구분한다.
+LATIN = re.compile(r'[A-Za-z\u00c0-\u024f\u1e00-\u1eff]')
 LANGUAGE_SCRIPTS = {
+    'vi': LATIN,
+    'en': LATIN,
+    'uz': LATIN,
     'zh': re.compile(r'[\u4e00-\u9fff]'),
     'ne': re.compile(r'[\u0900-\u097f]'),
     'th': re.compile(r'[\u0e00-\u0e7f]'),
@@ -213,6 +218,8 @@ AMOUNT_FIELD = re.compile(
     r'(?:납부\s*할?\s*금액|납기\s*내\s*금액|고지\s*금액|합계\s*금액|수수료|세액)\s*[:：]?[ \t]*\n?[ \t]*'
     r'((?<![\d,])\d{1,3}(?:,\s?\d{3})+|(?<![\d,])\d+)\s*원'
 )
+# 금액 칸의 금액 뒤에 이런 표현이 이어지면 금액이 하나로 정해지지 않은 것이다: 범위(~), 선택(또는), 조건(이상), 다른 금액.
+AMOUNT_NOT_SINGLE = re.compile(r'[~∼〜～]|또는|혹은|이상|이하|부터|내지|\d\s*원')
 # 전화번호: 041-537-3001, 041)537-3001, (02) 2110-4094 / 1577-1000 / 1345
 PHONE_PATTERNS = (
     re.compile(r'(?<![\d-])0\d{1,2}\s*[)\s.-]\s*\d{3,4}\s*[\s.-]\s*\d{4}(?![\d-])'),
@@ -438,7 +445,13 @@ def _amount_from_field(masked_text):
 
     금액 칸의 값이 하나로 정해질 때만 쓴다. 칸이 없거나 값이 여러 가지면 비워 둔다(추측하지 않는다).
     """
-    found = {_digits(number): number for number in AMOUNT_FIELD.findall(masked_text)}
+    found = {}
+    for match in AMOUNT_FIELD.finditer(masked_text):
+        # 금액 뒤에 범위·선택·조건이 이어지면(35,000원~50,000원, 또는 30,000원, 이상) 값이 하나로 정해지지 않는다.
+        rest_of_line = masked_text[match.end():].split('\n', 1)[0]
+        if AMOUNT_NOT_SINGLE.search(rest_of_line):
+            return ''
+        found[_digits(match.group(1))] = match.group(1)
     if len(found) != 1:
         return ''
     logger.warning('AI가 비운 금액을 원문의 금액 칸에서 읽어 채웠습니다.')
@@ -481,8 +494,8 @@ def _text_written_in(text, language, max_hangul_ratio):
     letters = _letters(text)
     if not letters:
         return False
-    script = LANGUAGE_SCRIPTS.get(language)
-    if script and sum(1 for char in letters if script.match(char)) / len(letters) < MIN_SCRIPT_RATIO:
+    script = LANGUAGE_SCRIPTS[language]
+    if sum(1 for char in letters if script.match(char)) / len(letters) < MIN_SCRIPT_RATIO:
         return False
     if language != 'ko' and sum(1 for char in letters if HANGUL.match(char)) / len(letters) > max_hangul_ratio:
         return False
@@ -503,10 +516,11 @@ def _latin_text_written_in(text, language):
 
 def _written_in(result, language):
     """번역문·요약·용어 설명이 요청한 언어로 쓰였는지 본다. 문장이 자연스러운지는 보지 못한다."""
-    texts = {'translated_text': result['translated_text'], 'summary': ' '.join(result['summary'])}
-    if result['terms']:
-        texts['terms'] = ' '.join(term['explain'] for term in result['terms'])
-    return all(_text_written_in(text, language, MAX_HANGUL_RATIO[key]) for key, text in texts.items())
+    # 요약 문장과 용어 설명은 하나씩 본다. 이어 붙여서 보면 맞는 항목들이 틀린 항목 하나를 가린다.
+    texts = [('translated_text', result['translated_text'])]
+    texts += [('summary', sentence) for sentence in result['summary']]
+    texts += [('terms', term['explain']) for term in result['terms']]
+    return all(_text_written_in(text, language, MAX_HANGUL_RATIO[key]) for key, text in texts)
 
 
 def _build_result(data, masked_text, language):
