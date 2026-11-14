@@ -19,14 +19,39 @@ sources/REFRESH.md 'AI 경계'의 자동 ACTIVE 전환 정책(#60)을 따른다.
     최신 상태·재처리 플래그·완료 기록을 덮어쓰지 않는다
 - 완료 처리는 status·ai_reprocessing_required·version·updated_at만 바꾼다 (제목·기관 등 관리자 입력은 그대로)
 - 임베딩은 DB 트랜잭션 밖에서 계산. 임베딩이 실패하면 예외가 나고 자료는 기존 상태 그대로
+- 임베딩 결과가 비정상(개수 불일치·빈 벡터·차원 불일치·숫자 아님)이어도 같은 실패로 보고 EmbeddingResultError를 낸다.
+  청크를 저장하지 않고 완료·ACTIVE 전환도 하지 않는다 (#78). 분할 결과가 0개면 예외 없이 건너뛴다(완료 안 함)
 """
 import logging
+import math
 
 from .chunker import prepare_chunks
 from .config import get_settings
 from .embedder import embed_passages
 
 log = logging.getLogger(__name__)
+
+
+class EmbeddingResultError(RuntimeError):
+    """임베딩 결과가 비정상(개수 불일치·빈 벡터·차원 불일치·숫자가 아닌 값). 임베딩 예외와 같이 취급한다 (#78)."""
+
+
+def _check_vectors(document_id: int, vectors, count: int, dim: int) -> None:
+    """청크 count개에 대한 임베딩 결과를 저장 전에 검사. 이상하면 EmbeddingResultError.
+
+    임베더(Gemini·OpenAI)가 자체 검사를 해도, Ollama처럼 검사가 없는 임베더나 mock이 빈 결과를 돌려주면
+    zip()이 조용히 잘려 청크 없이 완료·ACTIVE로 기록되던 문제(#78)를 여기서 막는다.
+    오류 메시지에는 문서 내용·벡터 값을 넣지 않는다.
+    """
+    if not isinstance(vectors, (list, tuple)) or len(vectors) != count:
+        got = len(vectors) if isinstance(vectors, (list, tuple)) else type(vectors).__name__
+        raise EmbeddingResultError(f"공식자료 {document_id}: 임베딩 결과 개수가 다름 (청크 {count}개, 결과 {got})")
+    for i, vec in enumerate(vectors):
+        if not isinstance(vec, (list, tuple)) or len(vec) != dim:
+            size = len(vec) if isinstance(vec, (list, tuple)) else type(vec).__name__
+            raise EmbeddingResultError(f"공식자료 {document_id}: {i}번째 임베딩 차원이 {size}인데 AI_EMBED_DIM={dim}")
+        if not all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in vec):
+            raise EmbeddingResultError(f"공식자료 {document_id}: {i}번째 임베딩에 숫자가 아닌 값이 있음")
 
 START_FIELDS = ("id", "title", "content_text", "content_hash", "version", "status", "review_status",
                 "ai_reprocessing_required")
@@ -158,6 +183,8 @@ def build_source_chunks(source_ids=None) -> dict:
             stats["skipped"] += 1
             continue
         vectors = embed_passages(chunks)  # 트랜잭션 밖 (외부 API)
+        # 비정상 결과는 임베딩 예외와 같이: 이 자료는 저장·완료하지 않고 예외를 낸다 (기존 상태·청크 유지)
+        _check_vectors(start.pk, vectors, len(chunks), dim)
 
         with transaction.atomic():
             locked = _lock_if_unchanged(start)
@@ -170,13 +197,14 @@ def build_source_chunks(source_ids=None) -> dict:
             offset = (SourceChunk.objects.filter(source_document_id=start.pk)
                       .aggregate(m=Max("chunk_order"))["m"])
             offset = 0 if offset is None else offset + 1
-            SourceChunk.objects.bulk_create([
+            created = SourceChunk.objects.bulk_create([
                 SourceChunk(source_document_id=start.pk, chunk_order=offset + i, chunk_text=text,
-                            embedding=vec, source_content_hash=start.content_hash)
-                for i, (text, vec) in enumerate(zip(chunks, vectors))
+                            embedding=list(vec), source_content_hash=start.content_hash)
+                for i, (text, vec) in enumerate(zip(chunks, vectors, strict=True))
             ])
             _finish(start, locked, stats)
+        # 반환 통계는 실제 저장한 개수 (#78)
         stats["documents"] += 1
-        stats["chunks"] += len(chunks)
-        log.info("공식자료 %s: 청크 %d개 저장", start.pk, len(chunks))
+        stats["chunks"] += len(created)
+        log.info("공식자료 %s: 청크 %d개 저장", start.pk, len(created))
     return stats

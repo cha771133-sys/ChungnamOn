@@ -352,6 +352,134 @@ class BuildSourceChunksTests(AIEnvMixin, TestCase):
         self.assertEqual(self.row(doc), before)
         self.assertFalse(SourceChunk.objects.filter(source_document=doc).exists())
 
+    # ── 비정상 임베딩 결과 (#78) ──
+    def assert_failed_and_untouched(self, doc, before, chunks_before=0):
+        from sources.models import SourceChunk
+
+        self.assertEqual(self.row(doc), before)  # 상태·재처리 플래그·version 그대로
+        self.assertEqual(SourceChunk.objects.filter(source_document=doc).count(), chunks_before)
+
+    def test_empty_embedding_result_is_failure(self):
+        """#78 최소 재현: embed_passages가 []를 돌려주면 완료·ACTIVE로 기록하지 않는다."""
+        from ai.chatbot import build_source_chunks
+        from ai.chatbot.indexing import EmbeddingResultError
+
+        doc = self.pending()
+        before = self.row(doc)
+        with mock.patch("ai.chatbot.indexing.embed_passages", return_value=[]):
+            with self.assertRaises(EmbeddingResultError):
+                build_source_chunks([doc.pk])
+        self.assert_failed_and_untouched(doc, before)
+        doc.refresh_from_db()
+        self.assertEqual((doc.status, doc.ai_reprocessing_required), ("PENDING", True))
+
+    def test_bad_embedding_results_are_failure(self):
+        from ai.chatbot import build_source_chunks
+        from ai.chatbot.indexing import EmbeddingResultError
+
+        ok = [0.1] * 1024
+        cases = {
+            "개수 많음": [ok, ok], "None": None, "dict": {"embeddings": []},
+            "빈 벡터": [[]], "차원 불일치": [[0.1] * 768], "벡터가 None": [None],
+            "NaN": [[float("nan")] * 1024], "무한대": [[float("inf")] * 1024],
+            "문자열 값": [["0.1"] * 1024], "bool 값": [[True] * 1024],
+        }
+        for n, (name, result) in enumerate(cases.items()):
+            with self.subTest(name):
+                doc = self.pending(f"bad-{n}")
+                before = self.row(doc)
+                with mock.patch("ai.chatbot.indexing.embed_passages", return_value=result):
+                    with self.assertRaises(EmbeddingResultError) as ctx:
+                        build_source_chunks([doc.pk])
+                self.assertNotIn("주민세", str(ctx.exception))  # 오류에 문서 내용 없음
+                self.assert_failed_and_untouched(doc, before)
+
+    def test_ollama_empty_body_response_is_failure(self):
+        """#78 실제 재현 조건: 차원 확인 요청은 정상 1024, 본문 임베딩 요청은 HTTP 200 {"embeddings": []}."""
+        import httpx
+
+        from ai.chatbot import build_source_chunks
+        from ai.chatbot.config import reset_settings
+        from ai.chatbot.indexing import EmbeddingResultError
+
+        doc = self.pending()
+        before = self.row(doc)
+
+        def fake_post(client, url, json=None, **kw):
+            request = httpx.Request("POST", url)
+            if json["input"] == ["차원 확인"]:
+                return httpx.Response(200, json={"embeddings": [[0.1] * 1024]}, request=request)
+            return httpx.Response(200, json={"embeddings": []}, request=request)
+
+        with mock.patch.dict(os.environ, {"AI_EMBEDDER": "ollama", "AI_EMBED_DIM": "1024"}), \
+                mock.patch("httpx.Client.post", autospec=True, side_effect=fake_post):
+            reset_settings()
+            with self.assertRaises(EmbeddingResultError):
+                build_source_chunks([doc.pk])
+        reset_settings()
+        self.assert_failed_and_untouched(doc, before)
+
+    def test_normal_result_counts_saved_chunks(self):
+        from ai.chatbot import build_source_chunks
+        from sources.models import SourceChunk
+
+        doc = self.pending(text="# 긴 본문\n" + "주민세 납부 안내 문장입니다. " * 200)
+        stats = build_source_chunks([doc.pk])
+        saved = SourceChunk.objects.filter(source_document=doc).count()
+        self.assertGreater(saved, 1)
+        self.assertEqual((stats["chunks"], stats["completed"], stats["activated"]), (saved, 1, 1))
+        doc.refresh_from_db()
+        self.assertEqual((doc.status, doc.ai_reprocessing_required), ("ACTIVE", False))
+
+    def test_active_document_reprocess_failure_keeps_state_and_chunks(self):
+        from ai.chatbot import build_source_chunks
+        from ai.chatbot.indexing import EmbeddingResultError
+        from sources.models import SourceChunk, SourceDocument
+
+        # 1) ACTIVE·재처리 완료 자료를 임베딩 모델(차원) 변경 뒤 다시 만들다 실패
+        doc = self.source("active")
+        SourceChunk.objects.filter(source_document=doc).update(embedding=[0.1] * 768)
+        before, chunks = self.row(doc), list(SourceChunk.objects.filter(source_document=doc).values())
+        with mock.patch("ai.chatbot.indexing.embed_passages", return_value=[]):
+            with self.assertRaises(EmbeddingResultError):
+                build_source_chunks([doc.pk])
+        self.assertEqual(self.row(doc), before)
+        self.assertEqual(list(SourceChunk.objects.filter(source_document=doc).values()), chunks)
+
+        # 2) ACTIVE인데 재처리 대기(새 본문)인 자료가 실패: ACTIVE·플래그·version·이전 청크 그대로
+        doc2 = self.source("active2")
+        self.set_body(doc2, "# 새 본문\n아산시 주민세 납부 기간이 9월 30일까지로 바뀌었습니다.")
+        SourceDocument.objects.filter(pk=doc2.pk).update(ai_reprocessing_required=True)
+        before2, chunks2 = self.row(doc2), list(SourceChunk.objects.filter(source_document=doc2).values())
+        with mock.patch("ai.chatbot.indexing.embed_passages", return_value=[[]]):
+            with self.assertRaises(EmbeddingResultError):
+                build_source_chunks([doc2.pk])
+        self.assertEqual(self.row(doc2), before2)
+        self.assertEqual(list(SourceChunk.objects.filter(source_document=doc2).values()), chunks2)
+        doc2.refresh_from_db()
+        self.assertEqual((doc2.status, doc2.ai_reprocessing_required), ("ACTIVE", True))
+
+    def test_failure_stops_run_but_keeps_earlier_completed_documents(self):
+        """REFRESH.md: 실패는 예외로 끝내고, 앞서 완료된 다른 자료까지 되돌리지는 않는다."""
+        from ai.chatbot import build_source_chunks
+        from ai.chatbot.embedder import embed_passages as real_embed
+        from ai.chatbot.indexing import EmbeddingResultError
+
+        first, second = self.pending("first"), self.pending("second")
+        before = self.row(second)
+        calls = []
+
+        def ok_then_empty(chunks):
+            calls.append(len(chunks))
+            return real_embed(chunks) if len(calls) == 1 else []
+
+        with mock.patch("ai.chatbot.indexing.embed_passages", side_effect=ok_then_empty):
+            with self.assertRaises(EmbeddingResultError):
+                build_source_chunks([first.pk, second.pk])
+        first.refresh_from_db()
+        self.assertEqual((first.status, first.ai_reprocessing_required), ("ACTIVE", False))
+        self.assert_failed_and_untouched(second, before)
+
 @unittest.skipUnless(DJANGO, "manage.py test로 실행")
 class VerifyInterpretationTests(AIEnvMixin, TestCase):
     """S2 verify의 C1 항목별 형식 (DOCUMENTS_VERIFY_MODE=rag)."""
