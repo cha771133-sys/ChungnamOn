@@ -39,7 +39,7 @@ _TABLE_LABELS = (
     r'연\s*락\s*처', r'전화\s*번호', r'휴대\s*(?:전화|폰)(?:\s*번호)?', r'성\s*명', r'이\s*름', r'납세자', r'납부자',
     r'가입자', r'신청인(?:\s*정보)?', r'출금\s*(?:은행|계좌)', r'환급\s*(?:은행|계좌)', r'계좌\s*번호', r'가상\s*계좌',
     r'과세\s*연도', r'세\s*목', r'세\s*액', r'납부\s*기한', r'고지\s*월', r'신청일', r'발행일', r'전자\s*납부\s*번호',
-    r'고지서\s*번호', r'합계\s*금액',
+    r'고지서\s*번호', r'합계\s*금액', r'수신(?:인|자)?', r'받는\s*(?:사람|분)', r'대상자',
 )
 _TABLE_LABEL_LINE = re.compile(rf'^{_BULLET}(?:{"|".join(_TABLE_LABELS)})[ \t]*[:：]?[ \t]*$')
 
@@ -56,6 +56,12 @@ REGISTRATION_PATTERN = re.compile(
 REGISTRATION_LABEL = re.compile(
     rf'^(?P<label>{_BULLET}(?:외국인\s*등록\s*번호|주민\s*등록\s*번호)[ \t]*[:：]?[ \t]*)(?P<value>.*)$'
 )
+# 이름표로 보아 등록번호가 아닌 것이 분명한 번호. 하이픈 없는 13자리 숫자가 이 이름표 바로 뒤(같은 줄)나
+# 이름표만 있는 줄의 바로 다음 줄에 있으면 가리지 않는다. 납부에 필요한 번호를 사용자가 볼 수 있어야 한다.
+# 이름표가 없거나 목록에 없는 이름표면 지금처럼 가린다(F1-4, 애매하면 가린다).
+_OTHER_NUMBER_LABEL = r'(?:고지\s*서?|전자\s*납부|납부|문서|관리|접수)\s*번호'
+_OTHER_NUMBER_LABEL_BEFORE = re.compile(rf'{_OTHER_NUMBER_LABEL}[ \t]*[:：]?[ \t]*$')
+_OTHER_NUMBER_LABEL_LINE = re.compile(rf'^{_BULLET}{_OTHER_NUMBER_LABEL}[ \t]*[:：]?[ \t]*$')
 
 # ── 여권번호 ──────────────────────────────────────────────────
 PASSPORT_LABEL = re.compile(
@@ -115,9 +121,71 @@ PHONE_LABEL = re.compile(
 # ── 이름 ─────────────────────────────────────────────────────
 # 라벨 뒤의 이름과 괄호 안 영문 이름까지 값 전체를 가린다.
 NAME_LABEL = re.compile(
-    rf'^(?P<label>{_BULLET}(?:납세자|납부자|가입자|신청인|성\s*명|이\s*름)(?:[ \t]*(?:성명|이름))?)'
+    rf'^(?P<label>{_BULLET}(?:납세자|납부자|가입자|신청인|성\s*명|이\s*름'
+    rf'|(?P<recipient>수신(?:인|자)?|받는\s*(?:사람|분)|대상자))(?:[ \t]*(?:성명|이름))?)'
     rf'(?P<sep>[ \t]*[:：][ \t]*|[ \t]+|[ \t]*$)(?P<value>.*)$'
 )
+# 받는 사람 라벨(수신·받는 사람·대상자) 뒤에는 사람이 아니라 기관이나 직위가 올 수 있다(예: "수신: 아산시청",
+# "수신: 아산시장"). 값을 낱말로 나눠 기관·직위·높임말만 남기고 나머지는 이름으로 보고 가린다
+# (예: "홍길동 센터장 귀하" → "[이름 가림] 센터장 귀하"). 판단은 _mask_recipient_value()에 있다.
+_RECIPIENT_TITLE = re.compile(
+    r'(?:시장|군수|구청장|도지사|장관|청장|서장|소장|지사장|이사장|센터장|위원장|본부장|원장'
+    r'|주무관|사무관|서기관|담당관|조사관|과장|팀장|국장|실장|계장|부장|차장|대리|대표|대표이사|담당자)$'
+)
+# AGENCY_WORDS에 없는 기관 이름. 받는 사람 값에서만 쓴다(기관 안내 줄 판단에는 영향을 주지 않는다).
+# "부"로 끝나는 낱말을 모두 기관으로 보면 이름(예: 김영부)을 놓치므로 부처 이름을 하나씩 적는다.
+_RECIPIENT_AGENCY = re.compile(
+    r'(?:법무|고용노동|행정안전|보건복지|외교|교육|국토교통|기획재정|여성가족|산업통상자원|문화체육관광|환경|국방|통일'
+    r'|농림축산식품|해양수산|중소벤처기업|과학기술정보통신)부'
+    r'|국세청|관세청|경찰청|경찰서|소방서|검찰청|교육청|보건소|우체국|법원|위원회'
+)
+_RECIPIENT_HONORIFICS = ('귀하', '님', '씨')
+# "수신: 수신자 참조"는 받는 사람이 따로 적혀 있다는 뜻이다.
+_RECIPIENT_REFERENCE = re.compile(r'^[ \t]*(?:수신(?:인|자)?[ \t]*)?참조[ \t]*$')
+# 실제 지역 이름. 생김새(…도, …시, …구)로 판단하면 이름(김진도, 박진구)을 지역으로 잘못 본다.
+# 목록과 완전히 같은 낱말만 지역으로 보고, 그것도 뒤에 기관 이름이 이어질 때만 남긴다.
+# 동·리 이름은 목록으로 만들 수 없고 이름(홍길동)과 구분할 수 없어 지역으로 보지 않는다.
+_REGION_NAMES = frozenset('''
+서울특별시 부산광역시 대구광역시 인천광역시 광주광역시 대전광역시 울산광역시 세종특별자치시
+경기도 강원특별자치도 강원도 충청북도 충청남도 전북특별자치도 전라북도 전라남도 경상북도 경상남도
+제주특별자치도 제주도 서울 서울시 부산시 대구시 인천시 대전시 울산시 세종시 충북 충남 전북 전남 경북 경남
+수원시 성남시 의정부시 안양시 부천시 광명시 평택시 동두천시 안산시 고양시 과천시 구리시 남양주시 오산시
+시흥시 군포시 의왕시 하남시 용인시 파주시 이천시 안성시 김포시 화성시 광주시 양주시 포천시 여주시
+춘천시 원주시 강릉시 동해시 태백시 속초시 삼척시 청주시 충주시 제천시
+천안시 공주시 보령시 아산시 서산시 논산시 계룡시 당진시
+전주시 군산시 익산시 정읍시 남원시 김제시 목포시 여수시 순천시 나주시 광양시
+포항시 경주시 김천시 안동시 구미시 영주시 영천시 상주시 문경시 경산시
+창원시 진주시 통영시 사천시 김해시 밀양시 거제시 양산시 제주시 서귀포시
+강화군 옹진군 기장군 달성군 군위군 울주군 연천군 가평군 양평군
+홍천군 횡성군 영월군 평창군 정선군 철원군 화천군 양구군 인제군 고성군 양양군
+보은군 옥천군 영동군 증평군 진천군 괴산군 음성군 단양군
+금산군 부여군 서천군 청양군 홍성군 예산군 태안군
+완주군 진안군 무주군 장수군 임실군 순창군 고창군 부안군
+담양군 곡성군 구례군 고흥군 보성군 화순군 장흥군 강진군 해남군 영암군 무안군 함평군 영광군 장성군
+완도군 진도군 신안군
+의성군 청송군 영양군 영덕군 청도군 고령군 성주군 칠곡군 예천군 봉화군 울진군 울릉군
+의령군 함안군 창녕군 남해군 하동군 산청군 함양군 거창군 합천군
+종로구 중구 용산구 성동구 광진구 동대문구 중랑구 성북구 강북구 도봉구 노원구 은평구 서대문구 마포구 양천구
+강서구 구로구 금천구 영등포구 동작구 관악구 서초구 강남구 송파구 강동구
+서구 동구 남구 북구 영도구 부산진구 동래구 해운대구 사하구 금정구 연제구 수영구 사상구 수성구 달서구
+미추홀구 연수구 남동구 부평구 계양구 광산구 유성구 대덕구
+장안구 권선구 팔달구 영통구 수정구 중원구 분당구 만안구 동안구 원미구 소사구 오정구 상록구 단원구
+덕양구 일산동구 일산서구 처인구 기흥구 수지구 상당구 서원구 흥덕구 청원구 동남구 서북구 완산구 덕진구
+의창구 성산구 마산합포구 마산회원구 진해구
+'''.split())
+# 읍·면 이름. 지역 이름 바로 뒤에 올 때만 지역으로 본다(예: "아산시 배방읍").
+_TOWN_WORD = re.compile(r'^[가-힣0-9]+(?:읍|면)$')
+# 자주 쓰는 부서 이름. 직위 앞에 붙거나(민원팀장, 총무과장) 과·팀 등이 붙으면(민원팀) 이름이 아니라 부서로 본다.
+# 사람 이름으로도 쓰이는 낱말(지원, 세정 등)은 넣지 않는다.
+_DEPARTMENT_NAMES = frozenset('''
+민원 민원봉사 종합민원 총무 행정 자치행정 기획 기획예산 예산 재무 회계 세무 징수 부과 복지 복지정책 사회복지
+노인복지 여성가족 보건 건강 위생 환경 건설 건축 도시 교통 안전 안전총괄 경제 일자리 농업 농정 문화 관광 체육
+교육 인사 감사 홍보 정보통신 토지 주택 허가 체류 체류관리 출입국 외국인 이민정보 조사 심사 관리 운영 고객
+고객지원 자격 보험료 급여
+'''.split())
+_DEPARTMENT_WORD = re.compile(r'^(?P<name>[가-힣]+?)(?:과|팀|실|국|계|부|담당)$')
+# 이름 끝에 붙여 쓴 높임말(홍길동님). 다른 곳의 같은 이름을 찾을 때는 떼고 찾는다.
+_ATTACHED_HONORIFIC = re.compile(r'[ \t]*(?:귀하|님|씨)$')
 # 이름과 같은 줄에 이어 나온 다른 라벨(예: "성명: 홍길동 연락처: …"). 이름은 이 라벨 앞에서 끝난다.
 INLINE_NEXT_LABEL = re.compile(
     r'[ \t]+(?=(?:연\s*락\s*처|전화\s*번호|휴대\s*(?:전화|폰)|주\s*소|외국인\s*등록\s*번호|주민\s*등록\s*번호|여권\s*번호'
@@ -195,12 +263,40 @@ def _split_at_next_field(value):
     return value[:cut], value[cut:]
 
 
+def is_labeled_other_number(text, start, number):
+    """text[start:]에서 찾은 number가 이름표로 보아 등록번호가 아닌 번호(고지번호 등)인지.
+
+    ocr.normalize_registration_numbers()도 같은 기준을 쓴다. 기준이 다르면 고지번호에 하이픈이 들어간다.
+    하이픈이 있거나 줄이 바뀐 번호는 등록번호 모양이라 이름표와 관계없이 등록번호로 본다.
+    """
+    if re.search(rf'{_DASH}|\n', number):
+        return False
+    line_start = text.rfind('\n', 0, start) + 1
+    before = text[line_start:start]
+    if before.strip():
+        return bool(_OTHER_NUMBER_LABEL_BEFORE.search(before))
+    if line_start == 0:
+        return False
+    # 줄 맨 앞의 번호: 바로 윗줄이 이름표만 있는 줄일 때(표 형식)
+    previous_start = text.rfind('\n', 0, line_start - 1) + 1
+    return bool(_OTHER_NUMBER_LABEL_LINE.match(text[previous_start:line_start - 1]))
+
+
 # ── 규칙 ─────────────────────────────────────────────────────
 
 def mask_registration_numbers(lines):
     """외국인등록번호. 패턴으로 찾고, 라벨 뒤 숫자를 잘못 읽은 값도 가린다."""
-    text, count = REGISTRATION_PATTERN.subn(REGISTRATION_MARK, '\n'.join(lines))
-    lines[:] = text.split('\n')
+    joined = '\n'.join(lines)
+    count = 0
+
+    def replace(match):
+        nonlocal count
+        if is_labeled_other_number(joined, match.start(), match.group(0)):
+            return match.group(0)
+        count += 1
+        return REGISTRATION_MARK
+
+    lines[:] = REGISTRATION_PATTERN.sub(replace, joined).split('\n')
 
     def mask_value(value):
         # 숫자 일부를 글자로 잘못 읽어도(예: 9OO101) 숫자가 6개 이상이면 번호로 본다.
@@ -369,12 +465,97 @@ def _looks_like_name(value):
     return len(stripped.split()) <= 6
 
 
+def _is_department(word):
+    """부서 이름에 과·팀 등이 붙은 낱말(민원팀, 이민정보과)인지."""
+    match = _DEPARTMENT_WORD.match(word)
+    return bool(match) and match.group('name') in _DEPARTMENT_NAMES
+
+
+def _is_agency_title(word, title):
+    """직위로 끝나는 낱말이 기관의 직위(아산시장, 법무부장관, 천안세무서장)인지. 아니면 이름에 직위가 붙은 것으로 본다."""
+    prefix = word[:title.start()]
+    found = [match.start() for match in (_AGENCY_WORD_PATTERN.search(word), _RECIPIENT_AGENCY.search(word)) if match]
+    # 직위 앞부분에 기관 이름이 있다(천안세무서장, 행정복지센터장, 법무부장관).
+    # 직위 자체에 든 기관 낱말(센터장의 센터, 지사장의 지사)은 세지 않는다. 홍길동센터장은 이름이다.
+    if any(start < title.start() for start in found):
+        return True
+    # 아산시장 → 아산시, 홍성군수 → 홍성군, 충청남도지사 → 충청남도, 충남도지사 → 충남
+    if prefix in _REGION_NAMES or prefix + title.group(0)[0] in _REGION_NAMES:
+        return True
+    # 민원팀장, 총무과장: 직위 앞부분이 부서 이름이다.
+    if prefix in _DEPARTMENT_NAMES:
+        return True
+    # 천안지사장, 아산센터장: 직위가 기관 낱말로 시작하고 앞부분이 시·군 이름이다.
+    return bool(found) and any(prefix + suffix in _REGION_NAMES for suffix in ('시', '군'))
+
+
+def _mask_recipient_value(value):
+    """받는 사람 라벨의 값에서 이름만 가린다. → (새 값, 가린 수, 찾은 이름 목록)
+
+    낱말마다 직위(센터장)·기관(아산시청)·높임말(귀하)이면 남기고, 그 밖의 낱말은 이름으로 보고 가린다.
+    지역 이름(_REGION_NAMES)은 뒤에 기관 이름이 이어질 때만 남긴다. 애매한 낱말은 가린다(F1-4).
+    """
+    if _RECIPIENT_REFERENCE.match(value):
+        return value, 0, []
+    words, kinds = [], []
+    for word in value.split():
+        title = _RECIPIENT_TITLE.search(word)
+        if title and title.start() and not _is_agency_title(word, title):
+            # 이름과 직위를 붙여 쓴 낱말(홍길동주무관): 이름과 직위로 나눠 이름만 가린다.
+            words += [word[:title.start()], title.group(0)]
+            kinds += ['name', 'keep']
+            continue
+        words.append(word)
+        if word in _RECIPIENT_HONORIFICS:
+            kinds.append('keep')
+        elif title:
+            kinds.append('keep')
+        elif _AGENCY_WORD_PATTERN.search(word) or _RECIPIENT_AGENCY.search(word) or _is_department(word):
+            kinds.append('agency')
+        elif word in _REGION_NAMES:
+            kinds.append('region')
+        elif _TOWN_WORD.match(word):
+            kinds.append('town')
+        else:
+            kinds.append('name')
+    # 지역 낱말은 지역 낱말만 건너 바로 뒤에 기관 이름이 올 때만 남긴다(예: "아산시 배방읍 행정복지센터").
+    # 읍·면은 앞 낱말이 지역 이름일 때만 지역으로 본다.
+    for index in range(len(words) - 1, -1, -1):
+        if kinds[index] not in ('region', 'town'):
+            continue
+        following = kinds[index + 1] if index + 1 < len(words) else 'name'
+        after_region = index > 0 and kinds[index - 1] == 'region'
+        if following in ('agency', 'keep-region') and (kinds[index] == 'region' or after_region):
+            kinds[index] = 'keep-region'
+        else:
+            kinds[index] = 'name'
+
+    parts, names, run = [], [], []
+    for word, kind in zip(words, kinds):
+        if kind == 'name':
+            run.append(word)
+            continue
+        if run:
+            names.append(' '.join(run))
+            parts.append(NAME_MARK)
+            run = []
+        parts.append(word)
+    if run:
+        names.append(' '.join(run))
+        parts.append(NAME_MARK)
+    if not names:
+        return value, 0, []
+    return ' '.join(parts), len(names), names
+
+
 def _name_parts(name):
     """찾은 이름에서 다른 곳에서도 가릴 부분: 전체, 괄호 앞 이름, 괄호 안 영문 이름."""
     parts = {name.strip()}
     before, _, inside = name.partition('(')
     parts.add(before.strip())
     parts.add(inside.rstrip(') \t').strip())
+    # "홍길동님", "홍길동 귀하"로 적힌 이름은 높임말을 뗀 이름으로도 찾는다.
+    parts.update(_ATTACHED_HONORIFIC.sub('', part) for part in tuple(parts))
     # 한 글자 조각은 다른 낱말까지 가릴 수 있어 쓰지 않는다. 두 글자는 _name_pattern()의 경계 조건으로 제한한다.
     return sorted((part for part in parts if len(part.replace(' ', '')) >= 2), key=len, reverse=True)
 
@@ -412,6 +593,11 @@ def mask_names(lines):
             continue
         value = match.group('value')
         has_colon = ':' in match.group('sep') or '：' in match.group('sep')
+        recipient = bool(match.group('recipient'))
+        # "수신 거부", "대상자 확인"처럼 받는 사람 라벨은 일반 낱말로도 흔히 쓰인다. 같은 줄의 값은
+        # 콜론이 있을 때만 이름으로 본다. 라벨만 있는 줄의 다음 줄(표 형식)은 아래에서 그대로 본다.
+        if recipient and value.strip() and not has_colon:
+            continue
         if value.strip():
             # 같은 줄에 다른 라벨이 이어지면 이름은 그 앞에서 끝난다(예: "연락처:", "납부기한:").
             name, rest = _split_at_next_field(value)
@@ -425,6 +611,13 @@ def mask_names(lines):
                     or (not has_colon and not _looks_like_name(name)):
                 lines[index] = line[:match.start('value')] + name + rest
                 continue
+            if recipient:
+                # 기관·직위는 남기고 이름만 가린다.
+                new_name, masked, names = _mask_recipient_value(name)
+                lines[index] = line[:match.start('value')] + new_name + rest
+                found.extend(names)
+                count += masked
+                continue
             found.append(name)
             lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
             count += 1
@@ -435,6 +628,13 @@ def mask_names(lines):
         candidate = lines[following]
         # 다른 가림 표시나 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
         if any(mark in candidate for mark in _ALL_MARKS) or any(char.isdigit() for char in candidate):
+            continue
+        if recipient:
+            new_line, masked, names = _mask_recipient_value(candidate)
+            if masked:
+                lines[following] = new_line
+                found.extend(names)
+                count += masked
             continue
         found.append(candidate)
         lines[following] = NAME_MARK
