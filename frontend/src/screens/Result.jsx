@@ -4,6 +4,7 @@ import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDo
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
 import { T } from '../i18n.js'
+import { MASK_SPLIT, isMask, maskText, localizeMasks } from '../lib/masks.js'
 import { useServerChecklist } from '../lib/useServerChecklist.js'
 
 /* 원문 속 행정용어는 버튼으로, 가린 개인정보(●)는 마스킹 표시로 바꿔 렌더링 */
@@ -14,12 +15,12 @@ function RichText({ text, terms = [], onTerm }) {
   // 빈 문자열이 섞이면 모든 위치에 일치해 원문이 글자 단위로 쪼개지므로 제외한다
   const valid = words.filter((w) => typeof w === 'string' && w.length > 0)
   const re = valid.length ? new RegExp(`(${valid.map(escape).join('|')})`, 'g') : null
-  // 목업은 ●, 서버는 *로 개인정보를 가린다
+  // 목업은 ●, 서버는 *** 또는 [이름 가림] 같은 표시로 개인정보를 가린다
   const renderMask = (part, key) =>
-    part.split(/(●+|\*{3,})/).map((p, i) =>
-      /^(●|\*{3})/.test(p) ? (
+    part.split(MASK_SPLIT).map((p, i) =>
+      isMask(p) ? (
         <span key={`${key}-${i}`} className="mask" aria-label={T('가려진 개인정보')}>
-          {p}
+          {maskText(p)}
         </span>
       ) : (
         p
@@ -120,7 +121,7 @@ export default function Result({ docId }) {
         <section className="summary" aria-label={T('핵심 요약')}>
           <ul>
             {pick(doc.summary, view).map((s, i) => (
-              <li key={i}>{s}</li>
+              <li key={i}>{localizeMasks(s)}</li>
             ))}
           </ul>
         </section>
@@ -128,7 +129,7 @@ export default function Result({ docId }) {
         <section className="facts" aria-label={T('핵심 정보')}>
           <div className="fact">
             <span className="fact-label">{T('해야 할 일')}</span>
-            <strong>{pick(doc.task, view)}</strong>
+            <strong>{localizeMasks(pick(doc.task, view))}</strong>
           </div>
           <div className={`fact${n !== null && n <= 7 ? ' is-urgent' : ''}`}>
             <span className="fact-label">{T('마감일')}</span>
@@ -151,13 +152,13 @@ export default function Result({ docId }) {
           </button>
           {doc.amount && (
             <div className="fact">
-              <span className="fact-label">{T('납부 금액')}</span>
+              <span className="fact-label">{T('금액')}</span>
               <strong>{doc.amount}</strong>
             </div>
           )}
           {doc.paymentMethods?.length > 0 && (
             <div className="fact">
-              <span className="fact-label">{T('납부 방법')}</span>
+              <span className="fact-label">{T('처리 방법')}</span>
               <strong>{doc.paymentMethods.map((m) => (view === 'ko' ? m : T(m))).join(', ')}</strong>
             </div>
           )}

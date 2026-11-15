@@ -7,6 +7,14 @@ import { UI } from './ui-strings.js'
 
 const UI_LANGS = ['vi', 'en', 'ko']
 
+/** 화면(메뉴·버튼) 문구가 번역돼 있는 언어인지. 아니면 화면은 영어로, 문서 해석 내용만 그 언어로 나온다. */
+export function hasUiTranslation(lang) {
+  return UI_LANGS.includes(lang)
+}
+
+/** 화면 번역이 없는 언어 옆에 붙이는 안내 (사용자가 어느 언어를 쓰든 읽을 수 있게 영어·한국어로) */
+export const MENU_IN_ENGLISH = 'Menu in English · 메뉴는 영어'
+
 /** 번역 데이터가 있는 언어면 그대로, 없으면 영어 코드를 돌려준다. */
 export function uiLang(lang) {
   return UI_LANGS.includes(lang) ? lang : 'en'

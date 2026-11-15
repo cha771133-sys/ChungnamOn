@@ -363,7 +363,7 @@ export function ScheduleNew({ docId }) {
                       <span className="option-text">
                         <strong>{fmtDate(o.date)}</strong>
                         <small>
-                          {o.label ? `${o.label}, ` : ''}
+                          {o.label ? `${T(o.label)}, ` : ''}
                           {ddayLabel(dday(o.date))}
                           {registeredDates.has(o.date) ? T(', 등록됨') : ''}
                         </small>

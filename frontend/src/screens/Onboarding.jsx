@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { Check, Bell, Camera, Languages, Globe } from 'lucide-react'
 import { useApp, purgeServerData } from '../store.js'
 import { LANGS, NATIONALITIES, VISAS } from '../data/mock.js'
-import { t, uiLang, NATION_NAMES, VISA_NAMES } from '../i18n.js'
+import { t, uiLang, NATION_NAMES, VISA_NAMES, hasUiTranslation, MENU_IN_ENGLISH } from '../i18n.js'
 import { TopBar, Stamp } from '../components/ui.jsx'
 import { fetchMe, hasSession, login, register, updateMe } from '../lib/auth'
 import { parseApiError, tokenStore } from '../lib/api'
@@ -84,7 +84,10 @@ export function LanguageSelect() {
               </span>
               <span className="option-text">
                 <strong>{l.label}</strong>
-                <small>{l.ko}</small>
+                <small>
+                  {l.ko}
+                  {!hasUiTranslation(l.code) && ` · ${MENU_IN_ENGLISH}`}
+                </small>
               </span>
               {sel === l.code && <Check size={20} />}
             </button>
@@ -411,7 +414,7 @@ export function ProfileForm({ value, onChange, showErrors, errors = {}, lang = '
         <select value={value.language} onChange={set('language')}>
           {LANGS.map((l) => (
             <option key={l.code} value={l.code}>
-              {l.label} ({l.ko})
+              {l.label} ({l.ko}){!hasUiTranslation(l.code) && ` · ${MENU_IN_ENGLISH}`}
             </option>
           ))}
         </select>

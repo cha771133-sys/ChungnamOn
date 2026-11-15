@@ -41,9 +41,10 @@ const VERIFY_STATUSES = ['MATCHED', 'MISMATCH', 'UNVERIFIED']
 
 /** 대조 항목 key → 화면 항목 이름(한국어 원문, 화면에서 T()로 번역). 모르는 key는 서버 label을 쓴다 */
 const VERIFY_LABEL = {
-  AMOUNT: '납부 금액',
-  DEADLINE: '납부 기한',
-  PAYMENT_METHOD: '납부 방법',
+  // 고지서의 납부 금액·기한·방법과 안내문의 수수료·신청 기한·신청 방법을 함께 담는 이름
+  AMOUNT: '금액',
+  DEADLINE: '기한',
+  PAYMENT_METHOD: '처리 방법',
   AGENCY_CONTACT: '문의 연락처',
 }
 
