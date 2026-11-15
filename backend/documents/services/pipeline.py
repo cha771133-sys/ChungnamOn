@@ -1,6 +1,7 @@
 """문서 처리 파이프라인.
 
 OCR → 마스킹 → 해석 → 검증 순서로 실행하고 단계마다 Document.status·step을 갱신한다.
+체크리스트·전화 대본(S4)은 검증 단계 안에서 검증 다음에 만든다(_run_actions).
 run_ocr, mask_personal_info, interpret, verify는 AI 모듈 자리의 더미 함수다.
 AI 모듈이 준비되면 docstring의 입출력 형식을 지키면서 함수 내용만 교체한다.
 
@@ -282,6 +283,35 @@ def verify(result):
     }
 
 
+def _run_actions(result, verification):
+    """해석·검증 결과로 체크리스트와 전화 대본을 만든다 (S4, ai.chatbot.build_actions).
+
+    출력: {"checklist": [항목], "call_script": str} — 항목 형식은 interpret() docstring의 checklist와 같다.
+    DOCUMENTS_CHECKLIST_MODE=rag인데 검증이 rag가 아니면 더미 검증 결과로 만들지 않고 interpret의 checklist를 쓴다.
+    예상 밖의 오류가 나도 문서 처리를 실패시키지 않고 interpret의 checklist와 빈 대본을 돌려준다.
+    """
+    fallback = {'checklist': result.get('checklist'), 'call_script': ''}
+    # build_actions와 같은 기준(앞뒤 공백 제거, 소문자)으로 모드를 읽는다.
+    checklist_mode = str(getattr(settings, 'DOCUMENTS_CHECKLIST_MODE', '') or 'dummy').strip().lower()
+    verify_mode = getattr(settings, 'DOCUMENTS_VERIFY_MODE', 'dummy')
+    if checklist_mode == 'rag' and verify_mode != 'rag':
+        logger.warning(
+            '체크리스트 rag 모드는 DOCUMENTS_VERIFY_MODE=rag와 함께 써야 합니다. '
+            'interpret 체크리스트를 사용: checklist=%s verify=%s', checklist_mode, verify_mode,
+        )
+        return fallback
+    try:
+        # ai.chatbot은 무거운 의존성을 함께 불러와서 쓸 때만 import한다.
+        from ai.chatbot.checklist import build_actions
+
+        actions = build_actions(result, verification, result['language'])
+        return {'checklist': actions.get('checklist'), 'call_script': actions.get('call_script') or ''}
+    except Exception as exc:
+        # 오류 원문에는 문서 내용이 섞일 수 있어서 종류만 남긴다.
+        logger.warning('체크리스트·전화 대본 생성 실패, interpret 체크리스트 사용: %s', type(exc).__name__)
+        return fallback
+
+
 def get_language(document):
     language = UserProfile.objects.filter(user_id=document.owner_id).values_list(
         'language', flat=True,
@@ -313,6 +343,7 @@ def process_document(document_id):
 
         _advance(document, Document.Step.VERIFYING)
         verification = verify(result)
+        result.update(_run_actions(result, verification))
 
         _save_result(document, ocr, masked, result, verification)
     except Exception:
@@ -351,6 +382,7 @@ def _save_result(document, ocr, masked, result, verification):
                 'payment_methods': result.get('payment_methods') or [],
                 'verification': verification,
                 'language': result['language'],
+                'call_script': result.get('call_script') or '',
             },
         )
         # 다시 처리하면 이전 체크리스트(완료 표시 포함)를 새 해석 결과로 교체한다.

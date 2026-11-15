@@ -243,6 +243,11 @@ INTERPRET_MODE = os.environ.get('INTERPRET_MODE') or 'dummy'
 INTERPRET_API_KEY = os.environ.get('INTERPRET_API_KEY') or os.environ.get('ANTHROPIC_API_KEY', '')
 INTERPRET_MODEL = os.environ.get('INTERPRET_MODEL') or 'claude-haiku-5-5'
 
+# S4 체크리스트·전화 대본(backend/ai/chatbot/checklist.py). dummy(기본)는 interpret의 체크리스트를 그대로 쓰고
+# 대본은 규칙으로 만든다. rag는 DOCUMENTS_VERIFY_MODE=rag와 함께 쓴다. 검증이 rag가 아니면 interpret의
+# 체크리스트를 저장하고 대본은 비운다(문서는 실패시키지 않음). 값이 비어 있으면 dummy로 동작한다.
+DOCUMENTS_CHECKLIST_MODE = os.environ.get('DOCUMENTS_CHECKLIST_MODE') or 'dummy'
+
 # 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
 

@@ -223,13 +223,16 @@ class DocumentResultSerializer(serializers.ModelSerializer):
     verification = serializers.SerializerMethodField()
     maskedCount = serializers.IntegerField(source='document.masked_count')
     lowConfidence = serializers.BooleanField(source='document.low_confidence')
+    callScript = serializers.CharField(
+        source='call_script', help_text='기관 담당자에게 보여줄 한국어 전화 대본. 없으면 빈 문자열',
+    )
 
     class Meta:
         model = InterpretationResult
         fields = [
             'documentId', 'docType', 'title', 'originalText', 'translatedText',
             'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
-            'verification', 'maskedCount', 'lowConfidence',
+            'verification', 'maskedCount', 'lowConfidence', 'callScript',
         ]
         read_only_fields = fields
 

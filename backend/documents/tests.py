@@ -26,7 +26,7 @@ UPLOAD_URL = '/api/documents/'
 RESULT_KEYS = {
     'documentId', 'docType', 'title', 'originalText', 'translatedText',
     'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
-    'verification', 'maskedCount', 'lowConfidence',
+    'verification', 'maskedCount', 'lowConfidence', 'callScript',
 }
 VERIFICATION_KEYS = {'overall', 'status', 'items', 'sources'}
 VERIFICATION_ITEM_KEYS = {'key', 'label', 'docValue', 'officialValue', 'status', 'reason', 'sourceIds'}
@@ -35,6 +35,7 @@ test_settings = override_settings(
     MEDIA_ROOT=TEMP_MEDIA_ROOT,
     DOCUMENTS_PROCESS_SYNC=True,
     DOCUMENTS_STEP_DELAY=0,
+    DOCUMENTS_CHECKLIST_MODE='dummy',
 )
 
 
@@ -1315,6 +1316,139 @@ class ChecklistPipelineTests(TestCase):
         self.document.delete()
 
         self.assertFalse(ChecklistItem.objects.exists())
+
+
+DUMMY_CHECKLIST_TEXTS = ['주민세 6,250원 내기', '외국인등록증 챙기기', '세무과 연락처 확인하기', '납부 영수증 보관하기']
+PIPELINE_LOGGER = 'documents.services.pipeline'
+
+
+def patch_build_actions(**kwargs):
+    """S4 build_actions를 mock으로 바꾼다. pipeline이 함수 안에서 import하므로 모듈 속성을 바꾼다."""
+    return mock.patch('ai.chatbot.checklist.build_actions', **kwargs)
+
+
+def actions(texts, call_script):
+    return {'checklist': [{'text': text, 'state': 'CONFIRMED', 'sourceIds': ['s1']} for text in texts],
+            'call_script': call_script}
+
+
+@test_settings
+class ChecklistActionsPipelineTests(APITestCase):
+    """verify 다음에 S4 build_actions로 체크리스트·전화 대본을 만드는 연결 (A8)."""
+
+    def setUp(self):
+        self.user = create_user('owner@example.com')
+        self.document = create_document(self.user)
+        self.client.force_authenticate(self.user)
+
+    def texts(self):
+        return list(self.document.checklist_items.values_list('text', flat=True))
+
+    def call_script(self):
+        return InterpretationResult.objects.get(document=self.document).call_script
+
+    def assert_done(self):
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, Document.Status.DONE)
+        self.assertEqual(self.document.step, Document.Step.DONE)
+
+    def test_dummy_mode_keeps_interpret_checklist_and_fills_call_script(self):
+        process_document(self.document.id)
+
+        self.assert_done()
+        self.assertEqual(self.texts(), DUMMY_CHECKLIST_TEXTS)
+        script = self.call_script()
+        self.assertTrue(script.startswith('안녕하세요.'))
+        self.assertIn('6,250원', script)
+        self.assertEqual(self.client.get(result_url(self.document.id)).json()['callScript'], script)
+
+    def test_build_actions_output_is_saved_and_returned_by_apis(self):
+        with patch_build_actions(return_value=actions(['S4 할 일 1', 'S4 할 일 2'], '전화 대본')) as build:
+            process_document(self.document.id)
+
+        self.assert_done()
+        result, verification, language = build.call_args.args
+        self.assertEqual(language, result['language'])
+        self.assertEqual(language, 'vi')
+        self.assertIn('items', verification)
+        checklist = self.client.get(checklist_url(self.document.id)).json()
+        self.assertEqual([item['text'] for item in checklist['items']], ['S4 할 일 1', 'S4 할 일 2'])
+        self.assertEqual(checklist['items'][0]['sourceIds'], ['s1'])
+        self.assertEqual(self.client.get(result_url(self.document.id)).json()['callScript'], '전화 대본')
+
+    def test_empty_call_script_is_empty_string_in_result_api(self):
+        with patch_build_actions(return_value={'checklist': [], 'call_script': None}):
+            process_document(self.document.id)
+
+        self.assert_done()
+        self.assertEqual(self.client.get(result_url(self.document.id)).json()['callScript'], '')
+
+    def test_build_actions_error_keeps_document_done(self):
+        with patch_build_actions(side_effect=RuntimeError('문서 원문 내용')), \
+                self.assertLogs(PIPELINE_LOGGER, 'WARNING') as logs:
+            process_document(self.document.id)
+
+        self.assert_done()
+        self.assertEqual(self.texts(), DUMMY_CHECKLIST_TEXTS)
+        self.assertEqual(self.call_script(), '')
+        output = '\n'.join(logs.output)
+        self.assertIn('RuntimeError', output)
+        self.assertNotIn('문서 원문 내용', output)
+
+    def test_build_actions_import_error_keeps_document_done(self):
+        with mock.patch.dict('sys.modules', {'ai.chatbot.checklist': None}), \
+                self.assertLogs(PIPELINE_LOGGER, 'WARNING') as logs:
+            process_document(self.document.id)
+
+        self.assert_done()
+        self.assertEqual(self.texts(), DUMMY_CHECKLIST_TEXTS)
+        self.assertEqual(self.call_script(), '')
+        self.assertIn('ModuleNotFoundError', '\n'.join(logs.output))
+
+    def test_rag_without_rag_verify_uses_interpret_checklist(self):
+        for mode in ('rag', ' RAG '):
+            with self.subTest(mode=mode), \
+                    override_settings(DOCUMENTS_CHECKLIST_MODE=mode, DOCUMENTS_VERIFY_MODE='dummy'), \
+                    patch_build_actions() as build, \
+                    self.assertLogs(PIPELINE_LOGGER, 'WARNING') as logs:
+                Document.objects.filter(id=self.document.id).update(status=Document.Status.PENDING)
+                process_document(self.document.id)
+
+                build.assert_not_called()
+                self.assert_done()
+                self.assertEqual(self.texts(), DUMMY_CHECKLIST_TEXTS)
+                self.assertEqual(self.call_script(), '')
+                output = '\n'.join(logs.output)
+                self.assertIn('checklist=rag verify=dummy', output)
+                self.assertNotIn('주민세', output)
+
+    @override_settings(DOCUMENTS_CHECKLIST_MODE='rag', DOCUMENTS_VERIFY_MODE='rag')
+    def test_rag_with_rag_verify_calls_build_actions(self):
+        verification = {'overall': 'UNVERIFIED', 'status': 'UNVERIFIED', 'items': [], 'sources': []}
+        with mock.patch.object(pipeline, 'verify', return_value=verification), \
+                patch_build_actions(return_value=actions(['S4 할 일'], '대본')) as build:
+            process_document(self.document.id)
+
+        self.assert_done()
+        self.assertIs(build.call_args.args[1], verification)
+        self.assertEqual(self.texts(), ['S4 할 일'])
+        self.assertEqual(self.call_script(), '대본')
+
+    def test_reprocessing_replaces_checklist_and_call_script(self):
+        with patch_build_actions(return_value=actions(['이전 할 일'], '이전 대본')):
+            process_document(self.document.id)
+        self.document.checklist_items.update(done=True, done_at=timezone.now())
+        Document.objects.filter(id=self.document.id).update(status=Document.Status.FAILED)
+
+        with patch_build_actions(return_value=actions(['새 할 일'], '새 대본')):
+            process_document(self.document.id)
+
+        self.assert_done()
+        items = list(self.document.checklist_items.all())
+        self.assertEqual([item.text for item in items], ['새 할 일'])
+        self.assertFalse(items[0].done)
+        self.assertEqual(self.call_script(), '새 대본')
+        self.assertEqual(InterpretationResult.objects.filter(document=self.document).count(), 1)
 
 
 @test_settings

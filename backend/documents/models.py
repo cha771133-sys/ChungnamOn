@@ -78,6 +78,8 @@ class InterpretationResult(models.Model):
     payment_methods = models.JSONField(default=list)
     verification = models.JSONField(default=dict)
     language = models.CharField(max_length=10, blank=True)
+    # 기관 담당자에게 보여줄 한국어 전화 대본 (S4). 만들지 못했으면 빈 문자열
+    call_script = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
