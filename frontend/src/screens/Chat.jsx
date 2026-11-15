@@ -9,6 +9,7 @@ import { getDocument } from '../lib/documents'
 import { serverDocId } from '../lib/documentAdapter.js'
 import { parseApiError, StaleSessionError, tokenStore } from '../lib/api'
 import { T } from '../i18n.js'
+import { localizeMasks } from '../lib/masks.js'
 
 /** 서버 질문 최대 길이 */
 const MAX_QUESTION = 2000
@@ -408,7 +409,7 @@ function ServerMessage({ m, text, revealing, doc, docId, setSheet, nav }) {
   return (
     <li className={`msg is-assistant${tone.cls}`}>
       <div className="bubble">
-        {text}
+        {localizeMasks(text)}
         {!revealing && (
           <div className="bubble-foot">
             <span className={tone.labelCls}>

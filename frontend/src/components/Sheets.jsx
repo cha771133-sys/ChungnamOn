@@ -1,7 +1,7 @@
 import { Check, ExternalLink, Share, PlusSquare, Download, Building2 } from 'lucide-react'
 import { useApp, fmtDate, pick, getSource, removeDocLocally, safeHttpUrl } from '../store.js'
 import { LANGS } from '../data/mock.js'
-import { t, uiLang } from '../i18n.js'
+import { t, uiLang, hasUiTranslation, MENU_IN_ENGLISH } from '../i18n.js'
 import { updateMe, hasSession } from '../lib/auth'
 import { deleteDocument } from '../lib/documents'
 import { parseApiError } from '../lib/api'
@@ -59,7 +59,10 @@ function LangSheet() {
               </span>
               <span className="option-text">
                 <strong>{l.label}</strong>
-                <small>{l.ko}</small>
+                <small>
+                  {l.ko}
+                  {!hasUiTranslation(l.code) && ` · ${MENU_IN_ENGLISH}`}
+                </small>
               </span>
               {data.profile.language === l.code && <Check size={20} />}
             </button>
