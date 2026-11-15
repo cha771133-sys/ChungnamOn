@@ -182,9 +182,68 @@ class RegistrationNumberTests(SimpleTestCase):
                 self.assertIn('******-*******', masked(text))
                 self.assertNotIn('5123456', masked(text))
 
-    def test_thirteen_digit_notice_number_is_also_masked(self):
-        # 등록번호와 구분할 수 없어 함께 가린다는 W2 결정을 고정한다.
-        self.assertEqual(masked('고지서 번호: 2026083112345'), '고지서 번호: ******-*******')
+    def test_labeled_other_number_is_kept(self):
+        """이름표로 보아 등록번호가 아닌 13자리 번호는 가리지 않는다(2026-11-14 결정)."""
+        for text in (
+            '고지서 번호: 2026083112345', '고지서 번호:2026083112345', '고지서번호 2026083112345',
+            '고지번호: 2026083112345', '납부번호: 2026083112345', '전자납부번호: 2026083112345',
+            '전자 납부 번호 2026083112345', '문서번호: 2026083112345', '관리번호: 2026083112345',
+            '접수번호: 2026083112345', '■ 고지번호: 2026083112345',
+            '2026년 8월 정기분 · 고지번호 2026083112345',
+            # 표 형식: 이름표만 있는 줄의 다음 줄
+            '고지서 번호\n2026083112345', '납부번호:\n2026083112345', '■ 문서번호\n2026083112345',
+            # 숫자 사이가 띄어져 읽힌 경우
+            '고지번호: 202608 3112345',
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], text)
+                self.assertEqual(result['masked_count'], 0)
+
+    def test_thirteen_digits_without_other_label_are_masked(self):
+        """이름표가 없거나, 목록에 없는 이름표이거나, 이름표와 떨어져 있으면 지금처럼 가린다."""
+        for text, expected in (
+            ('2026083112345', '******-*******'),
+            ('번호: 2026083112345', '번호: ******-*******'),
+            ('등록번호: 2026083112345', '등록번호: ******-*******'),
+            ('회원번호: 2026083112345', '회원번호: ******-*******'),
+            ('고지번호는 아래와 같습니다 2026083112345', '고지번호는 아래와 같습니다 ******-*******'),
+            ('고지번호 안내\n2026083112345', '고지번호 안내\n******-*******'),
+            ('고지번호\n\n2026083112345', '고지번호\n\n******-*******'),
+            ('고지번호\n납부기한\n2026083112345', '고지번호\n납부기한\n******-*******'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+
+    def test_registration_label_wins_over_other_label(self):
+        for text, expected in (
+            ('외국인등록번호: 9001015123456', '외국인등록번호: ******-*******'),
+            ('외국인등록번호\n9001015123456', '외국인등록번호\n******-*******'),
+            ('고지번호: 2026083112345 외국인등록번호: 9001015123456',
+             '고지번호: 2026083112345 외국인등록번호: ******-*******'),
+            ('고지번호 2026083112345 9001015123456', '고지번호 2026083112345 ******-*******'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+
+    def test_hyphenated_number_is_masked_even_after_other_label(self):
+        """하이픈이 있거나 줄이 바뀐 6자리-7자리는 등록번호 모양이라 이름표와 관계없이 가린다."""
+        for text, expected in (
+            ('고지번호: 900101-5123456', '고지번호: ******-*******'),
+            ('관리번호\n900101-5123456', '관리번호\n******-*******'),
+            ('문서번호: 900101 - 5123456', '문서번호: ******-*******'),
+            ('고지번호: 900101-\n5123456', '고지번호: ******-*******'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+
+    def test_kept_other_number_is_stable_when_masked_twice(self):
+        text = '고지서 번호: 2026083112345\n외국인등록번호: 9001015123456\n수신: 홍길동'
+        once = masked(text)
+
+        self.assertEqual(once, '고지서 번호: 2026083112345\n외국인등록번호: ******-*******\n수신: [이름 가림]')
+        self.assertEqual(masked(once), once)
 
     def test_keeps_other_numbers(self):
         for text in (
@@ -325,6 +384,60 @@ class NameTests(SimpleTestCase):
     def test_masks_name_on_next_line_with_english_name(self):
         """sample1: 라벨 다음 줄의 이름과 괄호 안 영문 이름."""
         self.assertEqual(masked('납세자\n응우옌 반 안 (NGUYEN VAN AN)'), '납세자\n[이름 가림]')
+
+    def test_recipient_label_name_is_masked(self):
+        """수신·받는 사람·대상자 라벨 뒤의 이름을 가린다."""
+        for text, expected in (
+            ('수신: 홍길동', '수신: [이름 가림]'),
+            ('수신 : 홍길동', '수신 : [이름 가림]'),
+            ('수신인: 홍길동', '수신인: [이름 가림]'),
+            ('수신자: 응우옌 반 안 (NGUYEN VAN AN)', '수신자: [이름 가림]'),
+            ('받는 사람: 홍길동', '받는 사람: [이름 가림]'),
+            ('받는사람: 홍길동', '받는사람: [이름 가림]'),
+            ('받는 분: 홍길동', '받는 분: [이름 가림]'),
+            ('대상자: 홍길동', '대상자: [이름 가림]'),
+            ('■ 수신: 홍길동 귀하', '■ 수신: [이름 가림]'),
+            ('수신: 홍길동 납부기한: 2026년 8월 31일', '수신: [이름 가림] 납부기한: 2026년 8월 31일'),
+            # 표 형식: 라벨만 있는 줄의 다음 줄
+            ('수신\n홍길동', '수신\n[이름 가림]'),
+            ('대상자\n홍길동', '대상자\n[이름 가림]'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+
+    def test_recipient_agency_or_title_is_kept(self):
+        """받는 사람 라벨 뒤에 기관이나 직위가 오면 가리지 않는다."""
+        for text in (
+            '수신: 아산시청', '수신: 아산시청 세무과', '수신: 국민건강보험공단 천안지사', '수신: 아산시장',
+            '수신: 법무부장관', '수신: 대전출입국·외국인사무소장', '수신: 수신자 참조', '수신자: 천안세무서장 귀하',
+            '수신\n아산시청', '받는 사람: 아산시 배방읍 행정복지센터',
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], text)
+                self.assertEqual(result['masked_count'], 0)
+
+    def test_recipient_word_without_colon_is_not_a_name_label(self):
+        """'수신 거부', '대상자 확인'처럼 콜론 없이 이어진 낱말은 이름으로 보지 않는다."""
+        for text in (
+            '수신 거부', '수신 동의 여부', '수신자 부담', '대상자 확인', '대상자 선정 기준', '받는 사람 주소',
+            '대상자는 기한 내에 신청해야 합니다.', '수신 홍길동',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), text)
+
+    def test_recipient_name_is_masked_elsewhere_without_honorific(self):
+        """받는 사람 이름 뒤의 '귀하'는 떼고, 다른 곳에 나온 같은 이름도 가린다."""
+        text = '수신: 홍길동 귀하\n홍길동 님께 안내드립니다.\n문의: 아산시청 세무과'
+
+        self.assertEqual(masked(text), '수신: [이름 가림]\n[이름 가림] 님께 안내드립니다.\n문의: 아산시청 세무과')
+
+    def test_recipient_table_form_in_demo_document_is_unchanged(self):
+        """데모 견본2의 모양: '대상자' 다음 줄이 '성명' 라벨이면 그 아래 이름만 가린다."""
+        text = '대상자\n성명\n응우옌 반 안 (NGUYEN VAN AN)\n여권번호\nC0000000'
+
+        self.assertEqual(masked(text), '대상자\n성명\n[이름 가림]\n여권번호\n[여권번호 가림]')
 
     def test_masks_name_after_labels(self):
         for label in ('납세자', '납부자', '가입자', '성명', '이름', '신청인', '신청인 성명'):

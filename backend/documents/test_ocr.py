@@ -147,9 +147,32 @@ class NormalizeRegistrationNumberTests(SimpleTestCase):
 
         self.assertEqual(normalize_registration_numbers(text), text)
 
-    def test_thirteen_digits_are_treated_as_registration_number(self):
-        # 누락보다 과잉 마스킹을 택한 결정(F1-4)을 고정한다.
-        self.assertEqual(normalize_registration_numbers('고지서 번호: 2026083112345'), '고지서 번호: 202608-3112345')
+    def test_thirteen_digits_without_other_label_are_treated_as_registration_number(self):
+        # 이름표가 없거나 목록에 없는 이름표면 누락보다 과잉 마스킹을 택한다(F1-4).
+        for text, expected in (
+            ('2026083112345', '202608-3112345'),
+            ('번호: 2026083112345', '번호: 202608-3112345'),
+            ('외국인등록번호: 9001015123456', '외국인등록번호: 900101-5123456'),
+            ('외국인등록번호\n9001015123456', '외국인등록번호\n900101-5123456'),
+            ('고지번호 안내\n2026083112345', '고지번호 안내\n202608-3112345'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(normalize_registration_numbers(text), expected)
+
+    def test_labeled_other_number_is_not_changed(self):
+        """이름표로 보아 등록번호가 아닌 번호에는 하이픈을 넣지 않는다(masking.py와 같은 기준)."""
+        for text in (
+            '고지서 번호: 2026083112345', '고지번호 2026083112345', '납부번호: 2026083112345',
+            '문서번호: 2026083112345', '관리번호: 2026083112345', '접수번호: 2026083112345',
+            '고지서 번호\n2026083112345',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(normalize_registration_numbers(text), text)
+                with override_settings(MASK_MODE='rules'):
+                    self.assertEqual(mask_personal_info(normalize_registration_numbers(text))['masked_count'], 0)
+
+    def test_other_label_does_not_protect_hyphenated_number(self):
+        self.assertEqual(normalize_registration_numbers('고지번호: 900101 - 5123456'), '고지번호: 900101-5123456')
 
 
 class CalculateConfidenceTests(SimpleTestCase):

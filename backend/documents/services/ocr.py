@@ -19,6 +19,7 @@ import requests
 from django.conf import settings
 
 from ..models import Document
+from .masking import is_labeled_other_number
 
 CLOVA_VERSION = 'V2'
 CLOVA_LANG = 'ko'
@@ -47,7 +48,8 @@ LAW_NAME_PATTERN = re.compile(
 CLOVA_PAGE_LIMIT_CODE = '0011'
 
 # 숫자 6자리와 7자리. 공백으로 쪼개지거나 하이픈이 없어도 찾는다.
-# 하이픈 없는 13자리 번호도 함께 가려지지만, 누락보다 과잉 마스킹을 택한다(F1-4).
+# 하이픈 없는 13자리 숫자도 등록번호로 본다(누락보다 과잉 마스킹, F1-4). 다만 고지번호처럼 이름표로 보아
+# 다른 번호가 분명하면 normalize_registration_numbers()가 바꾸지 않는다(masking.is_labeled_other_number).
 # 줄바꿈은 건너뛰지 않도록 공백을 [ \t]로 제한한다.
 REGISTRATION_NUMBER_PATTERN = re.compile(
     r'(?<!\d)(\d(?:[ \t]?\d){5})[ \t]*[-‐–—−]?[ \t]*(\d(?:[ \t]?\d){6})(?!\d)'
@@ -167,8 +169,13 @@ def _line_text(line):
 
 
 def normalize_registration_numbers(text):
-    """쪼개져 인식된 외국인등록번호를 마스킹 정규식이 찾는 ######-####### 형태로 잇는다."""
+    """쪼개져 인식된 외국인등록번호를 마스킹 정규식이 찾는 ######-####### 형태로 잇는다.
+
+    이름표로 보아 등록번호가 아닌 번호(고지번호 등)는 바꾸지 않는다. 기준은 masking.py와 같다.
+    """
     def join(match):
+        if is_labeled_other_number(text, match.start(), match.group(0)):
+            return match.group(0)
         front = re.sub(r'[ \t]', '', match.group(1))
         back = re.sub(r'[ \t]', '', match.group(2))
         return f'{front}-{back}'

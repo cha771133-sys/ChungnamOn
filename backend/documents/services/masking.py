@@ -56,6 +56,12 @@ REGISTRATION_PATTERN = re.compile(
 REGISTRATION_LABEL = re.compile(
     rf'^(?P<label>{_BULLET}(?:외국인\s*등록\s*번호|주민\s*등록\s*번호)[ \t]*[:：]?[ \t]*)(?P<value>.*)$'
 )
+# 이름표로 보아 등록번호가 아닌 것이 분명한 번호. 하이픈 없는 13자리 숫자가 이 이름표 바로 뒤(같은 줄)나
+# 이름표만 있는 줄의 바로 다음 줄에 있으면 가리지 않는다. 납부에 필요한 번호를 사용자가 볼 수 있어야 한다.
+# 이름표가 없거나 목록에 없는 이름표면 지금처럼 가린다(F1-4, 애매하면 가린다).
+_OTHER_NUMBER_LABEL = r'(?:고지\s*서?|전자\s*납부|납부|문서|관리|접수)\s*번호'
+_OTHER_NUMBER_LABEL_BEFORE = re.compile(rf'{_OTHER_NUMBER_LABEL}[ \t]*[:：]?[ \t]*$')
+_OTHER_NUMBER_LABEL_LINE = re.compile(rf'^{_BULLET}{_OTHER_NUMBER_LABEL}[ \t]*[:：]?[ \t]*$')
 
 # ── 여권번호 ──────────────────────────────────────────────────
 PASSPORT_LABEL = re.compile(
@@ -115,9 +121,17 @@ PHONE_LABEL = re.compile(
 # ── 이름 ─────────────────────────────────────────────────────
 # 라벨 뒤의 이름과 괄호 안 영문 이름까지 값 전체를 가린다.
 NAME_LABEL = re.compile(
-    rf'^(?P<label>{_BULLET}(?:납세자|납부자|가입자|신청인|성\s*명|이\s*름)(?:[ \t]*(?:성명|이름))?)'
+    rf'^(?P<label>{_BULLET}(?:납세자|납부자|가입자|신청인|성\s*명|이\s*름'
+    rf'|(?P<recipient>수신(?:인|자)?|받는\s*(?:사람|분)|대상자))(?:[ \t]*(?:성명|이름))?)'
     rf'(?P<sep>[ \t]*[:：][ \t]*|[ \t]+|[ \t]*$)(?P<value>.*)$'
 )
+# 받는 사람 라벨(수신·받는 사람·대상자) 뒤에는 사람이 아니라 기관이나 직위가 올 수 있다(예: "수신: 아산시청",
+# "수신: 아산시장", "수신: 수신자 참조"). 이런 값은 이름으로 보지 않는다.
+_RECIPIENT_TITLE = re.compile(
+    r'(?:시장|군수|구청장|도지사|장관|청장|서장|소장|지사장|이사장|센터장|위원장|본부장|원장|참조)[ \t]*(?:귀하|님)?[ \t]*$'
+)
+# 이름 뒤에 붙는 높임말. 다른 곳의 같은 이름을 찾을 때는 떼고 찾는다.
+_HONORIFIC = re.compile(r'[ \t]*(?:귀하|님|씨)[ \t]*$')
 # 이름과 같은 줄에 이어 나온 다른 라벨(예: "성명: 홍길동 연락처: …"). 이름은 이 라벨 앞에서 끝난다.
 INLINE_NEXT_LABEL = re.compile(
     r'[ \t]+(?=(?:연\s*락\s*처|전화\s*번호|휴대\s*(?:전화|폰)|주\s*소|외국인\s*등록\s*번호|주민\s*등록\s*번호|여권\s*번호'
@@ -195,12 +209,40 @@ def _split_at_next_field(value):
     return value[:cut], value[cut:]
 
 
+def is_labeled_other_number(text, start, number):
+    """text[start:]에서 찾은 number가 이름표로 보아 등록번호가 아닌 번호(고지번호 등)인지.
+
+    ocr.normalize_registration_numbers()도 같은 기준을 쓴다. 기준이 다르면 고지번호에 하이픈이 들어간다.
+    하이픈이 있거나 줄이 바뀐 번호는 등록번호 모양이라 이름표와 관계없이 등록번호로 본다.
+    """
+    if re.search(rf'{_DASH}|\n', number):
+        return False
+    line_start = text.rfind('\n', 0, start) + 1
+    before = text[line_start:start]
+    if before.strip():
+        return bool(_OTHER_NUMBER_LABEL_BEFORE.search(before))
+    if line_start == 0:
+        return False
+    # 줄 맨 앞의 번호: 바로 윗줄이 이름표만 있는 줄일 때(표 형식)
+    previous_start = text.rfind('\n', 0, line_start - 1) + 1
+    return bool(_OTHER_NUMBER_LABEL_LINE.match(text[previous_start:line_start - 1]))
+
+
 # ── 규칙 ─────────────────────────────────────────────────────
 
 def mask_registration_numbers(lines):
     """외국인등록번호. 패턴으로 찾고, 라벨 뒤 숫자를 잘못 읽은 값도 가린다."""
-    text, count = REGISTRATION_PATTERN.subn(REGISTRATION_MARK, '\n'.join(lines))
-    lines[:] = text.split('\n')
+    joined = '\n'.join(lines)
+    count = 0
+
+    def replace(match):
+        nonlocal count
+        if is_labeled_other_number(joined, match.start(), match.group(0)):
+            return match.group(0)
+        count += 1
+        return REGISTRATION_MARK
+
+    lines[:] = REGISTRATION_PATTERN.sub(replace, joined).split('\n')
 
     def mask_value(value):
         # 숫자 일부를 글자로 잘못 읽어도(예: 9OO101) 숫자가 6개 이상이면 번호로 본다.
@@ -369,6 +411,11 @@ def _looks_like_name(value):
     return len(stripped.split()) <= 6
 
 
+def _recipient_is_agency(value):
+    """받는 사람 라벨의 값이 사람이 아니라 기관·직위인지."""
+    return bool(_AGENCY_WORD_PATTERN.search(value) or _RECIPIENT_TITLE.search(value))
+
+
 def _name_parts(name):
     """찾은 이름에서 다른 곳에서도 가릴 부분: 전체, 괄호 앞 이름, 괄호 안 영문 이름."""
     parts = {name.strip()}
@@ -412,6 +459,11 @@ def mask_names(lines):
             continue
         value = match.group('value')
         has_colon = ':' in match.group('sep') or '：' in match.group('sep')
+        recipient = bool(match.group('recipient'))
+        # "수신 거부", "대상자 확인"처럼 받는 사람 라벨은 일반 낱말로도 흔히 쓰인다. 같은 줄의 값은
+        # 콜론이 있을 때만 이름으로 본다. 라벨만 있는 줄의 다음 줄(표 형식)은 아래에서 그대로 본다.
+        if recipient and value.strip() and not has_colon:
+            continue
         if value.strip():
             # 같은 줄에 다른 라벨이 이어지면 이름은 그 앞에서 끝난다(예: "연락처:", "납부기한:").
             name, rest = _split_at_next_field(value)
@@ -422,10 +474,11 @@ def mask_names(lines):
             count += rest_count
             # 이름 자체가 이미 가려졌는지만 본다. 뒤에 이어진 다른 항목의 가림 표시는 상관없다.
             if not name.strip() or any(mark in name for mark in _ALL_MARKS) \
-                    or (not has_colon and not _looks_like_name(name)):
+                    or (not has_colon and not _looks_like_name(name)) \
+                    or (recipient and _recipient_is_agency(name)):
                 lines[index] = line[:match.start('value')] + name + rest
                 continue
-            found.append(name)
+            found.append(_HONORIFIC.sub('', name) if recipient else name)
             lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
             count += 1
             continue
@@ -436,7 +489,9 @@ def mask_names(lines):
         # 다른 가림 표시나 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
         if any(mark in candidate for mark in _ALL_MARKS) or any(char.isdigit() for char in candidate):
             continue
-        found.append(candidate)
+        if recipient and _recipient_is_agency(candidate):
+            continue
+        found.append(_HONORIFIC.sub('', candidate) if recipient else candidate)
         lines[following] = NAME_MARK
         count += 1
 
