@@ -441,7 +441,8 @@ class NameTests(SimpleTestCase):
             ('수신: 홍길동 센터장 귀하', '수신: [이름 가림] 센터장 귀하'),
             ('수신: 홍길동 소장', '수신: [이름 가림] 소장'),
             ('수신: 행정복지센터장 홍길동', '수신: 행정복지센터장 [이름 가림]'),
-            ('수신: 아산시청 홍길동 주무관', '수신: 아산시청 [이름 가림]'),
+            ('수신: 아산시청 홍길동 주무관', '수신: 아산시청 [이름 가림] 주무관'),
+            ('수신: 아산시청 홍길동 조사원', '수신: 아산시청 [이름 가림]'),
             ('수신: 아산시청 세무과 홍길동', '수신: 아산시청 세무과 [이름 가림]'),
             ('수신: 법무부 홍길동', '수신: 법무부 [이름 가림]'),
             ('수신: 홍길동 아산시청', '수신: [이름 가림] 아산시청'),
@@ -462,6 +463,39 @@ class NameTests(SimpleTestCase):
 
         self.assertEqual(masked(text), '수신: [이름 가림] 센터장 귀하\n[이름 가림] 님께 안내드립니다.')
 
+    def test_recipient_name_with_listed_title_is_masked_elsewhere(self):
+        """직위는 남기고 이름만 기억해, 다른 곳에 나온 같은 이름도 가린다."""
+        text = '수신: 아산시청 홍길동 주무관\n홍길동 님께 안내드립니다.'
+
+        self.assertEqual(masked(text), '수신: 아산시청 [이름 가림] 주무관\n[이름 가림] 님께 안내드립니다.')
+
+    def test_attached_honorific_is_removed_before_matching_elsewhere(self):
+        """'홍길동님'처럼 높임말을 붙여 쓴 이름도 다른 곳의 같은 이름을 가린다."""
+        for label in ('수신', '성명', '납세자'):
+            for written in ('홍길동님', '홍길동씨', '홍길동귀하', '홍길동 님', '홍길동 귀하'):
+                with self.subTest(label=label, written=written):
+                    result = masked(f'{label}: {written}\n홍길동 님께 안내드립니다.\n문의: 아산시청')
+
+                    self.assertNotIn('홍길동', result)
+                    second_line = result.splitlines()[1]
+                    self.assertIn('[이름 가림]', second_line)
+                    self.assertIn('안내드립니다.', second_line)
+                    self.assertTrue(result.endswith('문의: 아산시청'))
+                    self.assertEqual(masked(result), result)
+
+    def test_recipient_region_names_are_kept_before_agency(self):
+        """실제 지역 이름은 뒤에 기관 이름이 이어지면 남긴다."""
+        for text in (
+            '수신: 충청남도 아산시청', '수신: 아산시 배방읍 행정복지센터', '수신: 천안시 동남구 보건소',
+            '수신: 수원시 영통구청', '수신: 충남 홍성군 보건소', '수신: 서울특별시 강남구 보건소',
+            '수신\n천안시 서북구 보건소',
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], text)
+                self.assertEqual(result['masked_count'], 0)
+
     def test_recipient_name_that_looks_like_region_is_masked(self):
         """'구'·'시'·'동'으로 끝나는 이름은 지역 이름으로 보지 않는다. 지역은 뒤에 기관 이름이 올 때만 남긴다."""
         for text, expected in (
@@ -470,6 +504,16 @@ class NameTests(SimpleTestCase):
             ('수신: 김민구 귀하', '수신: [이름 가림] 귀하'),
             ('수신: 아산시 박진구', '수신: [이름 가림]'),
             ('수신: 아산시 홍길동 세무과', '수신: [이름 가림] 세무과'),
+            # 지역 이름 목록에 없는 낱말은 '도'·'시'·'군'으로 끝나도 이름으로 본다.
+            ('수신: 김진도 아산시청', '수신: [이름 가림] 아산시청'),
+            ('수신: 남궁도 아산시청', '수신: [이름 가림] 아산시청'),
+            ('수신: 이영시 보건소', '수신: [이름 가림] 보건소'),
+            ('수신: 박성군 행정복지센터', '수신: [이름 가림] 행정복지센터'),
+            # 지역 이름과 같은 낱말도 기관 이름이 이어지지 않으면 가린다(사람 이름일 수 있다).
+            ('수신: 강동구', '수신: [이름 가림]'),
+            ('수신: 강남구 센터장', '수신: [이름 가림] 센터장'),
+            # 읍·면은 지역 이름 바로 뒤에 올 때만 지역으로 본다.
+            ('수신: 배방읍 행정복지센터', '수신: [이름 가림] 행정복지센터'),
         ):
             with self.subTest(text=text):
                 self.assertEqual(masked(text), expected)

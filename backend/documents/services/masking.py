@@ -129,7 +129,8 @@ NAME_LABEL = re.compile(
 # "수신: 아산시장"). 값을 낱말로 나눠 기관·직위·높임말만 남기고 나머지는 이름으로 보고 가린다
 # (예: "홍길동 센터장 귀하" → "[이름 가림] 센터장 귀하"). 판단은 _mask_recipient_value()에 있다.
 _RECIPIENT_TITLE = re.compile(
-    r'(?:시장|군수|구청장|도지사|장관|청장|서장|소장|지사장|이사장|센터장|위원장|본부장|원장)$'
+    r'(?:시장|군수|구청장|도지사|장관|청장|서장|소장|지사장|이사장|센터장|위원장|본부장|원장'
+    r'|주무관|사무관|서기관|담당관|조사관|과장|팀장|국장|실장|계장|부장|차장|대리|대표|대표이사|담당자)$'
 )
 # AGENCY_WORDS에 없는 기관 이름. 받는 사람 값에서만 쓴다(기관 안내 줄 판단에는 영향을 주지 않는다).
 # "부"로 끝나는 낱말을 모두 기관으로 보면 이름(예: 김영부)을 놓치므로 부처 이름을 하나씩 적는다.
@@ -141,9 +142,41 @@ _RECIPIENT_AGENCY = re.compile(
 _RECIPIENT_HONORIFICS = ('귀하', '님', '씨')
 # "수신: 수신자 참조"는 받는 사람이 따로 적혀 있다는 뜻이다.
 _RECIPIENT_REFERENCE = re.compile(r'^[ \t]*(?:수신(?:인|자)?[ \t]*)?참조[ \t]*$')
-# 지역 이름 모양의 낱말(충청남도, 아산시, 배방읍). 뒤에 기관 이름이 올 때만 지역으로 본다.
-# 구·동·리로 끝나는 낱말은 이름(박진구, 홍길동)과 구분할 수 없어 지역으로 보지 않는다.
-_REGION_WORD = re.compile(rf'^(?:{_SIDO}|[가-힣]{{1,6}}(?:시|군)|[가-힣0-9]+(?:읍|면))$')
+# 실제 지역 이름. 생김새(…도, …시, …구)로 판단하면 이름(김진도, 박진구)을 지역으로 잘못 본다.
+# 목록과 완전히 같은 낱말만 지역으로 보고, 그것도 뒤에 기관 이름이 이어질 때만 남긴다.
+# 동·리 이름은 목록으로 만들 수 없고 이름(홍길동)과 구분할 수 없어 지역으로 보지 않는다.
+_REGION_NAMES = frozenset('''
+서울특별시 부산광역시 대구광역시 인천광역시 광주광역시 대전광역시 울산광역시 세종특별자치시
+경기도 강원특별자치도 강원도 충청북도 충청남도 전북특별자치도 전라북도 전라남도 경상북도 경상남도
+제주특별자치도 제주도 서울 서울시 부산시 대구시 인천시 대전시 울산시 세종시 충북 충남 전북 전남 경북 경남
+수원시 성남시 의정부시 안양시 부천시 광명시 평택시 동두천시 안산시 고양시 과천시 구리시 남양주시 오산시
+시흥시 군포시 의왕시 하남시 용인시 파주시 이천시 안성시 김포시 화성시 광주시 양주시 포천시 여주시
+춘천시 원주시 강릉시 동해시 태백시 속초시 삼척시 청주시 충주시 제천시
+천안시 공주시 보령시 아산시 서산시 논산시 계룡시 당진시
+전주시 군산시 익산시 정읍시 남원시 김제시 목포시 여수시 순천시 나주시 광양시
+포항시 경주시 김천시 안동시 구미시 영주시 영천시 상주시 문경시 경산시
+창원시 진주시 통영시 사천시 김해시 밀양시 거제시 양산시 제주시 서귀포시
+강화군 옹진군 기장군 달성군 군위군 울주군 연천군 가평군 양평군
+홍천군 횡성군 영월군 평창군 정선군 철원군 화천군 양구군 인제군 고성군 양양군
+보은군 옥천군 영동군 증평군 진천군 괴산군 음성군 단양군
+금산군 부여군 서천군 청양군 홍성군 예산군 태안군
+완주군 진안군 무주군 장수군 임실군 순창군 고창군 부안군
+담양군 곡성군 구례군 고흥군 보성군 화순군 장흥군 강진군 해남군 영암군 무안군 함평군 영광군 장성군
+완도군 진도군 신안군
+의성군 청송군 영양군 영덕군 청도군 고령군 성주군 칠곡군 예천군 봉화군 울진군 울릉군
+의령군 함안군 창녕군 남해군 하동군 산청군 함양군 거창군 합천군
+종로구 중구 용산구 성동구 광진구 동대문구 중랑구 성북구 강북구 도봉구 노원구 은평구 서대문구 마포구 양천구
+강서구 구로구 금천구 영등포구 동작구 관악구 서초구 강남구 송파구 강동구
+서구 동구 남구 북구 영도구 부산진구 동래구 해운대구 사하구 금정구 연제구 수영구 사상구 수성구 달서구
+미추홀구 연수구 남동구 부평구 계양구 광산구 유성구 대덕구
+장안구 권선구 팔달구 영통구 수정구 중원구 분당구 만안구 동안구 원미구 소사구 오정구 상록구 단원구
+덕양구 일산동구 일산서구 처인구 기흥구 수지구 상당구 서원구 흥덕구 청원구 동남구 서북구 완산구 덕진구
+의창구 성산구 마산합포구 마산회원구 진해구
+'''.split())
+# 읍·면 이름. 지역 이름 바로 뒤에 올 때만 지역으로 본다(예: "아산시 배방읍").
+_TOWN_WORD = re.compile(r'^[가-힣0-9]+(?:읍|면)$')
+# 이름 끝에 붙여 쓴 높임말(홍길동님). 다른 곳의 같은 이름을 찾을 때는 떼고 찾는다.
+_ATTACHED_HONORIFIC = re.compile(r'[ \t]*(?:귀하|님|씨)$')
 # 이름과 같은 줄에 이어 나온 다른 라벨(예: "성명: 홍길동 연락처: …"). 이름은 이 라벨 앞에서 끝난다.
 INLINE_NEXT_LABEL = re.compile(
     r'[ \t]+(?=(?:연\s*락\s*처|전화\s*번호|휴대\s*(?:전화|폰)|주\s*소|외국인\s*등록\s*번호|주민\s*등록\s*번호|여권\s*번호'
@@ -427,7 +460,7 @@ def _mask_recipient_value(value):
     """받는 사람 라벨의 값에서 이름만 가린다. → (새 값, 가린 수, 찾은 이름 목록)
 
     낱말마다 직위(센터장)·기관(아산시청)·높임말(귀하)이면 남기고, 그 밖의 낱말은 이름으로 보고 가린다.
-    지역 이름 모양의 낱말은 뒤에 기관 이름이 이어질 때만 남긴다. 애매한 낱말은 가린다(F1-4).
+    지역 이름(_REGION_NAMES)은 뒤에 기관 이름이 이어질 때만 남긴다. 애매한 낱말은 가린다(F1-4).
     """
     if _RECIPIENT_REFERENCE.match(value):
         return value, 0, []
@@ -440,17 +473,23 @@ def _mask_recipient_value(value):
             kinds.append('keep')
         elif _AGENCY_WORD_PATTERN.search(word) or _RECIPIENT_AGENCY.search(word):
             kinds.append('agency')
-        elif _REGION_WORD.match(word):
+        elif word in _REGION_NAMES:
             kinds.append('region')
+        elif _TOWN_WORD.match(word):
+            kinds.append('town')
         else:
             kinds.append('name')
     # 지역 낱말은 지역 낱말만 건너 바로 뒤에 기관 이름이 올 때만 남긴다(예: "아산시 배방읍 행정복지센터").
+    # 읍·면은 앞 낱말이 지역 이름일 때만 지역으로 본다.
     for index in range(len(words) - 1, -1, -1):
-        if kinds[index] == 'region':
-            following = kinds[index + 1] if index + 1 < len(words) else 'name'
-            kinds[index] = 'keep' if following in ('agency', 'keep-region') else 'name'
-            if kinds[index] == 'keep':
-                kinds[index] = 'keep-region'
+        if kinds[index] not in ('region', 'town'):
+            continue
+        following = kinds[index + 1] if index + 1 < len(words) else 'name'
+        after_region = index > 0 and kinds[index - 1] == 'region'
+        if following in ('agency', 'keep-region') and (kinds[index] == 'region' or after_region):
+            kinds[index] = 'keep-region'
+        else:
+            kinds[index] = 'name'
 
     parts, names, run = [], [], []
     for word, kind in zip(words, kinds):
@@ -476,6 +515,8 @@ def _name_parts(name):
     before, _, inside = name.partition('(')
     parts.add(before.strip())
     parts.add(inside.rstrip(') \t').strip())
+    # "홍길동님", "홍길동 귀하"로 적힌 이름은 높임말을 뗀 이름으로도 찾는다.
+    parts.update(_ATTACHED_HONORIFIC.sub('', part) for part in tuple(parts))
     # 한 글자 조각은 다른 낱말까지 가릴 수 있어 쓰지 않는다. 두 글자는 _name_pattern()의 경계 조건으로 제한한다.
     return sorted((part for part in parts if len(part.replace(' ', '')) >= 2), key=len, reverse=True)
 
