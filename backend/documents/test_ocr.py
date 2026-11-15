@@ -262,7 +262,12 @@ class CalculateConfidenceTests(SimpleTestCase):
 
     def test_law_name_is_not_agency(self):
         """법 이름은 기관 낱말이 들어 있어도 기관으로 치지 않는다."""
-        for law in ('「출입국관리법」', '출입국관리법', '「출입국관리법」에', '출입국관리법 시행령', '출입국관리법시행령'):
+        for law in (
+            '「출입국관리법」', '출입국관리법', '「출입국관리법」에', '출입국관리법 시행령', '출입국관리법시행령',
+            # 괄호 없이 조사가 붙어 한 단어로 읽힌 경우
+            '출입국관리법에', '출입국관리법에서', '출입국관리법은', '출입국관리법의', '출입국관리법상',
+            '출입국관리법으로', '출입국관리법에,', '출입국관리법시행령에',
+        ):
             with self.subTest(law=law):
                 # 법 이름만 또렷하고 기관명은 흐리면 낮게 나와야 한다.
                 images = [page(field(law, 0.99), field('대전출입국', 0.5, line_break=True))]
@@ -276,9 +281,11 @@ class CalculateConfidenceTests(SimpleTestCase):
 
     def test_agency_name_containing_law_letter_is_kept(self):
         """'법'이 낱말 중간에 있는 기관명은 기관으로 남는다."""
-        images = [page(field('법무부출입국', 0.8, line_break=True))]
+        for agency in ('법무부출입국', '법의학센터', '법과대학행정센터', '법인세무서'):
+            with self.subTest(agency=agency):
+                images = [page(field(agency, 0.8, line_break=True))]
 
-        self.assertEqual(calculate_confidence(images), 0.8)
+                self.assertEqual(calculate_confidence(images), 0.8)
 
     def test_next_line_is_used_only_after_label_line(self):
         """'기한'이 든 문장의 다음 줄 날짜(발행일)는 기한이 아니다(데모 견본2의 모양)."""
@@ -299,6 +306,8 @@ class CalculateConfidenceTests(SimpleTestCase):
             [field('납부기한:', line_break=True)],
             [field('신청'), field('마감', line_break=True)],
             [field('접수'), field('마감일', line_break=True)],
+            [field('접수'), field('마감'), field('일', line_break=True)],
+            [field('접수'), field('마감'), field('일:', line_break=True)],
         ):
             with self.subTest(label=[item['inferText'] for item in label_fields]):
                 images = [page(
@@ -308,6 +317,17 @@ class CalculateConfidenceTests(SimpleTestCase):
                 )]
 
                 self.assertEqual(calculate_confidence(images), 0.6)
+
+    def test_second_deadline_after_split_label_is_not_missed(self):
+        """기한이 두 개일 때, 띄어 읽힌 이름표('마감 일') 다음 줄의 낮은 날짜를 놓치지 않는다."""
+        images = [page(
+            field('납부기한', line_break=True),
+            field('8월', 0.99), field('31일', 0.99, line_break=True),
+            field('접수'), field('마감'), field('일', line_break=True),
+            field('9월', 0.3), field('5일', 0.3, line_break=True),
+        )]
+
+        self.assertEqual(calculate_confidence(images), 0.3)
 
     def test_sentence_with_label_falls_back_to_all_dates(self):
         """기한 이름표 줄이 없고 '기한'이 든 문장만 있으면 모든 날짜를 기한 후보로 본다."""
