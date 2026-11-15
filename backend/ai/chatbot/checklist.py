@@ -245,10 +245,12 @@ def _ascii_digits(text: str) -> str:
 def _numbers(text: str) -> Counter:
     """금액·날짜 숫자를 개수까지 센다.
 
-    6,250 / 6.250 / 6 250은 모두 6250, 03과 3은 같은 숫자로 본다. 현지 숫자는 0~9로 바꿔서 비교한다.
+    6,250 / 6.250 / 6 250은 모두 6250으로 본다. 현지 숫자는 0~9로 바꿔서 비교한다.
+    앞의 0은 1~2자리(날짜의 월·일: 08 = 8)에서만 뺀다. 3자리 이상(계좌·번호의 041 등)은 0까지 그대로 비교한다.
     万 같은 단위·불기 연도·월 이름은 같은 값인지 확인할 수 없어서 맞추지 않는다 (→ 한국어 초안 유지).
     """
-    return Counter(str(int(re.sub(r"\D", "", n))) for n in NUMBER_RE.findall(_ascii_digits(text)))
+    digits = (re.sub(r"\D", "", n) for n in NUMBER_RE.findall(_ascii_digits(text)))
+    return Counter(str(int(d)) if len(d) <= 2 else d for d in digits)
 
 
 def _translated(draft: dict, raw: dict) -> dict | None:

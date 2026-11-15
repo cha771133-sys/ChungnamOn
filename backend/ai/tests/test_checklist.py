@@ -325,6 +325,24 @@ class ChecklistLLMTests(ChecklistBase, TestCase):
             with self.subTest(name):
                 self.assertEqual(pay_text(text, detail), korean)
 
+    def test_translation_keeps_leading_zero_of_long_numbers(self):
+        """앞의 0은 1~2자리(월·일)에서만 무시. 계좌번호 041-... → 41-...은 다른 숫자 → 한국어 유지."""
+        result = {**RESULT, "payment_methods": ["가상계좌 041-123-456789"]}
+        korean = "2026년 8월 31일까지 6,250원 내기"
+        method_ko = self.build(result, v=self.v())["checklist"][0]["method"]
+        self.assertIn("041-123-456789", method_ko)
+
+        def pay_text(method):
+            out = self.build(result, v=self.v(), language="vi", llm=self.llm(
+                {"index": 0, "text": "Nộp 6.250 won trước ngày 31/08/2026", "detail": "Hạn nộp: 31/08/2026",
+                 "method": method}))
+            return out["checklist"][0]["text"]
+
+        self.assertEqual(pay_text("Tài khoản ảo 041-123-456789"), "Nộp 6.250 won trước ngày 31/08/2026")
+        for method in ("Tài khoản ảo 41-123-456789", "Tài khoản ảo 041-123-0456789"):
+            with self.subTest(method=method):
+                self.assertEqual(pay_text(method), korean)
+
     def test_prompt_asks_for_arabic_digits_and_year(self):
         self.build(v=self.v(), language="th")
         system = self.complete.call_args.args[0]
