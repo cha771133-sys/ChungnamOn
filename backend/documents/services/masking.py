@@ -137,7 +137,7 @@ _RECIPIENT_TITLE = re.compile(
 _RECIPIENT_AGENCY = re.compile(
     r'(?:법무|고용노동|행정안전|보건복지|외교|교육|국토교통|기획재정|여성가족|산업통상자원|문화체육관광|환경|국방|통일'
     r'|농림축산식품|해양수산|중소벤처기업|과학기술정보통신)부'
-    r'|국세청|관세청|경찰청|경찰서|검찰청|교육청|보건소|우체국|법원|위원회'
+    r'|국세청|관세청|경찰청|경찰서|소방서|검찰청|교육청|보건소|우체국|법원|위원회'
 )
 _RECIPIENT_HONORIFICS = ('귀하', '님', '씨')
 # "수신: 수신자 참조"는 받는 사람이 따로 적혀 있다는 뜻이다.
@@ -175,6 +175,15 @@ _REGION_NAMES = frozenset('''
 '''.split())
 # 읍·면 이름. 지역 이름 바로 뒤에 올 때만 지역으로 본다(예: "아산시 배방읍").
 _TOWN_WORD = re.compile(r'^[가-힣0-9]+(?:읍|면)$')
+# 자주 쓰는 부서 이름. 직위 앞에 붙거나(민원팀장, 총무과장) 과·팀 등이 붙으면(민원팀) 이름이 아니라 부서로 본다.
+# 사람 이름으로도 쓰이는 낱말(지원, 세정 등)은 넣지 않는다.
+_DEPARTMENT_NAMES = frozenset('''
+민원 민원봉사 종합민원 총무 행정 자치행정 기획 기획예산 예산 재무 회계 세무 징수 부과 복지 복지정책 사회복지
+노인복지 여성가족 보건 건강 위생 환경 건설 건축 도시 교통 안전 안전총괄 경제 일자리 농업 농정 문화 관광 체육
+교육 인사 감사 홍보 정보통신 토지 주택 허가 체류 체류관리 출입국 외국인 이민정보 조사 심사 관리 운영 고객
+고객지원 자격 보험료 급여
+'''.split())
+_DEPARTMENT_WORD = re.compile(r'^(?P<name>[가-힣]+?)(?:과|팀|실|국|계|부|담당)$')
 # 이름 끝에 붙여 쓴 높임말(홍길동님). 다른 곳의 같은 이름을 찾을 때는 떼고 찾는다.
 _ATTACHED_HONORIFIC = re.compile(r'[ \t]*(?:귀하|님|씨)$')
 # 이름과 같은 줄에 이어 나온 다른 라벨(예: "성명: 홍길동 연락처: …"). 이름은 이 라벨 앞에서 끝난다.
@@ -456,6 +465,30 @@ def _looks_like_name(value):
     return len(stripped.split()) <= 6
 
 
+def _is_department(word):
+    """부서 이름에 과·팀 등이 붙은 낱말(민원팀, 이민정보과)인지."""
+    match = _DEPARTMENT_WORD.match(word)
+    return bool(match) and match.group('name') in _DEPARTMENT_NAMES
+
+
+def _is_agency_title(word, title):
+    """직위로 끝나는 낱말이 기관의 직위(아산시장, 법무부장관, 천안세무서장)인지. 아니면 이름에 직위가 붙은 것으로 본다."""
+    prefix = word[:title.start()]
+    found = [match.start() for match in (_AGENCY_WORD_PATTERN.search(word), _RECIPIENT_AGENCY.search(word)) if match]
+    # 직위 앞부분에 기관 이름이 있다(천안세무서장, 행정복지센터장, 법무부장관).
+    # 직위 자체에 든 기관 낱말(센터장의 센터, 지사장의 지사)은 세지 않는다. 홍길동센터장은 이름이다.
+    if any(start < title.start() for start in found):
+        return True
+    # 아산시장 → 아산시, 홍성군수 → 홍성군, 충청남도지사 → 충청남도, 충남도지사 → 충남
+    if prefix in _REGION_NAMES or prefix + title.group(0)[0] in _REGION_NAMES:
+        return True
+    # 민원팀장, 총무과장: 직위 앞부분이 부서 이름이다.
+    if prefix in _DEPARTMENT_NAMES:
+        return True
+    # 천안지사장, 아산센터장: 직위가 기관 낱말로 시작하고 앞부분이 시·군 이름이다.
+    return bool(found) and any(prefix + suffix in _REGION_NAMES for suffix in ('시', '군'))
+
+
 def _mask_recipient_value(value):
     """받는 사람 라벨의 값에서 이름만 가린다. → (새 값, 가린 수, 찾은 이름 목록)
 
@@ -464,14 +497,20 @@ def _mask_recipient_value(value):
     """
     if _RECIPIENT_REFERENCE.match(value):
         return value, 0, []
-    words = value.split()
-    kinds = []
-    for word in words:
+    words, kinds = [], []
+    for word in value.split():
+        title = _RECIPIENT_TITLE.search(word)
+        if title and title.start() and not _is_agency_title(word, title):
+            # 이름과 직위를 붙여 쓴 낱말(홍길동주무관): 이름과 직위로 나눠 이름만 가린다.
+            words += [word[:title.start()], title.group(0)]
+            kinds += ['name', 'keep']
+            continue
+        words.append(word)
         if word in _RECIPIENT_HONORIFICS:
             kinds.append('keep')
-        elif _RECIPIENT_TITLE.search(word):
+        elif title:
             kinds.append('keep')
-        elif _AGENCY_WORD_PATTERN.search(word) or _RECIPIENT_AGENCY.search(word):
+        elif _AGENCY_WORD_PATTERN.search(word) or _RECIPIENT_AGENCY.search(word) or _is_department(word):
             kinds.append('agency')
         elif word in _REGION_NAMES:
             kinds.append('region')

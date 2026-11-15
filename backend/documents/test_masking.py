@@ -463,6 +463,48 @@ class NameTests(SimpleTestCase):
 
         self.assertEqual(masked(text), '수신: [이름 가림] 센터장 귀하\n[이름 가림] 님께 안내드립니다.')
 
+    def test_recipient_name_attached_to_title_is_masked(self):
+        """이름과 직위를 붙여 쓴 낱말은 이름만 가린다. 기관의 직위는 그대로 둔다."""
+        for text, expected in (
+            ('수신: 홍길동주무관', '수신: [이름 가림] 주무관'),
+            ('수신: 홍길동센터장', '수신: [이름 가림] 센터장'),
+            ('수신: 홍길동센터장 귀하', '수신: [이름 가림] 센터장 귀하'),
+            ('수신: 아산시청 홍길동과장', '수신: 아산시청 [이름 가림] 과장'),
+            ('수신: 김과장', '수신: [이름 가림] 과장'),
+            ('수신: 김진도지사', '수신: [이름 가림] 도지사'),
+            # 부서 이름 목록에 없는 낱말이 직위 앞에 붙으면 이름으로 본다.
+            ('수신: 지원팀장', '수신: [이름 가림] 팀장'),
+            ('수신: 아산시청 민원팀 홍길동과장', '수신: 아산시청 민원팀 [이름 가림] 과장'),
+            ('수신\n홍길동주무관', '수신\n[이름 가림] 주무관'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], expected)
+                self.assertEqual(result['masked_count'], 1)
+                self.assertEqual(masked(expected), expected)
+
+    def test_agency_title_is_kept(self):
+        for text in (
+            '수신: 아산시장', '수신: 서울특별시장', '수신: 홍성군수', '수신: 강남구청장', '수신: 충청남도지사',
+            '수신: 충남도지사', '수신: 법무부장관', '수신: 천안세무서장', '수신: 아산경찰서장', '수신: 아산소방서장',
+            '수신: 행정복지센터장', '수신: 천안지사장', '수신: 국민건강보험공단이사장', '수신: 세무과장',
+            '수신: 대전출입국·외국인사무소장', '수신: 센터장', '수신: 주무관',
+            # 부서 이름에 직위나 과·팀이 붙은 낱말
+            '수신: 민원팀장', '수신: 총무과장', '수신: 복지정책과장', '수신: 아산시청 민원팀장',
+            '수신: 아산시청 민원팀', '수신: 법무부 이민정보과', '수신: 아산시청 총무과 민원팀장',
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], text)
+                self.assertEqual(result['masked_count'], 0)
+
+    def test_name_attached_to_title_is_masked_elsewhere(self):
+        text = '수신: 홍길동주무관\n홍길동 님께 안내드립니다.'
+
+        self.assertEqual(masked(text), '수신: [이름 가림] 주무관\n[이름 가림] 님께 안내드립니다.')
+
     def test_recipient_name_with_listed_title_is_masked_elsewhere(self):
         """직위는 남기고 이름만 기억해, 다른 곳에 나온 같은 이름도 가린다."""
         text = '수신: 아산시청 홍길동 주무관\n홍길동 님께 안내드립니다.'
