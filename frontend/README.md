@@ -24,15 +24,15 @@ npm run dev
 
 ## API 주소 (`.env.local`)
 
-API 주소는 `VITE_API_BASE_URL`로 정합니다. `.env.example`의 기본값은 배포 백엔드(Railway)입니다.
+API 주소는 `VITE_API_BASE_URL`로 정합니다. Vite는 `.env.example`을 읽지 않으니, 필요하면 `.env.local`을 만들어 씁니다. `.env.local`은 git에 올라가지 않습니다.
 
-로컬 백엔드를 쓸 때는 `frontend/.env.local`을 만듭니다. 이 파일은 git에 올라가지 않습니다.
+| 상황 | 설정 |
+| --- | --- |
+| 로컬 백엔드 (`localhost:8000`) | 설정 없이 그대로 실행하면 됩니다. `/api` 요청을 Vite가 `127.0.0.1:8000`으로 넘깁니다 (`vite.config.ts`) |
+| 배포 백엔드 (Railway) | `.env.example`을 복사해 씁니다: `Copy-Item .env.example .env.local` |
+| 폰 점검 (같은 와이파이) | 아래 "실제 폰으로 점검하기" 참고 |
 
-```powershell
-Set-Content .env.local "VITE_API_BASE_URL=http://localhost:8000"
-```
-
-`.env.local`을 바꾼 뒤에는 개발 서버를 껐다 켜야 반영됩니다.
+`.env.local`을 만들거나 바꾼 뒤에는 개발 서버를 껐다 켜야 반영됩니다. 배포 백엔드로 바꿨다가 다시 로컬로 돌아오려면 `.env.local`을 지우면 됩니다.
 
 ## 실제 폰으로 점검하기
 
@@ -55,6 +55,8 @@ PC에서 띄운 개발 서버를 같은 와이파이의 폰으로 엽니다. 카
    npm run dev -- --host
    ```
 5. 폰 브라우저에서 `http://192.168.0.15:5173` 접속
+
+> 이 방법은 HTTP라 같은 와이파이에서는 요청 내용(로그인 토큰, 올린 문서)이 암호화되지 않습니다. **집처럼 믿을 수 있는 와이파이에서 테스트 계정과 개인정보 없는 견본 문서로만** 점검하세요. 공용 와이파이에서는 쓰지 말고, 점검이 끝나면 `backend/.env`의 IP 설정과 `frontend/.env.local`을 원래대로 돌려 두세요.
 
 접속이 안 되면 관리자 PowerShell에서 방화벽을 엽니다(한 번만).
 

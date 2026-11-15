@@ -374,6 +374,8 @@ export function ScheduleNew({ docId }) {
                 </div>
               ) : (
                 <div className="readonly">
+                  {/* 마감일이 하나여도 무엇의 기한인지(신청 기한·납부 기한 등) 보여준다 */}
+                  {options[0]?.label ? `${T(options[0].label)} · ` : ''}
                   {fmtDate(date)} <span className={n < 0 ? 'is-overdue' : ''}>{ddayLabel(n)}</span>
                 </div>
               )}

@@ -15,29 +15,30 @@ function RichText({ text, terms = [], onTerm }) {
   // 빈 문자열이 섞이면 모든 위치에 일치해 원문이 글자 단위로 쪼개지므로 제외한다
   const valid = words.filter((w) => typeof w === 'string' && w.length > 0)
   const re = valid.length ? new RegExp(`(${valid.map(escape).join('|')})`, 'g') : null
+  // 가림 표시를 먼저 나눈 뒤 나머지에서만 용어를 찾는다 ([주소 가림] 속 '주소'가 용어로 잘리지 않게)
   // 목업은 ●, 서버는 *** 또는 [이름 가림] 같은 표시로 개인정보를 가린다
-  const renderMask = (part, key) =>
-    part.split(MASK_SPLIT).map((p, i) =>
-      isMask(p) ? (
-        <span key={`${key}-${i}`} className="mask" aria-label={T('가려진 개인정보')}>
-          {maskText(p)}
-        </span>
-      ) : (
-        p
-      ),
-    )
+  const renderTerms = (part, key) =>
+    (re ? part.split(re) : [part]).map((p, i) => {
+      const term = terms.find((t) => t.word === p)
+      if (term && onTerm)
+        return (
+          <button key={`${key}-${i}`} className="term" onClick={() => onTerm(term)}>
+            {p}
+          </button>
+        )
+      return p
+    })
   return text.split('\n').map((line, li) => (
     <p key={li}>
-      {(re ? line.split(re) : [line]).map((part, pi) => {
-        const term = terms.find((t) => t.word === part)
-        if (term && onTerm)
-          return (
-            <button key={pi} className="term" onClick={() => onTerm(term)}>
-              {part}
-            </button>
-          )
-        return renderMask(part, `${li}-${pi}`)
-      })}
+      {line.split(MASK_SPLIT).map((part, pi) =>
+        isMask(part) ? (
+          <span key={pi} className="mask" aria-label={T('가려진 개인정보')}>
+            {maskText(part)}
+          </span>
+        ) : (
+          renderTerms(part, `${li}-${pi}`)
+        ),
+      )}
     </p>
   ))
 }
