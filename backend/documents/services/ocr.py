@@ -34,6 +34,13 @@ AGENCY_WORDS = ('시청', '군청', '구청', '도청', '세무서', '공단', '
 
 DATE_PATTERN = re.compile(r'\d{4}년|\d{1,2}월|\d{1,2}일|\d{4}[./-]\d{1,2}[./-]\d{1,2}')
 MONEY_PATTERN = re.compile(r'\d[\d,]*원')
+# 기한 이름표로 끝나는 줄(예: "납부기한", "신청 기한:"). 이런 줄만 날짜가 다음 줄에 온다.
+# "기한 내에 … 부과될 수 있습니다." 같은 문장의 다음 줄 날짜(발행일 등)는 기한이 아니다.
+DEADLINE_LABEL_LINE_PATTERN = re.compile(r'(기한|마감일?)\W*$')
+# 법 이름(예: 「출입국관리법」)은 기관 낱말이 들어 있어도 기관명이 아니다.
+LAW_NAME_PATTERN = re.compile(r'(법|시행령|시행규칙)(\W|$)')
+# CLOVA가 PDF 페이지 수 제한(10쪽)을 넘은 요청을 거부할 때 응답 본문에 넣는 code 값.
+CLOVA_PAGE_LIMIT_CODE = '0011'
 
 # 숫자 6자리와 7자리. 공백으로 쪼개지거나 하이픈이 없어도 찾는다.
 # 하이픈 없는 13자리 번호도 함께 가려지지만, 누락보다 과잉 마스킹을 택한다(F1-4).
@@ -45,6 +52,26 @@ REGISTRATION_NUMBER_PATTERN = re.compile(
 
 class OCRError(Exception):
     """OCR 실패. 메시지에 OCR 원문, Secret Key, Invoke URL을 넣지 않는다."""
+
+
+class PageLimitOCRError(OCRError):
+    """PDF 페이지가 너무 많아 CLOVA가 요청 전체를 거부했다.
+
+    다시 촬영해도 해결되지 않는 실패라 다른 OCR 실패와 구분한다.
+    OCRError의 하위 클래스라서 구분하지 않는 쪽에서는 기존과 똑같이 처리된다.
+    """
+
+
+def _error_code(response):
+    """오류 응답 본문의 code 값. 읽을 수 없으면 None. 본문의 다른 값(path 등)은 쓰지 않는다."""
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    code = data.get('code')
+    return code if isinstance(code, str) else None
 
 
 def _validate_images(images):
@@ -105,6 +132,8 @@ def call_clova(file_bytes, file_format):
 
     # response.ok는 3xx도 성공으로 보므로 리디렉션을 오류로 처리하도록 2xx를 직접 확인한다.
     if not 200 <= response.status_code < 300:
+        if _error_code(response) == CLOVA_PAGE_LIMIT_CODE:
+            raise PageLimitOCRError('PDF 페이지 수가 CLOVA의 제한을 넘었습니다.')
         raise OCRError(f'CLOVA 오류 응답: HTTP {response.status_code}')
 
     try:
@@ -158,38 +187,53 @@ def _is_date(field):
 
 
 def _deadline_fields(images):
-    """기한 라벨이 있는 줄의 날짜를 찾는다. 그 줄에 날짜가 없으면 다음 줄에서 찾는다."""
+    """기한 라벨이 있는 줄의 날짜를 찾는다.
+
+    그 줄에 날짜가 없으면, 줄이 기한 이름표로 끝날 때만 다음 줄에서 찾는다.
+    """
     found = []
     for image in images:
         lines = _split_lines(image.get('fields', []))
         for index, line in enumerate(lines):
-            if not any(label in _line_text(line) for label in DEADLINE_LABELS):
+            text = _line_text(line)
+            if not any(label in text for label in DEADLINE_LABELS):
                 continue
             dates = [field for field in line if _is_date(field)]
-            if not dates and index + 1 < len(lines):
+            if not dates and index + 1 < len(lines) and DEADLINE_LABEL_LINE_PATTERN.search(text):
                 dates = [field for field in lines[index + 1] if _is_date(field)]
             found.extend(dates)
     return found
 
 
-def calculate_confidence(images):
-    """핵심 항목(기한·금액·기관명) 단어의 신뢰도 중 최솟값. 하나도 없으면 0.0.
+def _is_agency(field):
+    text = field.get('inferText', '')
+    return any(word in text for word in AGENCY_WORDS) and not LAW_NAME_PATTERN.search(text)
 
-    최솟값을 쓰는 이유: 평균을 내면 기한 단어 하나를 잘못 읽어도 다른 단어에 묻힌다.
+
+def calculate_confidence(images):
+    """핵심 항목(기한·금액·기관명)을 믿을 수 있는 정도. 하나도 없으면 0.0.
+
+    기한 날짜와 금액은 단어 신뢰도의 최솟값을 쓴다. 평균을 내면 기한 단어 하나를
+    잘못 읽어도 다른 단어에 묻힌다.
+    기관명은 가장 잘 읽힌 단어 하나의 신뢰도를 쓴다. 기관명은 문서에 여러 번 나오고,
+    가운뎃점·괄호가 붙은 긴 낱말은 맞게 읽혀도 신뢰도가 낮게 나온다(깨끗한 견본에서
+    0.42). 모든 기관 단어의 최솟값을 쓰면 깨끗한 문서가 낮게 나온다.
+    결과는 이 값들 중 최솟값이다.
+
     기한 라벨을 찾지 못한 문서는 문서 안의 모든 날짜를 기한 후보로 본다.
     찾지 못한 분류는 빼고 찾은 분류만으로 계산한다.
     """
     fields = [field for image in images for field in image.get('fields', [])]
     dates = _deadline_fields(images) or [field for field in fields if _is_date(field)]
     amounts = [field for field in fields if MONEY_PATTERN.search(field.get('inferText', ''))]
-    agencies = [
-        field for field in fields
-        if any(word in field.get('inferText', '') for word in AGENCY_WORDS)
-    ]
-    key_fields = dates + amounts + agencies
-    if not key_fields:
+    agencies = [field for field in fields if _is_agency(field)]
+
+    values = [float(field.get('inferConfidence', 0.0)) for field in dates + amounts]
+    if agencies:
+        values.append(max(float(field.get('inferConfidence', 0.0)) for field in agencies))
+    if not values:
         return 0.0
-    return min(float(field.get('inferConfidence', 0.0)) for field in key_fields)
+    return min(values)
 
 
 def _file_format(document):

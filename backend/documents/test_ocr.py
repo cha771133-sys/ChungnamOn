@@ -18,6 +18,7 @@ from .models import Document
 from .services import ocr, pipeline
 from .services.ocr import (
     OCRError,
+    PageLimitOCRError,
     build_text,
     calculate_confidence,
     normalize_registration_numbers,
@@ -152,8 +153,9 @@ class NormalizeRegistrationNumberTests(SimpleTestCase):
 
 
 class CalculateConfidenceTests(SimpleTestCase):
-    def test_uses_lowest_key_word(self):
-        self.assertEqual(calculate_confidence([NOTICE_PAGE]), 0.85)
+    def test_uses_lowest_deadline_or_amount_word(self):
+        # 기한 0.9, 금액 0.95, 기관은 가장 잘 읽힌 세무과 0.99(아산시청 0.85는 쓰지 않는다).
+        self.assertEqual(calculate_confidence([NOTICE_PAGE]), 0.9)
 
     def test_ignores_date_outside_deadline_label(self):
         # W1 깨끗한 샘플: 납기 후 날짜의 낮은 신뢰도 때문에 재업로드 안내가 뜨면 안 된다.
@@ -218,6 +220,129 @@ class CalculateConfidenceTests(SimpleTestCase):
             with self.subTest(expected=expected):
                 self.assertEqual(calculate_confidence([page(*fields)]), expected)
 
+    def test_agency_uses_best_read_word(self):
+        """기관 낱말이 여러 번 나오면 가장 잘 읽힌 것 하나를 쓴다(데모 견본2의 모양)."""
+        images = [page(
+            field('신청'), field('기한', line_break=True),
+            field('2027년', 0.99), field('1월', 0.99), field('3일까지', 0.99, line_break=True),
+            field('35,000원', 0.99, line_break=True),
+            field('(체류지'), field('관할'), field('출입국·외국인관서)', 0.42, line_break=True),
+            field('대전출입국', 0.63), field('·외국인사무소', 0.93, line_break=True),
+            field('(외국인종합안내센터', 0.98), field('1345)', line_break=True),
+        )]
+
+        self.assertEqual(calculate_confidence(images), 0.98)
+
+    def test_agency_lowers_result_when_every_agency_word_is_low(self):
+        """기관 낱말을 하나도 또렷하게 읽지 못하면 낮게 나온다."""
+        images = [page(
+            field('납부기한', line_break=True),
+            field('2026년', 0.99), field('8월', 0.99), field('31일', 0.99, line_break=True),
+            field('6,250원', 0.99, line_break=True),
+            field('문의:'), field('이산시청', 0.44), field('제우과', 0.44, line_break=True),
+            field('아산시청', 0.5, line_break=True),
+        )]
+
+        self.assertEqual(calculate_confidence(images), 0.5)
+
+    def test_low_date_or_amount_is_not_hidden_by_other_words(self):
+        """기한·금액은 같은 항목이 여러 번 나와도 가장 낮은 값을 쓴다."""
+        for low_field in (field('11일', 0.6, line_break=True), field('6,250원', 0.6, line_break=True)):
+            with self.subTest(text=low_field['inferText']):
+                images = [page(
+                    field('납부기한', line_break=True),
+                    field('2026년', 0.99), field('8월', 0.99, line_break=True),
+                    field('납부기한', line_break=True),
+                    low_field,
+                    field('6,430원', 0.99, line_break=True),
+                    field('아산시청', 0.99, line_break=True),
+                )]
+
+                self.assertEqual(calculate_confidence(images), 0.6)
+
+    def test_law_name_is_not_agency(self):
+        """법 이름은 기관 낱말이 들어 있어도 기관으로 치지 않는다."""
+        for law in ('「출입국관리법」', '출입국관리법', '「출입국관리법」에', '출입국관리법 시행령', '출입국관리법시행령'):
+            with self.subTest(law=law):
+                # 법 이름만 또렷하고 기관명은 흐리면 낮게 나와야 한다.
+                images = [page(field(law, 0.99), field('대전출입국', 0.5, line_break=True))]
+
+                self.assertEqual(calculate_confidence(images), 0.5)
+
+    def test_law_name_alone_is_not_a_key_word(self):
+        images = [page(field('「출입국관리법」', 0.99), field('에'), field('따라', line_break=True))]
+
+        self.assertEqual(calculate_confidence(images), 0.0)
+
+    def test_agency_name_containing_law_letter_is_kept(self):
+        """'법'이 낱말 중간에 있는 기관명은 기관으로 남는다."""
+        images = [page(field('법무부출입국', 0.8, line_break=True))]
+
+        self.assertEqual(calculate_confidence(images), 0.8)
+
+    def test_next_line_is_used_only_after_label_line(self):
+        """'기한'이 든 문장의 다음 줄 날짜(발행일)는 기한이 아니다(데모 견본2의 모양)."""
+        images = [page(
+            field('신청'), field('기한', line_break=True),
+            field('2027년', 0.99), field('1월', 0.99), field('3일까지', 0.99, line_break=True),
+            field('기한'), field('내에'), field('등록하지'), field('않으면'), field('과태료가'),
+            field('부과됩니다.', line_break=True),
+            field('2026년', 0.5), field('11월', 0.5), field('10일', 0.5, line_break=True),
+        )]
+
+        self.assertEqual(calculate_confidence(images), 0.99)
+
+    def test_label_line_variants_use_next_line(self):
+        for label_fields in (
+            [field('납부기한', line_break=True)],
+            [field('납부'), field('기한', line_break=True)],
+            [field('납부기한:', line_break=True)],
+            [field('신청'), field('마감', line_break=True)],
+            [field('접수'), field('마감일', line_break=True)],
+        ):
+            with self.subTest(label=[item['inferText'] for item in label_fields]):
+                images = [page(
+                    field('발행일:'), field('8월', 0.99), field('1일', 0.99, line_break=True),
+                    *label_fields,
+                    field('8월', 0.6), field('31일', 0.6, line_break=True),
+                )]
+
+                self.assertEqual(calculate_confidence(images), 0.6)
+
+    def test_sentence_with_label_falls_back_to_all_dates(self):
+        """기한 이름표 줄이 없고 '기한'이 든 문장만 있으면 모든 날짜를 기한 후보로 본다."""
+        images = [page(
+            field('발행일:'), field('2026년', 0.6), field('8월', 0.9), field('1일', 0.9, line_break=True),
+            field('기한'), field('내에'), field('납부하지'), field('않으면'), field('가산세가'),
+            field('붙습니다.', line_break=True),
+            field('아산시장', line_break=True),
+        )]
+
+        self.assertEqual(calculate_confidence(images), 0.6)
+
+    def test_multi_page_uses_all_pages(self):
+        """기한·금액은 모든 페이지의 최솟값, 기관은 모든 페이지에서 가장 잘 읽힌 값을 쓴다."""
+        first = page(
+            field('납부기한', line_break=True),
+            field('2026년', 0.98), field('12월', 0.98), field('10일', 0.98, line_break=True),
+            field('국민건강보험공단', 0.6, line_break=True),
+            index=0,
+        )
+        second = page(field('152,330원', 0.97, line_break=True), field('천안지사', 0.99, line_break=True), index=1)
+        low_deadline = page(field('12월', 0.4), field('5일까지', 0.4, line_break=True), index=2)
+
+        self.assertEqual(calculate_confidence([first, second]), 0.97)
+        self.assertEqual(calculate_confidence([first, second, low_deadline]), 0.4)
+
+    def test_label_at_page_end_does_not_use_next_page(self):
+        images = [
+            page(field('6,250원', 0.9, line_break=True), field('납부기한', line_break=True), index=0),
+            page(field('8월', 0.3), field('31일', 0.3, line_break=True), index=1),
+        ]
+
+        # 기한 라벨로 날짜를 찾지 못하면 모든 날짜를 기한 후보로 본다.
+        self.assertEqual(calculate_confidence(images), 0.3)
+
 
 class ClovaTestCase(TestCase):
     """실제 파일을 임시 폴더에 올리고 requests.post를 가짜로 바꾼다."""
@@ -263,7 +388,7 @@ class RunClovaOcrTests(ClovaTestCase):
 
         self.assertEqual(set(result), {'text', 'confidence'})
         self.assertEqual(result['text'].split('\n')[2], REGISTRATION_NUMBER)
-        self.assertEqual(result['confidence'], 0.85)
+        self.assertEqual(result['confidence'], 0.9)
 
     def test_sends_documented_request(self):
         self.post.return_value = clova_response([NOTICE_PAGE])
@@ -355,6 +480,37 @@ class RunClovaOcrTests(ClovaTestCase):
 
                 with self.assertRaises(OCRError):
                     run_clova_ocr(self.create_document())
+
+    def test_page_limit_error_is_distinguished(self):
+        """CLOVA가 페이지 수 제한으로 거부하면 PageLimitOCRError(OCRError의 하위)를 던진다."""
+        content = json.dumps({'code': '0011', 'message': 'Request invalid: No more than 10 pages.', 'path': INVOKE_URL})
+        self.post.return_value = clova_response(status=400, content=content.encode())
+
+        with self.assertRaises(PageLimitOCRError) as caught:
+            run_clova_ocr(self.create_document('notice.pdf', Document.FileType.PDF))
+
+        self.assertIsInstance(caught.exception, OCRError)
+        self.assertNotIn(INVOKE_URL, str(caught.exception))
+
+    def test_other_error_responses_are_not_page_limit(self):
+        for content in (
+            b'{"code": "0001", "message": "URL is invalid."}', b'{"code": 11}', b'{"code": null}', b'{}',
+            b'["0011"]', b'"0011"', b'not json', b'',
+        ):
+            with self.subTest(content=content):
+                self.post.return_value = clova_response(status=400, content=content)
+
+                with self.assertRaises(OCRError) as caught:
+                    run_clova_ocr(self.create_document('notice.pdf', Document.FileType.PDF))
+
+                self.assertNotIsInstance(caught.exception, PageLimitOCRError)
+
+    def test_page_limit_code_in_success_response_is_ignored(self):
+        """code 값은 오류 응답에서만 본다."""
+        content = json.dumps({'code': '0011', 'images': [NOTICE_PAGE]}).encode()
+        self.post.return_value = clova_response(content=content)
+
+        self.assertEqual(run_clova_ocr(self.create_document())['confidence'], 0.9)
 
     def test_network_error_raises(self):
         """timeout과 연결 오류는 OCRError가 된다."""
@@ -490,6 +646,62 @@ class PipelineIntegrationTests(ClovaTestCase):
 
         self.assertEqual(document.status, Document.Status.DONE)
         self.assertTrue(document.low_confidence)
+
+    def test_threshold_boundary(self):
+        """기준값(0.7)과 같으면 낮음이 아니고, 그보다 작으면 낮음이다."""
+        for confidence, expected in ((0.7, False), (0.71, False), (0.69, True)):
+            with self.subTest(confidence=confidence):
+                self.post.return_value = clova_response([page(
+                    field('납부기한', line_break=True),
+                    field('8월', confidence), field('31일', confidence, line_break=True),
+                    field('6,250원', 0.99, line_break=True),
+                    field('아산시청', 0.99, line_break=True),
+                )])
+
+                document = self.process(self.create_document())
+
+                self.assertEqual(document.low_confidence, expected)
+
+    def test_clean_document_with_one_low_agency_word_is_not_low_confidence(self):
+        """깨끗한 문서는 기관 낱말 하나의 신뢰도가 낮아도 '신뢰도 낮음'이 아니다."""
+        self.post.return_value = clova_response([page(
+            field('신청'), field('기한', line_break=True),
+            field('2027년', 0.99), field('1월', 0.99), field('3일까지', 0.99, line_break=True),
+            field('35,000원', 0.99, line_break=True),
+            field('출입국·외국인관서)', 0.42, line_break=True),
+            field('대전출입국', 0.93), field('·외국인사무소', 0.93, line_break=True),
+        )])
+
+        document = self.process(self.create_document())
+
+        self.assertEqual(document.status, Document.Status.DONE)
+        self.assertFalse(document.low_confidence)
+
+    def test_blurry_document_is_low_confidence(self):
+        """흐린 문서는 기한·금액·기관이 모두 낮게 읽혀 '신뢰도 낮음'이 된다(W1 흐린 샘플의 모양)."""
+        self.post.return_value = clova_response([page(
+            field('납부기한', 0.8, line_break=True),
+            field('2026년', 0.61), field('8월', 0.61), field('11일', 0.6, line_break=True),
+            field('6,250원', 0.72, line_break=True),
+            field('문의:', 0.44), field('이산시청', 0.44), field('제우과', 0.44, line_break=True),
+        )])
+
+        document = self.process(self.create_document())
+
+        self.assertEqual(document.status, Document.Status.DONE)
+        self.assertTrue(document.low_confidence)
+
+    def test_page_limit_fails_at_ocr(self):
+        """페이지 수 제한으로 거부된 문서도 FAILED(step=OCR)가 되고 응답 값이 로그에 남지 않는다."""
+        content = json.dumps({'code': '0011', 'message': 'No more than 10 pages.', 'path': INVOKE_URL})
+        self.post.return_value = clova_response(status=400, content=content.encode())
+
+        document, logged = self.process_expecting_failure(self.create_document('notice.pdf', Document.FileType.PDF))
+
+        self.assert_failed_at_ocr(document)
+        self.assertIn('PageLimitOCRError', logged)
+        self.assertNotIn(INVOKE_URL, logged)
+        self.assertNotIn('No more than', logged)
 
     def test_no_key_word_sets_low_confidence(self):
         self.post.return_value = clova_response([page(field('안내문', line_break=True))])
