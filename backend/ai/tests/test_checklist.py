@@ -343,6 +343,33 @@ class ChecklistLLMTests(ChecklistBase, TestCase):
             with self.subTest(method=method):
                 self.assertEqual(pay_text(method), korean)
 
+    def test_translation_keeps_decimal_fraction(self):
+        """소수 부분은 0을 지우지 않음: 10.05 → 10.5는 거부. 날짜(31.08.2026·3.1.2027)·천 단위(6.250)는 그대로 통과."""
+        from ai.chatbot.checklist import _numbers
+
+        self.assertNotEqual(_numbers("10.05"), _numbers("10.5"))
+        self.assertNotEqual(_numbers("10,05"), _numbers("10.5"))
+        self.assertEqual(_numbers("10.05"), _numbers("10,05"))
+        self.assertEqual(_numbers("2026년 8월 31일"), _numbers("31.08.2026"))
+        self.assertEqual(_numbers("2027년 1월 3일"), _numbers("3.1.2027"))
+        self.assertEqual(_numbers("6,250원"), _numbers("6.250 won"))
+
+        result = {**RESULT, "amount": "10.05달러"}
+        korean = self.build(result, v=self.v())["checklist"][0]["text"]
+        self.assertIn("10.05", korean)
+
+        def pay_text(text):
+            out = self.build(result, v=self.v(), language="vi", llm=self.llm(
+                {"index": 0, "text": text, "detail": "Hạn nộp: 31.08.2026", "method": "Quầy ngân hàng, tài khoản ảo, Wetax"}))
+            return out["checklist"][0]["text"]
+
+        for ok in ("Nộp 10.05 đô la trước 31.08.2026", "Nộp 10,05 đô la trước 31/8/2026"):
+            with self.subTest(ok=ok):
+                self.assertEqual(pay_text(ok), ok)
+        for bad in ("Nộp 10.5 đô la trước 31.08.2026", "Nộp 10.50 đô la trước 31.08.2026"):
+            with self.subTest(bad=bad):
+                self.assertEqual(pay_text(bad), korean)
+
     def test_prompt_asks_for_arabic_digits_and_year(self):
         self.build(v=self.v(), language="th")
         system = self.complete.call_args.args[0]
