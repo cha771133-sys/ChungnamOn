@@ -126,10 +126,12 @@ Admin **공식자료 변경 후보**에 `수동 TXT`로 표시된다. 상세의 
   INACTIVE, 미승인, 실패, 처리 도중 해시/승인 버전 변경은 자동 활성화하지 않는다.
   이 기능은 AI 청크·임베딩·RAG 알고리즘을 변경하지 않는다.
 
-기존 AI의 **비정상 임베딩 응답 검증은 미해결 [#78](https://github.com/cha771133-sys/ChungnamOn/issues/78)**
-범위다. Ollama 본문 임베딩이 빈 배열을 반환하면 청크 없이 완료·ACTIVE로 기록되는 사례가
-별도 mock으로 재현되어 있다. 이번 TXT 기능의 정상 응답·예외 테스트가 이 문제를 해결한 것은
-아니며, 실제 임베딩 운영 전 AI 담당자가 #78의 응답 검증과 완료 처리를 확인해야 한다.
+비정상 임베딩 응답으로 청크 없이 완료·`ACTIVE`로 기록되던
+[#78](https://github.com/cha771133-sys/ChungnamOn/issues/78)은
+[PR #81](https://github.com/cha771133-sys/ChungnamOn/pull/81)에서 수정되어 `dev`에 반영되었다.
+`build_source_chunks()`는 저장 전에 임베딩 결과를 검증하며, 검증 실패 시 해당 자료의 신규 청크
+저장·재처리 완료·자동 `ACTIVE` 전환을 하지 않는다. `ai/tests/test_integration.py`의 회귀 테스트와
+PR CI 통과로 확인한 범위이며, 실제 OpenAI/Ollama 외부 서비스에서의 종단 간 운영 검증은 별도로 필요하다.
 
 신규 모델 필드·마이그레이션은 없다. 테스트는 Django 격리 DB와 임시 TXT, 로컬 hash 임베딩 또는
 mock만 사용한다. Railway·운영 DB·실제 공식 사이트·외부 임베딩/LLM 서비스로 검증하지 않는다.
@@ -290,7 +292,7 @@ python manage.py shell -c "from ai.chatbot import build_source_chunks; print(bui
 | 신규 공식자료 수집 | 문서는 `status=PENDING`, `review_status=PENDING_REVIEW`, `version=0`, `ai_reprocessing_required=False`이며 승인 본문·해시는 비어 있다. 수집 본문·해시는 검토 대기 `SourceRevision`에 저장한다. 문서의 `last_success_at`·`observed_started_at`·`observed_hash`·`updated_at`을 기록하며 승인 본문 확인일 `collected_at`은 아직 없다. |
 | 관리자 승인·AI 재처리 대기 | 후보의 본문·해시·출처 메타데이터와 `collected_at`을 문서에 반영한다. 문서와 후보의 `review_status=APPROVED`·`reviewed_by`·`reviewed_at`을 기록하고, 문서의 `version`을 1 증가시키며 `updated_at`을 갱신한다. 최초·본문 변경 승인 시 `ai_reprocessing_required=True`, `status=PENDING`으로 두되 기존 `INACTIVE`는 유지한다. |
 | AI 재처리 성공 | 아래 완료 검증을 통과한 재처리 대기 자료만 `status=ACTIVE`, `ai_reprocessing_required=False`, `version+1`, `updated_at`을 함께 반영한다. 청크는 승인 본문 해시를 기록하여 추가하고 기존 청크·ID는 보존한다. |
-| AI 재처리 실패·청크 없음 | 임베딩 예외가 나면 해당 자료의 저장·완료 처리를 하지 않고 예외를 반환한다. 분할 결과가 비어 있어도 완료로 기록하지 않는다. 문서의 기존 상태·버전·재처리 플래그와 기존 청크는 유지하며 별도 실패 상태로 바꾸지 않는다. 앞서 완료된 다른 자료까지 되돌리지는 않는다. |
+| AI 재처리 실패·청크 없음 | 임베딩 호출 또는 결과 검증에서 예외가 나면 해당 자료의 저장·완료 처리를 하지 않고 예외를 반환한다. 분할 결과가 비어 있어도 완료로 기록하지 않는다. 문서의 기존 상태·버전·재처리 플래그와 기존 청크는 유지하며 별도 실패 상태로 바꾸지 않는다. 앞서 완료된 다른 자료까지 되돌리지는 않는다. |
 | 관리자의 사용 중지 | Admin에서 `status=INACTIVE`로 저장하면 `version+1`·`updated_at`을 반영하며 승인 정보와 재처리 플래그는 유지한다. 수집·재승인·AI 완료가 자동으로 재활성화하지 않으며 검색에서도 제외한다. |
 | 본문 변경 후 재승인 | 변경 수집만으로 승인 본문·해시·청크는 바꾸지 않는다. 변경 후보 승인 시 새 본문·해시와 검토 정보를 반영하고 `version+1`, `ai_reprocessing_required=True`, `status=PENDING`(기존 `INACTIVE` 유지)으로 전환한다. 이전 청크는 남지만 재처리 플래그·상태·해시 조건으로 최신 검색에서 제외된다. |
 
@@ -314,11 +316,18 @@ python manage.py shell -c "from ai.chatbot import build_source_chunks; print(bui
 자료는 완료로 다시 기록하거나 상태·버전을 바꾸지 않는다. 이미 `ACTIVE`지만 재처리 대기라면
 완료와 `version+1`만 반영하며 새 활성화 수(`activated`)에는 포함하지 않는다.
 
-단, 새 청크 경로는 임베딩 함수가 예외 없이 반환하면 성공으로 간주하며, `indexing.py`는
-반환된 벡터 개수·차원을 직접 검증하지 않는다. Gemini 임베더는 이를 검증하지만 Ollama
-임베더에는 같은 검사가 없다. 비정상 Ollama 응답(`embeddings=[]`)을 모의하면 청크가 없어도
-완료·`ACTIVE`로 기록되는 문제가 재현되었다. 이는 AI 담당 범위의 미해결 결함이며,
-실제 외부 서비스에서의 발생 여부는 미검증이다.
+`indexing.py`의 `build_source_chunks()`는 새 청크를 저장하기 전에 `embed_passages()`의 반환값을
+`_check_vectors()`로 검증한다. 결과와 각 벡터의 자료형을 검사하며, 임베딩 개수가 청크 개수와
+다르거나 빈 벡터·`AI_EMBED_DIM`과의 차원 불일치·NaN·무한대·문자열·bool 값 등이 있으면
+`EmbeddingResultError`를 발생시킨다. 검증 실패 시 해당 자료의 신규 청크를 저장하지 않고
+재처리 완료·자동 `ACTIVE` 전환도 하지 않으며, 기존 상태·재처리 플래그·`version`·기존 청크를
+유지한다. 앞서 정상 완료된 다른 자료는 되돌리지 않는다. 정상 결과도 기존 해시·버전·승인·
+`INACTIVE` 보호 및 재처리 플래그 조건을 통과해야 기존 정책대로 완료·자동 `ACTIVE` 전환한다.
+반환 통계 `chunks`는 실제 저장된 청크 수를 집계한다.
+
+회귀 테스트는 빈 결과·비정상 벡터와 Ollama HTTP 200 / `embeddings=[]` 모의 응답의 실패 처리,
+기존 상태·청크 보존, 정상 처리 시 자동 `ACTIVE` 전환과 실제 저장 수 집계를 확인한다.
+이는 코드와 자동 테스트로 확인한 동작이며 실제 외부 서비스의 종단 간 운영 검증과는 구분한다.
 
 완료 직전 해시·버전이 일치하지 않거나 승인이 취소·반려되었거나 `INACTIVE`라면 해당 작업의 재처리 완료 기록과 자동 `ACTIVE`
 전환을 수행하지 않는다. 이전 작업은 최신 자료의 상태·재처리 플래그·완료 기록을 덮어쓰지 않는다.
