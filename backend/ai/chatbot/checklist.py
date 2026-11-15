@@ -27,6 +27,7 @@ import logging
 from collections import Counter
 import os
 import re
+import unicodedata
 
 from .llm import get_llm
 from .prompts import lang_name
@@ -43,7 +44,8 @@ MAX_SOURCE_CHARS = 1500
 MAX_FIELD_CHARS = 1000
 DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-NUMBER_RE = re.compile(r"\d+(?:[.,\s]\d{3})*")
+# 천 단위 구분(6,250 / 6.250 / 6 250)은 구분 기호 뒤가 정확히 숫자 3개일 때만. 3.1.2027의 ".202"를 천 단위로 읽지 않게
+NUMBER_RE = re.compile(r"\d+(?:[.,\s]\d{3}(?!\d))*")
 
 # 대본에 들어가면 안 되는 것: 마스킹 표시·전화번호·주민/외국인등록번호·계좌번호·긴 숫자·이메일
 PRIVATE_PATTERNS = [re.compile(p) for p in (
@@ -189,7 +191,9 @@ SYSTEM = """너는 외국인 주민이 받은 한국어 행정문서의 할 일 
 [할 일]의 각 항목을 [공식 자료]와 비교하고, 글자는 {lang}로 옮겨.
 번역 규칙:
 - text·detail·method·note를 {lang}로 쉽게 써. 내용을 더하거나 빼지 마.
-- 금액·날짜의 숫자는 그대로 써 (예: 6,250원 → 6,250 won, 8월 31일 → 31/8). 숫자를 바꾸거나 빼지 마.
+- 금액·날짜의 숫자는 원문 그대로 아라비아 숫자(0~9)로 써. 연도도 빼지 말고 서기 그대로 써.
+  현지 숫자(३, ๓ 등)·단위(万 등)·불기 연도·월 이름(January 등)으로 바꾸지 마.
+  (예: 6,250원 → 6,250 won, 2026년 8월 31일 → 31/8/2026). 숫자를 바꾸거나 빼거나 더하지 마.
 state 규칙 (확실하지 않으면 원래 state 그대로):
 - state가 CONFIRMED인 항목은, [공식 자료]에 사람·상황에 따라 달라지는 조건(예: 납부 방법에 따라 필요 없음)이 있을 때만 CONDITIONAL로 바꿔.
 - kind가 docs인 항목(준비서류)은 [공식 자료]가 그 서류가 필요하다고 직접 말하면 CONFIRMED,
@@ -233,9 +237,18 @@ def _user_message(drafts, texts) -> str:
     return f"[할 일]\n{json.dumps(todo, ensure_ascii=False, indent=1)}\n\n[공식 자료]\n{sources}"
 
 
+def _ascii_digits(text: str) -> str:
+    """현지 숫자(데바나가리 ३, 태국 ๓ 등 유니코드 십진 숫자)를 0~9로 바꾼다."""
+    return "".join(str(unicodedata.decimal(ch)) if ch.isdecimal() and not ch.isascii() else ch for ch in text)
+
+
 def _numbers(text: str) -> Counter:
-    """금액·날짜 숫자를 개수까지 센다. 6,250 / 6.250 / 6 250은 모두 6250으로 본다."""
-    return Counter(re.sub(r"\D", "", n) for n in NUMBER_RE.findall(text))
+    """금액·날짜 숫자를 개수까지 센다.
+
+    6,250 / 6.250 / 6 250은 모두 6250, 03과 3은 같은 숫자로 본다. 현지 숫자는 0~9로 바꿔서 비교한다.
+    万 같은 단위·불기 연도·월 이름은 같은 값인지 확인할 수 없어서 맞추지 않는다 (→ 한국어 초안 유지).
+    """
+    return Counter(str(int(re.sub(r"\D", "", n))) for n in NUMBER_RE.findall(_ascii_digits(text)))
 
 
 def _translated(draft: dict, raw: dict) -> dict | None:

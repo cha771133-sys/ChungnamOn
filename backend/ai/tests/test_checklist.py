@@ -292,6 +292,46 @@ class ChecklistLLMTests(ChecklistBase, TestCase):
         ko = self.build(v=self.v(), language="ko", llm=self.llm({"index": 2, "text": "다른 문장"}))
         self.assertEqual(ko["checklist"][2]["text"], "고지서 준비하기")
 
+    def test_translation_number_formats_by_language(self):
+        """언어별 숫자 표기: 같은 값이면 통과, 값이 바뀌거나 확인할 수 없는 표기면 한국어 유지."""
+        korean = "2026년 8월 31일까지 6,250원 내기"
+        method = "Wetax"
+
+        def pay_text(text, detail):
+            out = self.build(v=self.v(), language="vi", llm=self.llm(
+                {"index": 0, "text": text, "detail": detail, "method": method}))
+            return out["checklist"][0]["text"]
+
+        accepted = {
+            "vi 6.250 / 앞에 0": ("Nộp 6.250 won trước ngày 31/08/2026", "Hạn nộp: 31/08/2026"),
+            "uz 공백 구분 / 점 날짜": ("6 250 von, 31.08.2026 gacha to'lang", "Muddat: 31.08.2026"),
+            "uz NBSP 구분": ("6 250 von, 31.8.2026 gacha", "Muddat: 31.8.2026"),
+            "zh 年月日": ("2026年8月31日前缴纳6,250韩元", "缴纳截止：2026年8月31日"),
+            "ne 데바나가리 숫자": ("२०२६/८/३१ भित्र ६,२५० वन तिर्नुहोस्", "अन्तिम मिति: ३१/८/२०२६"),
+            "th 태국 숫자": ("ชำระ ๖,๒๕๐ วอน ภายใน ๓๑/๘/๒๐๒๖", "กำหนด: ๓๑/๘/๒๐๒๖"),
+        }
+        for name, (text, detail) in accepted.items():
+            with self.subTest(name):
+                self.assertEqual(pay_text(text, detail), text)
+
+        rejected = {
+            "zh 万 단위": ("2026年8月31日前缴纳0.625万韩元", "缴纳截止：2026年8月31日"),
+            "th 불기 연도": ("ชำระ 6,250 วอน ภายใน 31/8/2569", "กำหนด: 31/8/2569"),
+            "en 월 이름": ("Pay 6,250 won by August 31, 2026", "Deadline: August 31, 2026"),
+            "연도 빠짐": ("Nộp 6.250 won trước ngày 31/8", "Hạn nộp: 31/8"),
+            "금액 바뀜": ("Nộp 6.520 won trước ngày 31/8/2026", "Hạn nộp: 31/8/2026"),
+        }
+        for name, (text, detail) in rejected.items():
+            with self.subTest(name):
+                self.assertEqual(pay_text(text, detail), korean)
+
+    def test_prompt_asks_for_arabic_digits_and_year(self):
+        self.build(v=self.v(), language="th")
+        system = self.complete.call_args.args[0]
+        for phrase in ("아라비아 숫자(0~9)", "서기", "불기", "월 이름", "31/8/2026"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, system)
+
     def test_llm_failure_returns_korean_rule_items(self):
         expected = self.build(v=self.v(), llm={})["checklist"]
         with self.assertLogs("ai.chatbot.checklist", level="WARNING") as logs:
