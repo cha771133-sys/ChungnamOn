@@ -44,10 +44,11 @@ MAX_SOURCE_CHARS = 1500
 MAX_FIELD_CHARS = 1000
 DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-# 천 단위 구분(6,250 / 6.250 / 6 250)은 구분 기호 뒤가 정확히 숫자 3개일 때만. 3.1.2027의 ".202"를 천 단위로 읽지 않게
-NUMBER_RE = re.compile(r"\d+(?:[.,\s]\d{3}(?!\d))*")
-# 소수(10.05, 10,05): 구분 기호가 하나뿐이고 뒤가 3자리가 아닐 때. 31.08.2026·3.1.2027 같은 날짜와 6.250 천 단위는 해당 없음
-DECIMAL_RE = re.compile(r"(?<![\d.,])(\d+)[.,](\d{1,2}|\d{4,})(?![.,]?\d)")
+# 번역 숫자 검사용 날짜: 2026-08-31 / 2026.8.31 / 2026年8月31日 / 2026년 8월 31일 (연·월·일 순), 31/08/2026 / 3.1.2027 (일·월·연 순)
+YMD_RE = re.compile(r"(?<!\d)(\d{4})(?:\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})|\s*[年년]\s*(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]?)(?!\d)")
+DMY_RE = re.compile(r"(?<!\d)(\d{1,2})\s*([-/.])\s*(\d{1,2})\s*\2\s*(\d{4})(?!\d)")
+# 날짜를 뺀 숫자: 구분 기호(, . 공백) 뒤가 정확히 숫자 3개면 천 단위(6,250 / 6.250 / 35 000), 그 밖의 . ,는 소수(10.05)
+NUMBER_RE = re.compile(r"(?P<int>\d+(?:[.,\s]\d{3}(?!\d))*)(?:[.,](?P<frac>\d+))?")
 
 # 대본에 들어가면 안 되는 것: 마스킹 표시·전화번호·주민/외국인등록번호·계좌번호·긴 숫자·이메일
 PRIVATE_PATTERNS = [re.compile(p) for p in (
@@ -247,16 +248,27 @@ def _ascii_digits(text: str) -> str:
 def _numbers(text: str) -> Counter:
     """금액·날짜 숫자를 개수까지 센다.
 
-    6,250 / 6.250 / 6 250은 모두 6250으로 본다. 현지 숫자는 0~9로 바꿔서 비교한다.
-    앞의 0은 1~2자리(날짜의 월·일: 08 = 8)에서만 뺀다. 3자리 이상(계좌·번호의 041 등)은 0까지 그대로 비교한다.
-    소수 부분(10.05의 05)은 0을 지우지 않고 ".05"로 센다 → 10.05와 10.5는 다른 숫자.
-    万 같은 단위·불기 연도·월 이름은 같은 값인지 확인할 수 없어서 맞추지 않는다 (→ 한국어 초안 유지).
+    1. 날짜를 먼저 찾아 (연, 월, 일)로 맞춘다: 2026년 8월 31일 = 31/08/2026 = 31.8.2026 = 2026-08-31.
+       월 1~12, 일 1~31이 아니면 날짜로 보지 않는다.
+    2. 날짜를 뺀 숫자는 앞의 0까지 글자 그대로 비교한다 (041 ≠ 41, 01-123 ≠ 1-123).
+       천 단위 구분만 지운다 (6,250 = 6.250 = 6 250), 소수는 한 덩어리로 본다 (10.05 = 10,05 ≠ 10.5).
+    현지 숫자는 0~9로 바꿔서 비교한다. 万 같은 단위·불기 연도·월 이름은 같은 값인지 확인할 수 없어서
+    맞추지 않는다 (→ 한국어 초안 유지).
     """
+    found = []
+
+    def take_date(year, month, day, whole):
+        if 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+            found.append(f"{int(year)}-{int(month):02d}-{int(day):02d}")
+            return " "
+        return whole
+
     text = _ascii_digits(text)
-    fractions = [f".{m.group(2)}" for m in DECIMAL_RE.finditer(text)]
-    text = DECIMAL_RE.sub(lambda m: f"{m.group(1)} ", text)  # 정수 부분만 남기고 아래에서 함께 센다
-    digits = (re.sub(r"\D", "", n) for n in NUMBER_RE.findall(text))
-    return Counter([*(str(int(d)) if len(d) <= 2 else d for d in digits), *fractions])
+    text = YMD_RE.sub(lambda m: take_date(m[1], m[2] or m[4], m[3] or m[5], m[0]), text)
+    text = DMY_RE.sub(lambda m: take_date(m[4], m[3], m[1], m[0]), text)
+    for m in NUMBER_RE.finditer(text):
+        found.append(re.sub(r"\D", "", m["int"]) + (f".{m['frac']}" if m["frac"] else ""))
+    return Counter(found)
 
 
 def _translated(draft: dict, raw: dict) -> dict | None:

@@ -325,34 +325,56 @@ class ChecklistLLMTests(ChecklistBase, TestCase):
             with self.subTest(name):
                 self.assertEqual(pay_text(text, detail), korean)
 
-    def test_translation_keeps_leading_zero_of_long_numbers(self):
-        """앞의 0은 1~2자리(월·일)에서만 무시. 계좌번호 041-... → 41-...은 다른 숫자 → 한국어 유지."""
-        result = {**RESULT, "payment_methods": ["가상계좌 041-123-456789"]}
-        korean = "2026년 8월 31일까지 6,250원 내기"
-        method_ko = self.build(result, v=self.v())["checklist"][0]["method"]
-        self.assertIn("041-123-456789", method_ko)
-
-        def pay_text(method):
-            out = self.build(result, v=self.v(), language="vi", llm=self.llm(
-                {"index": 0, "text": "Nộp 6.250 won trước ngày 31/08/2026", "detail": "Hạn nộp: 31/08/2026",
-                 "method": method}))
-            return out["checklist"][0]["text"]
-
-        self.assertEqual(pay_text("Tài khoản ảo 041-123-456789"), "Nộp 6.250 won trước ngày 31/08/2026")
-        for method in ("Tài khoản ảo 41-123-456789", "Tài khoản ảo 041-123-0456789"):
-            with self.subTest(method=method):
-                self.assertEqual(pay_text(method), korean)
-
-    def test_translation_keeps_decimal_fraction(self):
-        """소수 부분은 0을 지우지 않음: 10.05 → 10.5는 거부. 날짜(31.08.2026·3.1.2027)·천 단위(6.250)는 그대로 통과."""
+    def test_number_check_dates_then_exact_digits(self):
+        """날짜는 (연,월,일)로 맞추고, 나머지 숫자는 앞의 0까지 글자 그대로 비교."""
         from ai.chatbot.checklist import _numbers
 
-        self.assertNotEqual(_numbers("10.05"), _numbers("10.5"))
-        self.assertNotEqual(_numbers("10,05"), _numbers("10.5"))
-        self.assertEqual(_numbers("10.05"), _numbers("10,05"))
-        self.assertEqual(_numbers("2026년 8월 31일"), _numbers("31.08.2026"))
-        self.assertEqual(_numbers("2027년 1월 3일"), _numbers("3.1.2027"))
-        self.assertEqual(_numbers("6,250원"), _numbers("6.250 won"))
+        same = {
+            "31/08/2026": ("2026년 8월 31일", "31/08/2026"),
+            "31.08.2026": ("2026년 8월 31일", "31.08.2026"),
+            "31.8.2026": ("2026년 8월 31일", "31.8.2026"),
+            "2026-08-31": ("2026년 8월 31일", "2026-08-31"),
+            "2026年8月31日": ("2026년 8월 31일", "2026年8月31日"),
+            "3.1.2027": ("2027년 1월 3일", "3.1.2027"),
+            "6,250": ("6,250원", "6,250 won"),
+            "6.250": ("6,250원", "6.250 won"),
+            "35 000": ("35,000원", "35 000 won"),
+            "10,05": ("10.05달러", "10,05 USD"),
+        }
+        for name, (ko, other) in same.items():
+            with self.subTest(same=name):
+                self.assertEqual(_numbers(ko), _numbers(other))
+        different = {
+            "계좌 2자리 구간": ("01-123-456789", "1-123-456789"),
+            "계좌 041": ("041-123-456789", "41-123-456789"),
+            "소수 10.05": ("10.05달러", "10.5 USD"),
+            "소수 10.50": ("10.05달러", "10.50 USD"),
+            "날짜 바뀜": ("2026년 8월 31일", "30/08/2026"),
+            "월/일 순서 바뀜(8/31)": ("2026년 8월 31일", "08/31/2026"),
+        }
+        for name, (ko, other) in different.items():
+            with self.subTest(different=name):
+                self.assertNotEqual(_numbers(ko), _numbers(other))
+
+    def test_translation_keeps_account_number_zeros(self):
+        """계좌번호 041-... → 41-..., 01-... → 1-...은 다른 숫자 → 한국어 유지."""
+        korean = "2026년 8월 31일까지 6,250원 내기"
+        for account, changed in (("041-123-456789", "41-123-456789"), ("01-123-456789", "1-123-456789")):
+            result = {**RESULT, "payment_methods": [f"가상계좌 {account}"]}
+            self.assertIn(account, self.build(result, v=self.v())["checklist"][0]["method"])
+
+            def pay_text(method):
+                out = self.build(result, v=self.v(), language="vi", llm=self.llm(
+                    {"index": 0, "text": "Nộp 6.250 won trước ngày 31/08/2026", "detail": "Hạn nộp: 31/08/2026",
+                     "method": method}))
+                return out["checklist"][0]["text"]
+
+            with self.subTest(account=account):
+                self.assertEqual(pay_text(f"Tài khoản ảo {account}"), "Nộp 6.250 won trước ngày 31/08/2026")
+                self.assertEqual(pay_text(f"Tài khoản ảo {changed}"), korean)
+
+    def test_translation_keeps_decimal_fraction(self):
+        """소수 10.05 → 10.5는 거부, 10.05·10,05는 통과."""
 
         result = {**RESULT, "amount": "10.05달러"}
         korean = self.build(result, v=self.v())["checklist"][0]["text"]
