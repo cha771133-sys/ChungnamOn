@@ -20,6 +20,14 @@ from .embedder import get_embedder, to_pgvector
 log = logging.getLogger(__name__)
 
 
+class EmbeddingConfigError(RuntimeError):
+    """검색 대상 청크는 있는데 질문 임베딩과 차원이 맞는 청크가 하나도 없음.
+
+    AI_EMBEDDER·AI_EMBED_DIM을 바꾸고 build_source_chunks()를 다시 돌리지 않은 설정 문제다.
+    '관련 자료 없음'(빈 결과)과 구분하려고 빈 결과 대신 이 오류를 낸다.
+    """
+
+
 @dataclass
 class SearchResult:
     chunk_id: int
@@ -187,7 +195,13 @@ class DbRetriever:
                 vecs.append(v)
                 keep.append(r)
         if not keep:
-            return []
+            # 청크는 있는데 차원이 하나도 안 맞음 → 자료 없음이 아니라 임베딩 설정 문제
+            dims = sorted({len(v) for v in (json.loads(r[2]) if isinstance(r[2], str) else r[2] for r in rows)
+                           if isinstance(v, list)})
+            raise EmbeddingConfigError(
+                f"검색 대상 청크 {len(rows)}개 중 질문 임베딩 차원({dim})과 맞는 청크가 없음 (저장된 차원: {dims}). "
+                "AI_EMBEDDER·AI_EMBED_DIM을 확인하고 build_source_chunks()로 청크를 다시 만들어야 함"
+            )
         rows = keep
         m = np.asarray(vecs, dtype=np.float32)
         m /= np.where((n := np.linalg.norm(m, axis=1, keepdims=True)) == 0, 1, n)

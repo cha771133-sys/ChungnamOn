@@ -145,6 +145,7 @@ def build_source_chunks(source_ids=None) -> dict:
     """청크·임베딩 생성과 재처리 완료·자동 ACTIVE 전환.
 
     반환: {"documents": 새로 청크를 만든 자료 수, "chunks": 만든 청크 수, "skipped": 이미 최신이라 청크 생성을 건너뛴 자료 수,
+           "empty": 분할된 청크가 0개라 완료하지 않은 자료 수,
            "completed": 재처리 완료로 표시한 자료 수, "activated": 그중 ACTIVE로 바꾼 자료 수,
            "changed": 처리 중 본문·승인 정보 버전·승인·사용 중지가 바뀌어 저장·완료하지 않은 자료 수}
     """
@@ -159,7 +160,7 @@ def build_source_chunks(source_ids=None) -> dict:
         ids = ids.filter(pk__in=list(source_ids))
     ids = list(ids.order_by("id").values_list("id", flat=True))
 
-    stats = {"documents": 0, "chunks": 0, "skipped": 0, "completed": 0, "activated": 0, "changed": 0}
+    stats = {"documents": 0, "chunks": 0, "skipped": 0, "empty": 0, "completed": 0, "activated": 0, "changed": 0}
     for document_id in ids:
         # 처리 시작 시점 값. 목록을 고른 뒤 대상에서 빠졌으면(사용 중지 등) 건너뜀
         start = _targets().only(*START_FIELDS).filter(pk=document_id).first()
@@ -180,7 +181,9 @@ def build_source_chunks(source_ids=None) -> dict:
 
         chunks = prepare_chunks(start.content_text, title=start.title)
         if not chunks:
-            stats["skipped"] += 1
+            # 분할 결과 0개: 완료로 기록하지 않고 PENDING 그대로. '이미 최신(skipped)'과 구분해서 셈
+            stats["empty"] += 1
+            log.warning("공식자료 %s: 분할된 청크가 없어 재처리를 완료하지 않음 (본문 확인 필요)", start.pk)
             continue
         vectors = embed_passages(chunks)  # 트랜잭션 밖 (외부 API)
         # 비정상 결과는 임베딩 예외와 같이: 이 자료는 저장·완료하지 않고 예외를 낸다 (기존 상태·청크 유지)

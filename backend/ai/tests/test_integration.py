@@ -77,7 +77,7 @@ class AIEnvMixin:
         doc.save(update_fields=["content_text", "content_hash"])
 
 
-STATS0 = {"documents": 0, "chunks": 0, "skipped": 0, "completed": 0, "activated": 0, "changed": 0}
+STATS0 = {"documents": 0, "chunks": 0, "skipped": 0, "empty": 0, "completed": 0, "activated": 0, "changed": 0}
 # 자동 ACTIVE 전환(완료 처리)이 바꿔도 되는 칸. 나머지(제목·기관 등 관리자 입력)는 그대로여야 함
 COMPLETION_FIELDS = {"status", "ai_reprocessing_required", "version", "updated_at"}
 
@@ -958,3 +958,89 @@ class ChatApiRagEndToEndTests(AIEnvMixin, TestCase):
             res = self.client.post(self.url, {"message": "질문"}, format="json")
         self.assertEqual(res.status_code, 503)
         self.assertNotIn("secret", res.content.decode())
+
+
+@unittest.skipUnless(DJANGO, "manage.py test로 실행")
+class EmbeddingConfigErrorTests(AIEnvMixin, TestCase):
+    """차원이 맞는 청크가 하나도 없으면 '자료 없음'이 아니라 설정 문제로 구분."""
+
+    def old_model_chunks(self):
+        from sources.models import SourceChunk
+
+        docs = [self.source("a"), self.source("b")]
+        SourceChunk.objects.update(embedding=[0.1] * 768)  # 예전 모델(768) 청크만 남음, 질문은 1024
+        return docs
+
+    def test_search_raises_when_no_chunk_matches_dimension(self):
+        from ai.chatbot.retriever import EmbeddingConfigError, search
+
+        self.old_model_chunks()
+        with self.assertRaises(EmbeddingConfigError) as ctx:
+            search("주민세", regions=["아산시"], min_score=-1)
+        self.assertIn("build_source_chunks", str(ctx.exception))
+        self.assertIn("768", str(ctx.exception))
+        self.assertNotIn("주민세", str(ctx.exception))  # 질문·본문 내용 없음
+
+    def test_no_chunks_or_partial_match_is_not_error(self):
+        from ai.chatbot import build_source_chunks
+        from ai.chatbot.retriever import search
+        from sources.models import SourceChunk
+
+        self.assertEqual(search("주민세", regions=["아산시"], min_score=-1), [])  # 청크 없음 → 그냥 빈 결과
+        a, b = self.old_model_chunks()
+        build_source_chunks([a.pk])  # a만 새 차원으로 다시 만듦
+        self.assertEqual(SourceChunk.objects.filter(source_document=a).count(), 2)
+        self.assertEqual([r.source_document_id for r in search("주민세", regions=["아산시"], min_score=-1)], [a.pk])
+
+    def test_verify_keeps_result_and_logs_config_problem(self):
+        from ai.chatbot import verify_interpretation
+        from ai.chatbot.integration import REASON_NO_SOURCES, _document_values, _unverified_result
+        from ai.chatbot.service import normalize_document
+
+        self.old_model_chunks()
+        with self.assertLogs("ai.chatbot.integration", level="ERROR") as logs:
+            out = verify_interpretation(RESULT)
+        # 결과는 예전(빈 검색 결과)과 똑같이: 항목별 UNVERIFIED, 자료 없음
+        expected = _unverified_result(_document_values(normalize_document(RESULT)), REASON_NO_SOURCES)
+        self.assertEqual(out, expected)
+        self.assertTrue(out["items"])
+        log_text = "\n".join(logs.output)
+        self.assertIn("임베딩 설정 문제", log_text)
+        self.assertNotIn("주민세", log_text)
+
+    def test_chatbot_answers_unverified_and_logs_config_problem(self):
+        """챗봇은 예전처럼 UNVERIFIED로 답하고, 로그로만 설정 문제를 구분."""
+        from ai.chatbot import chat_answer
+
+        docs = self.old_model_chunks()
+        official = [{"sourceDocumentId": d.pk} for d in docs]
+        with self.assertLogs("ai.chatbot.service", level="ERROR") as logs:
+            out = chat_answer("주민세 언제까지 내요?", {**RESULT, "language": "ko"}, [], "ko", official)
+        self.assertEqual((out["status"], out["grounded"], out["sources"]), ("UNVERIFIED", False, []))
+        self.assertTrue(out["answer"])
+        log_text = "\n".join(logs.output)
+        self.assertIn("임베딩 설정 문제", log_text)
+        self.assertNotIn("언제까지", log_text)  # 질문 내용 없음
+
+    def test_chatbot_other_embedding_errors_still_raise(self):
+        """401 같은 다른 임베딩 오류는 지금처럼 예외 → chatbot 앱에서 503."""
+        from ai.chatbot import chat_answer
+
+        self.old_model_chunks()
+        with mock.patch("ai.chatbot.embedder.HashEmbedder.embed_query",
+                        side_effect=RuntimeError("OpenAI 임베딩 요청 실패: HTTP 401")):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 401"):
+                chat_answer("주민세 언제까지 내요?", {**RESULT, "language": "ko"}, [], "ko", [])
+
+    def test_empty_chunking_counted_separately(self):
+        from ai.chatbot import build_source_chunks
+
+        doc = self.source("a", status="PENDING", reprocessing=True, index=False)
+        with mock.patch("ai.chatbot.indexing.prepare_chunks", return_value=[]), \
+                self.assertLogs("ai.chatbot.indexing", level="WARNING"):
+            stats = build_source_chunks([doc.pk])
+        self.assertEqual(stats, {**STATS0, "empty": 1})  # skipped(이미 최신)와 다른 칸
+        doc.refresh_from_db()
+        self.assertEqual((doc.status, doc.ai_reprocessing_required), ("PENDING", True))
+        # 이미 최신인 자료는 skipped
+        self.assertEqual(build_source_chunks([self.source("b").pk]), {**STATS0, "skipped": 1})

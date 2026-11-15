@@ -14,7 +14,7 @@ from enum import Enum
 from . import prompts
 from .config import CHUNGNAM_REGIONS, get_settings
 from .llm import get_llm
-from .retriever import SearchResult, search
+from .retriever import EmbeddingConfigError, SearchResult, search
 
 log = logging.getLogger(__name__)
 
@@ -190,6 +190,18 @@ def generate_answer(
     return _result(answer, status, [_source_dict(r) for r in used], doc, suggested, lang)
 
 
+def _search(query: str, **kw) -> list[SearchResult]:
+    """챗봇 검색. 차원 불일치(설정 문제)만 예전처럼 빈 결과로 두고(→ UNVERIFIED 답변) ERROR 로그로 구분.
+
+    다른 오류(401·timeout 등)는 그대로 올려서 chatbot 앱이 503으로 처리한다.
+    """
+    try:
+        return search(query, **kw)
+    except EmbeddingConfigError as exc:
+        log.error("챗봇 검색 불가 — 자료 없음이 아니라 임베딩 설정 문제: %s", exc)
+        return []
+
+
 def answer_with_results(
     doc: dict,
     message: str,
@@ -216,11 +228,11 @@ def answer_with_results(
     query = _search_query(doc, message, lang, history_msgs)
     k = get_settings().top_k
     if official_ids is None:
-        official, reference = search(query, regions=regions), []
+        official, reference = _search(query, regions=regions), []
     else:
         # 상위 k개를 먼저 자르면 연결 안 된 자료가 칸을 다 차지해 공식 자료가 밀려날 수 있음.
         # 넉넉히 검색해서 나눈 뒤 그룹마다 k개로 자름
-        results = search(query, regions=regions, top_k=k * SPLIT_SEARCH_FACTOR)
+        results = _search(query, regions=regions, top_k=k * SPLIT_SEARCH_FACTOR)
         official = [r for r in results if r.source_document_id in official_ids][:k]
         reference = [r for r in results if r.source_document_id not in official_ids][:k]
     # 검색어에는 질문 내용이 들어 있어서 로그에 남기지 않음
