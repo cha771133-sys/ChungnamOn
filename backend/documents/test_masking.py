@@ -396,7 +396,7 @@ class NameTests(SimpleTestCase):
             ('받는사람: 홍길동', '받는사람: [이름 가림]'),
             ('받는 분: 홍길동', '받는 분: [이름 가림]'),
             ('대상자: 홍길동', '대상자: [이름 가림]'),
-            ('■ 수신: 홍길동 귀하', '■ 수신: [이름 가림]'),
+            ('■ 수신: 홍길동 귀하', '■ 수신: [이름 가림] 귀하'),
             ('수신: 홍길동 납부기한: 2026년 8월 31일', '수신: [이름 가림] 납부기한: 2026년 8월 31일'),
             # 표 형식: 라벨만 있는 줄의 다음 줄
             ('수신\n홍길동', '수신\n[이름 가림]'),
@@ -410,7 +410,9 @@ class NameTests(SimpleTestCase):
         for text in (
             '수신: 아산시청', '수신: 아산시청 세무과', '수신: 국민건강보험공단 천안지사', '수신: 아산시장',
             '수신: 법무부장관', '수신: 대전출입국·외국인사무소장', '수신: 수신자 참조', '수신자: 천안세무서장 귀하',
-            '수신\n아산시청', '받는 사람: 아산시 배방읍 행정복지센터',
+            '수신\n아산시청', '받는 사람: 아산시 배방읍 행정복지센터', '수신: 충청남도 아산시청',
+            # 직위 없이 기관 이름만 있는 경우
+            '수신: 법무부', '수신: 고용노동부', '수신: 아산경찰서', '수신: 천안교육청', '수신\n법무부',
         ):
             with self.subTest(text=text):
                 result = mask_personal_info(text)
@@ -431,7 +433,61 @@ class NameTests(SimpleTestCase):
         """받는 사람 이름 뒤의 '귀하'는 떼고, 다른 곳에 나온 같은 이름도 가린다."""
         text = '수신: 홍길동 귀하\n홍길동 님께 안내드립니다.\n문의: 아산시청 세무과'
 
-        self.assertEqual(masked(text), '수신: [이름 가림]\n[이름 가림] 님께 안내드립니다.\n문의: 아산시청 세무과')
+        self.assertEqual(masked(text), '수신: [이름 가림] 귀하\n[이름 가림] 님께 안내드립니다.\n문의: 아산시청 세무과')
+
+    def test_recipient_name_with_title_or_agency_is_masked(self):
+        """이름과 기관·직위가 함께 있으면 이름만 가리고 기관·직위는 남긴다."""
+        for text, expected in (
+            ('수신: 홍길동 센터장 귀하', '수신: [이름 가림] 센터장 귀하'),
+            ('수신: 홍길동 소장', '수신: [이름 가림] 소장'),
+            ('수신: 행정복지센터장 홍길동', '수신: 행정복지센터장 [이름 가림]'),
+            ('수신: 아산시청 홍길동 주무관', '수신: 아산시청 [이름 가림]'),
+            ('수신: 아산시청 세무과 홍길동', '수신: 아산시청 세무과 [이름 가림]'),
+            ('수신: 법무부 홍길동', '수신: 법무부 [이름 가림]'),
+            ('수신: 홍길동 아산시청', '수신: [이름 가림] 아산시청'),
+            ('대상자: 응우옌 반 안 (NGUYEN VAN AN) 귀하', '대상자: [이름 가림] 귀하'),
+            # 표 형식: 라벨만 있는 줄의 다음 줄
+            ('수신\n홍길동 센터장 귀하', '수신\n[이름 가림] 센터장 귀하'),
+            ('수신\n아산시청 홍길동', '수신\n아산시청 [이름 가림]'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], expected)
+                self.assertEqual(result['masked_count'], 1)
+                self.assertEqual(masked(expected), expected)
+
+    def test_recipient_name_with_title_is_masked_elsewhere(self):
+        text = '수신: 홍길동 센터장 귀하\n홍길동 님께 안내드립니다.'
+
+        self.assertEqual(masked(text), '수신: [이름 가림] 센터장 귀하\n[이름 가림] 님께 안내드립니다.')
+
+    def test_recipient_name_that_looks_like_region_is_masked(self):
+        """'구'·'시'·'동'으로 끝나는 이름은 지역 이름으로 보지 않는다. 지역은 뒤에 기관 이름이 올 때만 남긴다."""
+        for text, expected in (
+            ('수신: 박진구', '수신: [이름 가림]'),
+            ('수신: 박진구 센터장', '수신: [이름 가림] 센터장'),
+            ('수신: 김민구 귀하', '수신: [이름 가림] 귀하'),
+            ('수신: 아산시 박진구', '수신: [이름 가림]'),
+            ('수신: 아산시 홍길동 세무과', '수신: [이름 가림] 세무과'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(masked(text), expected)
+
+    def test_consecutive_labels_mask_the_value_not_the_label(self):
+        """라벨이 연달아 나오면 라벨이 아니라 그 아래 이름을 가린다."""
+        for text, expected in (
+            ('대상자\n수신인\n홍길동', '대상자\n수신인\n[이름 가림]'),
+            ('납세자\n수신인\n홍길동', '납세자\n수신인\n[이름 가림]'),
+            ('성명\n대상자\n홍길동', '성명\n대상자\n[이름 가림]'),
+            ('수신\n받는 사람\n홍길동', '수신\n받는 사람\n[이름 가림]'),
+            ('주소\n수신자\n홍길동', '주소\n수신자\n[이름 가림]'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(text)
+
+                self.assertEqual(result['masked_text'], expected)
+                self.assertEqual(result['masked_count'], 1)
 
     def test_recipient_table_form_in_demo_document_is_unchanged(self):
         """데모 견본2의 모양: '대상자' 다음 줄이 '성명' 라벨이면 그 아래 이름만 가린다."""

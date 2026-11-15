@@ -39,7 +39,7 @@ _TABLE_LABELS = (
     r'연\s*락\s*처', r'전화\s*번호', r'휴대\s*(?:전화|폰)(?:\s*번호)?', r'성\s*명', r'이\s*름', r'납세자', r'납부자',
     r'가입자', r'신청인(?:\s*정보)?', r'출금\s*(?:은행|계좌)', r'환급\s*(?:은행|계좌)', r'계좌\s*번호', r'가상\s*계좌',
     r'과세\s*연도', r'세\s*목', r'세\s*액', r'납부\s*기한', r'고지\s*월', r'신청일', r'발행일', r'전자\s*납부\s*번호',
-    r'고지서\s*번호', r'합계\s*금액',
+    r'고지서\s*번호', r'합계\s*금액', r'수신(?:인|자)?', r'받는\s*(?:사람|분)', r'대상자',
 )
 _TABLE_LABEL_LINE = re.compile(rf'^{_BULLET}(?:{"|".join(_TABLE_LABELS)})[ \t]*[:：]?[ \t]*$')
 
@@ -126,12 +126,24 @@ NAME_LABEL = re.compile(
     rf'(?P<sep>[ \t]*[:：][ \t]*|[ \t]+|[ \t]*$)(?P<value>.*)$'
 )
 # 받는 사람 라벨(수신·받는 사람·대상자) 뒤에는 사람이 아니라 기관이나 직위가 올 수 있다(예: "수신: 아산시청",
-# "수신: 아산시장", "수신: 수신자 참조"). 이런 값은 이름으로 보지 않는다.
+# "수신: 아산시장"). 값을 낱말로 나눠 기관·직위·높임말만 남기고 나머지는 이름으로 보고 가린다
+# (예: "홍길동 센터장 귀하" → "[이름 가림] 센터장 귀하"). 판단은 _mask_recipient_value()에 있다.
 _RECIPIENT_TITLE = re.compile(
-    r'(?:시장|군수|구청장|도지사|장관|청장|서장|소장|지사장|이사장|센터장|위원장|본부장|원장|참조)[ \t]*(?:귀하|님)?[ \t]*$'
+    r'(?:시장|군수|구청장|도지사|장관|청장|서장|소장|지사장|이사장|센터장|위원장|본부장|원장)$'
 )
-# 이름 뒤에 붙는 높임말. 다른 곳의 같은 이름을 찾을 때는 떼고 찾는다.
-_HONORIFIC = re.compile(r'[ \t]*(?:귀하|님|씨)[ \t]*$')
+# AGENCY_WORDS에 없는 기관 이름. 받는 사람 값에서만 쓴다(기관 안내 줄 판단에는 영향을 주지 않는다).
+# "부"로 끝나는 낱말을 모두 기관으로 보면 이름(예: 김영부)을 놓치므로 부처 이름을 하나씩 적는다.
+_RECIPIENT_AGENCY = re.compile(
+    r'(?:법무|고용노동|행정안전|보건복지|외교|교육|국토교통|기획재정|여성가족|산업통상자원|문화체육관광|환경|국방|통일'
+    r'|농림축산식품|해양수산|중소벤처기업|과학기술정보통신)부'
+    r'|국세청|관세청|경찰청|경찰서|검찰청|교육청|보건소|우체국|법원|위원회'
+)
+_RECIPIENT_HONORIFICS = ('귀하', '님', '씨')
+# "수신: 수신자 참조"는 받는 사람이 따로 적혀 있다는 뜻이다.
+_RECIPIENT_REFERENCE = re.compile(r'^[ \t]*(?:수신(?:인|자)?[ \t]*)?참조[ \t]*$')
+# 지역 이름 모양의 낱말(충청남도, 아산시, 배방읍). 뒤에 기관 이름이 올 때만 지역으로 본다.
+# 구·동·리로 끝나는 낱말은 이름(박진구, 홍길동)과 구분할 수 없어 지역으로 보지 않는다.
+_REGION_WORD = re.compile(rf'^(?:{_SIDO}|[가-힣]{{1,6}}(?:시|군)|[가-힣0-9]+(?:읍|면))$')
 # 이름과 같은 줄에 이어 나온 다른 라벨(예: "성명: 홍길동 연락처: …"). 이름은 이 라벨 앞에서 끝난다.
 INLINE_NEXT_LABEL = re.compile(
     r'[ \t]+(?=(?:연\s*락\s*처|전화\s*번호|휴대\s*(?:전화|폰)|주\s*소|외국인\s*등록\s*번호|주민\s*등록\s*번호|여권\s*번호'
@@ -411,9 +423,51 @@ def _looks_like_name(value):
     return len(stripped.split()) <= 6
 
 
-def _recipient_is_agency(value):
-    """받는 사람 라벨의 값이 사람이 아니라 기관·직위인지."""
-    return bool(_AGENCY_WORD_PATTERN.search(value) or _RECIPIENT_TITLE.search(value))
+def _mask_recipient_value(value):
+    """받는 사람 라벨의 값에서 이름만 가린다. → (새 값, 가린 수, 찾은 이름 목록)
+
+    낱말마다 직위(센터장)·기관(아산시청)·높임말(귀하)이면 남기고, 그 밖의 낱말은 이름으로 보고 가린다.
+    지역 이름 모양의 낱말은 뒤에 기관 이름이 이어질 때만 남긴다. 애매한 낱말은 가린다(F1-4).
+    """
+    if _RECIPIENT_REFERENCE.match(value):
+        return value, 0, []
+    words = value.split()
+    kinds = []
+    for word in words:
+        if word in _RECIPIENT_HONORIFICS:
+            kinds.append('keep')
+        elif _RECIPIENT_TITLE.search(word):
+            kinds.append('keep')
+        elif _AGENCY_WORD_PATTERN.search(word) or _RECIPIENT_AGENCY.search(word):
+            kinds.append('agency')
+        elif _REGION_WORD.match(word):
+            kinds.append('region')
+        else:
+            kinds.append('name')
+    # 지역 낱말은 지역 낱말만 건너 바로 뒤에 기관 이름이 올 때만 남긴다(예: "아산시 배방읍 행정복지센터").
+    for index in range(len(words) - 1, -1, -1):
+        if kinds[index] == 'region':
+            following = kinds[index + 1] if index + 1 < len(words) else 'name'
+            kinds[index] = 'keep' if following in ('agency', 'keep-region') else 'name'
+            if kinds[index] == 'keep':
+                kinds[index] = 'keep-region'
+
+    parts, names, run = [], [], []
+    for word, kind in zip(words, kinds):
+        if kind == 'name':
+            run.append(word)
+            continue
+        if run:
+            names.append(' '.join(run))
+            parts.append(NAME_MARK)
+            run = []
+        parts.append(word)
+    if run:
+        names.append(' '.join(run))
+        parts.append(NAME_MARK)
+    if not names:
+        return value, 0, []
+    return ' '.join(parts), len(names), names
 
 
 def _name_parts(name):
@@ -474,11 +528,17 @@ def mask_names(lines):
             count += rest_count
             # 이름 자체가 이미 가려졌는지만 본다. 뒤에 이어진 다른 항목의 가림 표시는 상관없다.
             if not name.strip() or any(mark in name for mark in _ALL_MARKS) \
-                    or (not has_colon and not _looks_like_name(name)) \
-                    or (recipient and _recipient_is_agency(name)):
+                    or (not has_colon and not _looks_like_name(name)):
                 lines[index] = line[:match.start('value')] + name + rest
                 continue
-            found.append(_HONORIFIC.sub('', name) if recipient else name)
+            if recipient:
+                # 기관·직위는 남기고 이름만 가린다.
+                new_name, masked, names = _mask_recipient_value(name)
+                lines[index] = line[:match.start('value')] + new_name + rest
+                found.extend(names)
+                count += masked
+                continue
+            found.append(name)
             lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
             count += 1
             continue
@@ -489,9 +549,14 @@ def mask_names(lines):
         # 다른 가림 표시나 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
         if any(mark in candidate for mark in _ALL_MARKS) or any(char.isdigit() for char in candidate):
             continue
-        if recipient and _recipient_is_agency(candidate):
+        if recipient:
+            new_line, masked, names = _mask_recipient_value(candidate)
+            if masked:
+                lines[following] = new_line
+                found.extend(names)
+                count += masked
             continue
-        found.append(_HONORIFIC.sub('', candidate) if recipient else candidate)
+        found.append(candidate)
         lines[following] = NAME_MARK
         count += 1
 
