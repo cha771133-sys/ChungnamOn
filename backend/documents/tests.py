@@ -193,6 +193,30 @@ class DocumentProcessingTests(TestCase):
         self.user = create_user('owner@example.com')
         self.document = create_document(self.user)
 
+    def test_real_ocr_with_dummy_interpret_fails_at_interpreting(self):
+        ocr = {'text': '2026년도 주민세 납부 안내\n세액: 11,000원', 'confidence': 0.95}
+        with (
+            override_settings(OCR_MODE='clova', MASK_MODE='rules', INTERPRET_MODE='dummy'),
+            mock.patch.object(pipeline, 'run_ocr', return_value=ocr),
+            self.assertLogs(pipeline.logger, 'ERROR') as logs,
+        ):
+            process_document(self.document.id)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, Document.Status.FAILED)
+        self.assertEqual(self.document.step, Document.Step.INTERPRETING)
+        self.assertEqual(self.document.fail_reason, pipeline.FAIL_MESSAGES[Document.Step.INTERPRETING])
+        # 사용자 문구는 그대로 두고, 로그에서 설정 오류임을 알 수 있다.
+        self.assertIn('INTERPRET_MODE=llm', '\n'.join(logs.output))
+        self.assertFalse(InterpretationResult.objects.filter(document=self.document).exists())
+
+    def test_dummy_interpret_is_allowed_only_with_dummy_ocr(self):
+        with override_settings(OCR_MODE='dummy', INTERPRET_MODE='dummy'):
+            self.assertEqual(pipeline.interpret('원문', 'vi')['title'], '주민세 납부 안내')
+        with override_settings(OCR_MODE='clova', INTERPRET_MODE='dummy'):
+            with self.assertRaisesMessage(ValueError, 'INTERPRET_MODE=llm'):
+                pipeline.interpret('원문', 'vi')
+
     def test_process_document_saves_result(self):
         self.assertTrue(process_document(self.document.id))
 
@@ -820,15 +844,66 @@ class DocumentDeleteTests(APITestCase):
         self.assertTrue(Document.objects.filter(id=self.document.id).exists())
         self.assertTrue(self.storage.exists(self.file_name))
 
-    def test_file_delete_failure_still_returns_204(self):
+    def test_file_delete_failure_keeps_document_and_returns_503(self):
+        process_document(self.document.id)
+
         with (
-            mock.patch.object(FieldFile, 'delete', side_effect=OSError('disk')),
+            mock.patch.object(FieldFile, 'delete', side_effect=PermissionError('disk')),
             self.assertLogs('documents.views', 'ERROR'),
         ):
             response = self.client.delete(detail_url(self.document.id))
 
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {
+            'code': 'API_ERROR', 'message': '요청을 처리할 수 없습니다.', 'details': {},
+        })
+        self.assertTrue(Document.objects.filter(id=self.document.id).exists())
+        self.assertTrue(InterpretationResult.objects.filter(document_id=self.document.id).exists())
+        self.assertTrue(self.storage.exists(self.file_name))
+
+        # 파일 저장소가 복구되면 같은 요청으로 다시 지울 수 있다.
+        retry = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(retry.status_code, 204)
+        self.assertFalse(Document.objects.filter(id=self.document.id).exists())
+        self.assertFalse(self.storage.exists(self.file_name))
+
+    def test_missing_file_is_treated_as_deleted(self):
+        self.storage.delete(self.file_name)
+
+        response = self.client.delete(detail_url(self.document.id))
+
         self.assertEqual(response.status_code, 204)
         self.assertFalse(Document.objects.filter(id=self.document.id).exists())
+
+    def test_storage_reporting_missing_file_is_treated_as_deleted(self):
+        with mock.patch.object(FieldFile, 'delete', side_effect=FileNotFoundError('gone')):
+            response = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Document.objects.filter(id=self.document.id).exists())
+
+    def test_file_is_deleted_before_document_row(self):
+        calls = []
+        original_delete = Document.delete
+
+        def record_file_delete(field_file, save=True):
+            calls.append(('file', Document.objects.filter(id=self.document.id).exists()))
+            field_file.storage.delete(field_file.name)
+
+        def record_row_delete(document, *args, **kwargs):
+            calls.append(('row', None))
+            return original_delete(document, *args, **kwargs)
+
+        with (
+            mock.patch.object(FieldFile, 'delete', record_file_delete),
+            mock.patch.object(Document, 'delete', record_row_delete),
+        ):
+            response = self.client.delete(detail_url(self.document.id))
+
+        self.assertEqual(response.status_code, 204)
+        # 파일을 지울 때는 아직 DB 행이 있다.
+        self.assertEqual(calls, [('file', True), ('row', None)])
 
     def test_other_user_and_missing_document_get_404(self):
         self.client.force_authenticate(create_user('other@example.com'))

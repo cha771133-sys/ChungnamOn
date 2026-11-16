@@ -637,6 +637,20 @@ class RunClovaOcrTests(ClovaTestCase):
 
 
 class PipelineIntegrationTests(ClovaTestCase):
+    def setUp(self):
+        super().setUp()
+        # 이 클래스는 OCR·마스킹 연동만 본다. 실제 OCR에 더미 해석을 붙이는 조합은 pipeline 안전장치가 막으므로
+        # 테스트에서만 더미 해석 결과(original_text=마스킹된 원문)를 바꿔 끼운다.
+        dummy_interpret = pipeline.interpret
+
+        def interpret_as_dummy(masked_text, language):
+            with override_settings(OCR_MODE='dummy'):
+                return dummy_interpret(masked_text, language)
+
+        patcher = mock.patch.object(pipeline, 'interpret', side_effect=interpret_as_dummy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def process(self, document):
         process_document(document.id)
         document.refresh_from_db()

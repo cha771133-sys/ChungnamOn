@@ -127,6 +127,7 @@ def interpret(masked_text, language):
     해석에 실패하면 예외를 던진다. 실패한 문서는 더미 결과로 대체하지 않는다.
     llm은 checklist를 만들지 않고 빈 목록을 돌려준다(체크리스트는 S4가 만든다).
     llm은 DOCUMENTS_VERIFY_MODE=rag와 함께 쓴다. 검증이 dummy면 예외를 던진다.
+    dummy는 더미 OCR과만 쓴다. 실제 OCR(OCR_MODE가 dummy가 아님)이면 예외를 던진다.
     """
     mode = getattr(settings, 'INTERPRET_MODE', 'dummy')
     if mode == 'llm':
@@ -138,6 +139,9 @@ def interpret(masked_text, language):
         return interpret_document(masked_text, language)
     if mode != 'dummy':
         raise ValueError('지원하지 않는 INTERPRET_MODE입니다.')
+    # 실제 문서를 읽으면서 더미 해석을 쓰면 문서와 상관없는 주민세 결과가 저장된다. 설정 누락을 처리 실패로 드러낸다.
+    if getattr(settings, 'OCR_MODE', 'dummy') != 'dummy':
+        raise ValueError('실제 OCR을 쓸 때는 INTERPRET_MODE=llm이 필요합니다.')
     # 더미는 요청 언어와 상관없이 베트남어 번역만 돌려준다.
     return {
         'doc_type': '고지서',
