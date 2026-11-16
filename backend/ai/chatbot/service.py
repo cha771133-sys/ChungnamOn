@@ -9,6 +9,8 @@ DB 저장·권한 확인·대화 이력 조회는 호출하는 쪽(Django)이 �
 """
 import logging
 import re
+from datetime import date
+from difflib import SequenceMatcher
 from enum import Enum
 
 from . import prompts
@@ -20,6 +22,42 @@ log = logging.getLogger(__name__)
 
 # 공식/참고 자료를 나눌 때 먼저 검색하는 양 (top_k의 몇 배)
 SPLIT_SEARCH_FACTOR = 4
+# 같은 내용 자료로 묶을 제목 유사도 (보수적으로 높게)
+SAME_TITLE_RATIO = 0.9
+
+
+def _norm(text) -> str:
+    """비교용: 대소문자·공백·기호를 빼고 글자·숫자만."""
+    return re.sub(r"[\W_]+", "", str(text or "")).casefold()
+
+
+def _same_content(a: SearchResult, b: SearchResult) -> bool:
+    """같은 내용으로 볼 자료인지. 보수적으로: 같은 기관 + 아주 비슷한 제목일 때만."""
+    agency_a, agency_b = _norm(a.agency), _norm(b.agency)
+    title_a, title_b = _norm(a.title), _norm(b.title)
+    if not (agency_a and title_a and agency_a == agency_b and title_b):
+        return False
+    return title_a == title_b or SequenceMatcher(None, title_a, title_b).ratio() >= SAME_TITLE_RATIO
+
+
+def _recency(r: SearchResult) -> date:
+    """확인일(checked_at), 없으면 기준일(published_at). 둘 다 없으면 가장 오래된 것으로."""
+    return r.checked_at or r.published_at or date.min
+
+
+def prefer_recent(results: list[SearchResult]) -> list[SearchResult]:
+    """같은 내용 자료 묶음 안에서만 최근 자료를 앞으로. 묶음 자체의 자리(관련도 순)는 그대로 둔다.
+
+    묶음은 관련도가 가장 높은 자료가 있던 자리에 놓고, 묶음 안은 최근 순(같으면 원래 순서).
+    """
+    groups: list[list[SearchResult]] = []
+    for r in results:
+        group = next((g for g in groups if _same_content(g[0], r)), None)
+        if group is None:
+            groups.append([r])
+        else:
+            group.append(r)
+    return [r for g in groups for r in sorted(g, key=_recency, reverse=True)]
 
 
 class GroundingStatus(str, Enum):
@@ -235,6 +273,8 @@ def answer_with_results(
         results = _search(query, regions=regions, top_k=k * SPLIT_SEARCH_FACTOR)
         official = [r for r in results if r.source_document_id in official_ids][:k]
         reference = [r for r in results if r.source_document_id not in official_ids][:k]
+    # 같은 내용의 공식 자료가 여러 개면 최근 자료를 앞에 (S1이 최근 자료가 되게)
+    official = prefer_recent(official)
     # 검색어에는 질문 내용이 들어 있어서 로그에 남기지 않음
     log.info("챗봇 검색: 지역=%s 공식=%d 참고=%d", regions, len(official), len(reference))
 
