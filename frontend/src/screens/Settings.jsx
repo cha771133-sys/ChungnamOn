@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
 import { api, parseApiError } from '../lib/api'
 import { refreshNotifyPreference, saveNotifyPreference } from '../lib/notifications'
+import { connectPush, releasePushForLogout, requestPushPermission } from '../lib/push'
 import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
 import { useApp, purgeServerData } from '../store.js'
 import { LANGS } from '../data/mock.js'
@@ -11,7 +12,7 @@ import { T } from '../i18n.js'
 
 /** 설정 화면: 프로필(서버 저장), 안내 언어, 알림, 개인정보 안내, 로그아웃 */
 export default function Settings() {
-  const { data, update, openLang, setSheet, showToast, resetDemo, isStandalone, tab } = useApp()
+  const { data, update, openLang, setSheet, showToast, resetDemo, isStandalone, tab, pushStatus } = useApp()
   const L = LANGS.find((l) => l.code === data.profile.language)
   const [server, setServer] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -97,6 +98,8 @@ export default function Settings() {
 
   /** 서버의 Refresh Token을 무효화하고 로그인 화면으로 이동한다. */
   const logout = async () => {
+    // 토큰이 아직 유효할 때 이 기기의 알림 연결부터 해제한다
+    await releasePushForLogout()
     try {
       await apiLogout()
     } catch {
@@ -132,9 +135,8 @@ export default function Settings() {
             <Toggle checked={data.notify.enabled} onChange={setNotify} label={T('마감 알림 받기')} disabled={notifySaving} />
           </div>
           <p className="hint">{T('켜 두면 완료하지 않은 일정의 마감 7일 전과 1일 전에 알려드려요.')}</p>
-          {/* 서버 설정은 켜졌지만 알림 받을 기기가 아직 없을 때 (Firebase 연동 전) */}
-          {data.notify.enabled && hasSession() && !data.notify.deviceCount && <p className="hint">{T('이 기기를 알림 받을 기기로 연결하는 기능은 준비 중이에요.')}</p>}
-          <p className="hint">{T('iPhone은 홈 화면에 추가한 뒤에만 알림을 받을 수 있어요.')}</p>
+          {data.notify.enabled && hasSession() && <PushStatusNote status={pushStatus} userId={data.user?.id} />}
+          {pushStatus !== 'needs-install' && <p className="hint">{T('iPhone은 홈 화면에 추가한 뒤에만 알림을 받을 수 있어요.')}</p>}
         </section>
 
         <section className="settings-group">
@@ -171,5 +173,47 @@ export default function Settings() {
       </main>
       <TabBar active="settings" />
     </>
+  )
+}
+
+/** 이 기기가 알림을 받을 수 있는지 (알림을 켠 상태에서만 보인다) */
+const PUSH_NOTE = {
+  unconfigured: '이 기기를 알림 받을 기기로 연결하는 기능은 준비 중이에요.',
+  unsupported: '이 브라우저에서는 알림을 받을 수 없어요. Chrome이나 삼성 인터넷에서 열어 주세요.',
+  'needs-install': 'iPhone은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요. 공유 버튼에서 홈 화면에 추가한 뒤, 추가한 앱에서 다시 켜 주세요.',
+  denied: '브라우저에서 이 사이트의 알림이 막혀 있어요. 브라우저 설정에서 알림을 허용해 주세요.',
+  prompt: '이 기기에서 알림을 받으려면 알림을 허용해 주세요.',
+  connecting: '이 기기를 연결하는 중이에요...',
+  connected: '이 기기로 알림을 받아요.',
+  failed: '이 기기를 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.',
+}
+
+function PushStatusNote({ status, userId }) {
+  const [busy, setBusy] = useState(false)
+  const note = PUSH_NOTE[status]
+  if (!note) return null
+  const run = async (fn) => {
+    if (busy || userId == null) return
+    setBusy(true)
+    try {
+      await fn(userId)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className={`push-status is-${status}`} role="status">
+      <p className="hint">{T(note)}</p>
+      {status === 'prompt' && (
+        <button className="btn btn-outline btn-small" onClick={() => run(requestPushPermission)} disabled={busy}>
+          {T('알림 허용하기')}
+        </button>
+      )}
+      {status === 'failed' && (
+        <button className="btn btn-outline btn-small" onClick={() => run(connectPush)} disabled={busy}>
+          {T('다시 연결하기')}
+        </button>
+      )}
+    </div>
   )
 }

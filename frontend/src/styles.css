@@ -830,6 +830,13 @@ ol {
   background: var(--amber-soft);
   color: var(--ink);
 }
+.push-status .btn {
+  margin-top: 8px;
+}
+.push-status.is-connected .hint {
+  color: var(--teal);
+  font-weight: 600;
+}
 .switch:disabled {
   opacity: 0.6;
 }
