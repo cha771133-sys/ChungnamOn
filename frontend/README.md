@@ -66,6 +66,28 @@ New-NetFirewallRule -DisplayName "ChungnamOn dev" -Direction Inbound -Protocol T
 
 홈 화면 설치와 푸시 알림은 HTTPS에서만 동작해서 이 방법으로는 확인할 수 없습니다. 배포 주소(Vercel)에서 확인합니다.
 
+## 마감 알림 (Firebase 푸시)
+
+알림을 켠 로그인 계정이면 앱을 열 때 이 기기를 알림 받을 기기로 연결합니다 (`src/lib/push.ts`).
+Firebase 웹 SDK의 `register()`·`onRegistered()`로 받은 FID를 `POST /api/notifications/devices/`로 보내고, 알림을 끄거나 로그아웃하면 이 기기를 해제합니다. FCM 토큰(`getToken`) 방식은 서버가 받지 않아 쓰지 않습니다.
+
+아래 값이 모두 있어야 동작하고, 하나라도 없으면 푸시 기능이 꺼진 채로 빌드됩니다 (설정 화면에 "준비 중"으로 표시).
+값은 Firebase 콘솔 → 프로젝트 설정 → 내 앱(웹)과 Cloud Messaging → 웹 푸시 인증서에서 복사합니다. 공개용 값이라 비밀은 아니지만 git에는 올리지 않고 Vercel 환경변수와 `.env.local`에만 넣습니다.
+
+```
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
+VITE_FIREBASE_VAPID_KEY=
+```
+
+- 서비스 워커가 있어야 해서 `npm run dev`에서는 연결하지 않습니다. `npm run build` 후 `npm run preview`(localhost) 또는 배포 주소(HTTPS)에서 확인합니다.
+- 백엔드는 같은 Firebase 프로젝트의 서비스 계정(`FIREBASE_SERVICE_ACCOUNT_JSON`)으로 보냅니다.
+- iPhone은 홈 화면에 추가한 앱에서만 알림을 받습니다 (iOS 16.4 이상).
+- 잠금 화면 문구에는 업무명·금액 같은 문서 내용이 들어가지 않습니다. 서비스 워커(`public/sw.js`)가 서버의 한국어 문구를 안내 언어(vi·en·ko, 그 밖의 언어는 영어)로 바꿔 보여주고, 누르면 `/?schedule=일정ID`로 일정 상세를 엽니다.
+
 ## 다국어
 
 - 온보딩 문구: `src/i18n.js`의 `t(lang, key)`

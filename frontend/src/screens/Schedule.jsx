@@ -231,7 +231,7 @@ export function Schedule() {
  * 켜져 있으면 서버가 완료하지 않은 일정의 마감 7일 전과 1일 전에 보낸다.
  */
 function NotifyNote({ done = false }) {
-  const { data, tab } = useApp()
+  const { data, tab, pushStatus } = useApp()
   // 완료한 일정은 알림 설정과 상관없이 알림이 가지 않는다
   if (done) {
     return (
@@ -250,13 +250,24 @@ function NotifyNote({ done = false }) {
       </button>
     )
   }
-  // 알림은 켜졌지만 알림 받을 기기가 아직 없으면 (Firebase 연동 전) 알림이 간다고 약속하지 않는다
-  if (!data.notify.deviceCount) {
+  // 알림은 켜졌지만 이 기기가 연결되지 않았으면 이 기기로 알림이 간다고 약속하지 않는다
+  if (pushStatus !== 'connected' && pushStatus !== 'connecting') {
+    if (pushStatus === 'unconfigured' && !data.notify.deviceCount) {
+      return (
+        <p className="notify-note is-off">
+          <BellOff size={16} />
+          <span>{T('알림은 켜져 있지만, 이 기기를 연결하는 기능이 준비 중이라 아직 알림이 오지 않아요.')}</span>
+        </p>
+      )
+    }
     return (
-      <p className="notify-note is-off">
+      <button className="notify-note is-off" onClick={() => tab('settings')}>
         <BellOff size={16} />
-        <span>{T('알림은 켜져 있지만, 이 기기를 연결하는 기능이 준비 중이라 아직 알림이 오지 않아요.')}</span>
-      </p>
+        <span>
+          {T(data.notify.deviceCount ? '다른 기기로 알림을 보내요. 이 기기에서도 받으려면 설정을 확인하세요.' : '알림은 켜져 있지만 이 기기로는 아직 알림이 오지 않아요. 설정에서 확인하세요.')}
+        </span>
+        <ChevronRight size={16} />
+      </button>
     )
   }
   return (

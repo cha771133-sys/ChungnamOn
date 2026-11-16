@@ -549,4 +549,48 @@ export const UI = {
   '[계좌 가림]': { en: '[Account hidden]', vi: '[Đã che số tài khoản]' },
   '[여권번호 가림]': { en: '[Passport no. hidden]', vi: '[Đã che số hộ chiếu]' },
   기한: { en: 'Deadline', vi: 'Thời hạn' },
+  '이 브라우저에서는 알림을 받을 수 없어요. Chrome이나 삼성 인터넷에서 열어 주세요.': {
+    en: "This browser can't receive notifications. Please open the app in Chrome or Samsung Internet.",
+    vi: 'Trình duyệt này không nhận được thông báo. Hãy mở ứng dụng bằng Chrome hoặc Samsung Internet.',
+  },
+  'iPhone은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요. 공유 버튼에서 홈 화면에 추가한 뒤, 추가한 앱에서 다시 켜 주세요.': {
+    en: 'On iPhone, notifications work only in the app added to your Home Screen. Tap Share → Add to Home Screen, then turn this on again in that app.',
+    vi: 'Trên iPhone, chỉ ứng dụng đã thêm vào Màn hình chính mới nhận được thông báo. Nhấn Chia sẻ → Thêm vào MH chính, rồi bật lại trong ứng dụng đó.',
+  },
+  '브라우저에서 이 사이트의 알림이 막혀 있어요. 브라우저 설정에서 알림을 허용해 주세요.': {
+    en: 'Notifications for this site are blocked in your browser. Please allow them in your browser settings.',
+    vi: 'Thông báo của trang này đang bị chặn trên trình duyệt. Hãy cho phép thông báo trong cài đặt trình duyệt.',
+  },
+  '이 기기에서 알림을 받으려면 알림을 허용해 주세요.': {
+    en: 'Allow notifications to get them on this device.',
+    vi: 'Hãy cho phép thông báo để nhận trên thiết bị này.',
+  },
+  '이 기기를 연결하는 중이에요...': {
+    en: 'Connecting this device...',
+    vi: 'Đang kết nối thiết bị này...',
+  },
+  '이 기기로 알림을 받아요.': {
+    en: 'This device will get notifications.',
+    vi: 'Thiết bị này sẽ nhận thông báo.',
+  },
+  '이 기기를 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.': {
+    en: "Couldn't connect this device. Check your internet connection and try again.",
+    vi: 'Không kết nối được thiết bị này. Hãy kiểm tra kết nối mạng và thử lại.',
+  },
+  '알림 허용하기': {
+    en: 'Allow notifications',
+    vi: 'Cho phép thông báo',
+  },
+  '다시 연결하기': {
+    en: 'Connect again',
+    vi: 'Kết nối lại',
+  },
+  '다른 기기로 알림을 보내요. 이 기기에서도 받으려면 설정을 확인하세요.': {
+    en: 'Notifications go to your other device. To get them here too, check Settings.',
+    vi: 'Thông báo được gửi đến thiết bị khác của bạn. Để nhận cả ở đây, hãy xem Cài đặt.',
+  },
+  '알림은 켜져 있지만 이 기기로는 아직 알림이 오지 않아요. 설정에서 확인하세요.': {
+    en: "Notifications are on, but this device won't get them yet. Check Settings.",
+    vi: 'Thông báo đang bật nhưng thiết bị này chưa nhận được. Hãy xem Cài đặt.',
+  },
 }

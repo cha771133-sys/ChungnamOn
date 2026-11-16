@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { AUTH_EXPIRED_EVENT, SESSION_CHANGED_EVENT, tokenStore } from './lib/api'
 import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
 import { refreshNotifyPreference } from './lib/notifications'
+import { connectPush, disconnectPush, forgetPush, getPushStatus, releasePushForLogout, subscribePush, syncPushLanguage } from './lib/push'
+import { localScheduleId } from './lib/scheduleAdapter.js'
 import { t, setUiLang } from './i18n.js'
 import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
 import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
@@ -84,12 +86,15 @@ export default function App() {
     // 온보딩은 마쳤지만 토큰이 없으면(로그아웃·만료) 로그인부터
     if (!hasSession()) return [{ name: 'login', params: {} }]
     // 유저 플로우 n3 → n44 → n39: 마감 알림을 누르면 /?schedule=ID 로 열려 일정 상세로 이동
+    // 서버 알림의 ID는 서버 일정 번호라 화면 ID(ss번호)로 바꾼다. 이 기기에 없으면 일정 상세가 서버에서 불러온다
     const sid = new URLSearchParams(window.location.search).get('schedule')
-    if (sid && data.schedules.some((s) => s.id === sid)) {
+    if (sid) {
       window.history.replaceState(null, '', '/')
+      const scheduleId = data.schedules.some((s) => s.id === sid) ? sid : /^\d+$/.test(sid) ? localScheduleId(sid) : null
+      if (!scheduleId) return [{ name: 'schedule', params: {} }]
       return [
         { name: 'home', params: {} },
-        { name: 'scheduleDetail', params: { scheduleId: sid } },
+        { name: 'scheduleDetail', params: { scheduleId } },
       ]
     }
     return [{ name: 'home', params: {} }]
@@ -137,6 +142,26 @@ export default function App() {
     })
   }, [verifiedUser, verifyAttempt])
 
+  // 이 기기를 알림 받을 기기로 연결한다 (알림이 켜진 확인된 계정일 때). 끄면 이 기기만 서버에서 해제한다
+  const pushStatus = useSyncExternalStore(subscribePush, getPushStatus)
+  const notifyOn = data.notify.enabled
+  useEffect(() => {
+    if (verifiedUser == null) return
+    if (notifyOn) connectPush(verifiedUser)
+    else disconnectPush(verifiedUser)
+  }, [verifiedUser, notifyOn])
+
+  // 연결되면 계정의 등록 기기 수를 다시 받아 일정 화면 안내를 맞춘다
+  useEffect(() => {
+    if (pushStatus !== 'connected') return
+    refreshNotifyPreference((pref) => setData((d) => ({ ...d, notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))).catch(() => {})
+  }, [pushStatus])
+
+  // 잠금 화면 알림 문구도 안내 언어로 보이게 서비스 워커에 알려준다
+  useEffect(() => {
+    syncPushLanguage(data.profile.language)
+  }, [data.profile.language])
+
   // 인터넷이 다시 연결되면 계정 확인을 다시 시도한다
   useEffect(() => {
     const onOnline = () => setVerifyAttempt((n) => n + 1)
@@ -164,6 +189,8 @@ export default function App() {
     window.addEventListener('beforeinstallprompt', bip)
     // 토큰 갱신까지 실패하면 로그인 화면으로 보낸다
     const expired = () => {
+      // 토큰이 없어 서버에서 기기를 해제할 수 없으므로 이 기기에 저장한 연결 정보만 지운다
+      forgetPush()
       setData((d) => ({ ...d, ...purgeServerData(d), user: null }))
       setStack([{ name: 'login', params: {} }])
       setToast(t(langRef.current, 'sessionExpired'))
@@ -234,8 +261,10 @@ export default function App() {
     openLang: () => setSheet({ type: 'lang' }),
     /** 저장된 사용자 정보가 현재 세션과 맞지 않을 때 계정 확인을 다시 시도한다 */
     reverifyUser: () => setVerifyAttempt((n) => n + 1),
+    pushStatus,
     resetDemo: () => {
-      apiLogout().catch(() => {})
+      // 로그아웃 전에 아직 유효한 토큰으로 이 기기의 알림 연결을 해제한다
+      releasePushForLogout().finally(() => apiLogout().catch(() => {}))
       setData(fresh())
       setStack([{ name: 'language', params: {} }])
       showToast(T('데모 데이터를 처음 상태로 되돌렸어요'))
