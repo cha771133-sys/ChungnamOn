@@ -608,6 +608,55 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         prompt, _ = self.verify_prompt([self.hit(best, 0.8)])
         self.assertIn(fee.chunk_text, prompt)
 
+    def test_value_numbers_found_anywhere_in_document_value(self):
+        """금액·연락처에서 숫자 후보를 모두 뽑음: "1인당 35,000원"의 1은 짧아서 빼고 35,000으로 찾음 (CodeRabbit)."""
+        from ai.chatbot.integration import _literal_needles
+
+        self.assertEqual(_literal_needles({"amount": "1인당 35,000원", "agency": {"phone": "대표 02-2110-4092"}}),
+                         ["02-2110-4092", "35,000", "35000"])
+        self.assertEqual(_literal_needles({"amount": "1인 12원", "agency": {"phone": "내선 123"}}), [])
+
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요", 0)
+        fee = self.chunk(a, "A 수수료 35,000원", 1)
+        plain = self.source("b", title="자료 B", index=False)
+        best_b = self.chunk(plain, "B 개요", 0)
+        fee_b = self.chunk(plain, "B 수수료 35000원 (쉼표 없음)", 1)
+        result = {**C1_RESULT, "amount": "1인당 35,000원", "agency": {**C1_RESULT["agency"], "phone": ""}}
+        prompt, _ = self.verify_prompt([self.hit(best, 0.8), self.hit(best_b, 0.7)], result)
+        self.assertIn(fee.chunk_text, prompt)
+        self.assertIn(fee_b.chunk_text, prompt)
+        self.assertNotIn("A 개요\n\n…\n\nB", prompt)  # 다른 자료끼리는 안 섞임
+
+    def test_source_count_capped_and_no_empty_text(self):
+        """자료가 13개 이상이어도 전체 청크 상한(12)만큼만 반환, 빈 text 자료는 없음 (CodeRabbit)."""
+        from ai.chatbot.integration import VERIFY_MAX_CHUNKS, related_sources
+        from ai.chatbot.service import normalize_document
+
+        hits = []
+        for n in range(13):
+            d = self.source(f"d{n}", title=f"자료 {n}", index=False)
+            hits.append(self.hit(self.chunk(d, f"자료{n} 청크", 0), 0.9 - n * 0.01))
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            related = related_sources(normalize_document(C1_RESULT), limit=20)
+        self.assertEqual(len(related), VERIFY_MAX_CHUNKS)
+        self.assertTrue(all(r.text.strip() for r, _ in related))
+        self.assertEqual([d.pk for _, d in related], [h.source_document_id for h in hits[:VERIFY_MAX_CHUNKS]])
+
+        # 청크 본문이 비어 있는 자료는 출처로 내지 않음
+        empty = self.source("empty", title="빈 자료", index=False)
+        with mock.patch("ai.chatbot.integration.search", return_value=[self.hit(self.chunk(empty, "", 0), 0.95)]):
+            self.assertEqual(related_sources(normalize_document(C1_RESULT)), [])
+
+    def test_chunks_joined_by_chunk_order_not_id(self):
+        """청크 id가 아니라 chunk_order 순으로 이어 붙임 (CodeRabbit)."""
+        a = self.source("a", title="자료 A", index=False)
+        second = self.chunk(a, "A 두 번째 부분", 1)   # 먼저 만들어서 id가 더 작음
+        first = self.chunk(a, "A 첫 번째 부분", 0)
+        self.assertLess(second.pk, first.pk)
+        prompt, _ = self.verify_prompt([self.hit(second, 0.9), self.hit(first, 0.8)])
+        self.assertLess(prompt.index("A 첫 번째 부분"), prompt.index("A 두 번째 부분"))
+
     def test_at_most_three_chunks_per_source_value_chunk_first(self):
         a = self.source("a", title="자료 A", index=False)
         chunks = [self.chunk(a, f"A 본문 {i}번 청크", i) for i in range(5)]

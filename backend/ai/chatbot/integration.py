@@ -125,15 +125,24 @@ def _official_documents(ids):
     return out
 
 
-def _literal_needles(doc: dict) -> list[str]:
-    """청크에 글자 그대로 있는지 찾을 문서 값: 연락처 번호, 금액 숫자(예: "35,000원" → "35,000").
+# 문서 값 안의 숫자 덩어리 (35,000 / 02-2110-4092 / 1.5). 앞뒤는 숫자
+NUMBER_CANDIDATE_RE = re.compile(r"\d(?:[\d,.\-]*\d)?")
+MIN_NEEDLE_DIGITS = 4  # 이보다 짧은 숫자(1, 12 등)는 아무 청크에나 걸려서 안 찾음
 
-    너무 짧은 값(숫자 4자리 미만)은 아무 데나 걸려서 뺀다.
+
+def _literal_needles(doc: dict) -> list[str]:
+    """청크에 글자 그대로 있는지 찾을 문서 값: 연락처 번호, 금액 숫자.
+
+    값에서 숫자 후보를 모두 뽑은 뒤 숫자만 센 길이가 MIN_NEEDLE_DIGITS 이상인 것만 쓴다.
+    (예: "1인당 35,000원" → "35,000"과 쉼표 뺀 "35000", "대표 02-2110-4092" → "02-2110-4092")
     """
-    values = [str((doc.get("agency") or {}).get("phone") or "").strip()]
-    amount = re.search(r"\d[\d,.]*\d|\d", str(doc.get("amount") or ""))
-    values.append(amount.group(0) if amount else "")
-    return [v for v in dict.fromkeys(values) if len(re.sub(r"\D", "", v)) >= 4]
+    values = [str((doc.get("agency") or {}).get("phone") or ""), str(doc.get("amount") or "")]
+    needles = []
+    for value in values:
+        for n in NUMBER_CANDIDATE_RE.findall(value):
+            if len(re.sub(r"\D", "", n)) >= MIN_NEEDLE_DIGITS:
+                needles += [n, n.replace(",", "")]  # 청크에 6,250 / 6250 어느 쪽으로 적혀 있어도 찾게
+    return list(dict.fromkeys(needles))
 
 
 def _literal_chunks(official: dict, needles: list[str]) -> dict[int, list[tuple[int, str]]]:
@@ -179,7 +188,8 @@ def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchRe
         if h.source_document_id is not None:
             by_doc.setdefault(h.source_document_id, []).append(h)
     official = _official_documents(list(by_doc))
-    order = [i for i in by_doc if i in official][:limit]
+    # 자료마다 청크가 최소 1개는 들어가야 해서 자료 수도 전체 청크 상한을 넘지 않게
+    order = [i for i in by_doc if i in official][:min(limit, VERIFY_MAX_CHUNKS)]
     literal = _literal_chunks({i: official[i] for i in order}, _literal_needles(doc))
 
     # 자료별 후보 (우선순위 순, 중복 없이): [(청크 id, 본문)]
@@ -199,10 +209,17 @@ def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchRe
                 chosen[i].append(picks[i][rank])
                 total += 1
 
+    # 같은 자료 청크는 원문 순서(SourceChunk.chunk_order)로 이어 붙임. 청크 id 순서는 원문 순서와 다를 수 있음
+    from sources.models import SourceChunk
+
+    chunk_ids = [c for picked in chosen.values() for c, _ in picked]
+    position = dict(SourceChunk.objects.filter(pk__in=chunk_ids).values_list("id", "chunk_order"))
     out = []
     for i in order:
-        text = "\n\n…\n\n".join(t for _, t in sorted(chosen[i]))  # 청크 id 순 = 원문 순서
-        out.append((replace(by_doc[i][0], text=text), official[i]))
+        picked = sorted(chosen[i], key=lambda c: (position.get(c[0], 0), c[0]))
+        text = "\n\n…\n\n".join(t for _, t in picked if t)
+        if text.strip():  # 본문이 빈 자료는 출처로 내지 않음
+            out.append((replace(by_doc[i][0], text=text), official[i]))
     return out
 
 
