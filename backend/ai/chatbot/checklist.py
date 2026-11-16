@@ -27,6 +27,7 @@ import logging
 from collections import Counter
 import os
 import re
+import unicodedata
 
 from .llm import get_llm
 from .prompts import lang_name
@@ -43,7 +44,15 @@ MAX_SOURCE_CHARS = 1500
 MAX_FIELD_CHARS = 1000
 DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-NUMBER_RE = re.compile(r"\d+(?:[.,\s]\d{3})*")
+# 번역 숫자 검사용 날짜: 2026-08-31 / 2026.8.31 / 2026年8月31日 / 2026년 8월 31일 (연·월·일 순), 31/08/2026 / 3.1.2027 (일·월·연 순)
+# 앞뒤에 숫자나 "[-./]숫자"가 이어지면 날짜가 아님 (계좌번호 01-12-3456-789의 일부를 날짜로 읽지 않게)
+DATE_BEFORE = r"(?<!\d)(?<!\d[-./])"
+DATE_AFTER = r"(?![-./]?\d)"
+YMD_RE = re.compile(DATE_BEFORE + r"(\d{4})(?:\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})"
+                    r"|\s*[年년]\s*(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]?)" + DATE_AFTER)
+DMY_RE = re.compile(DATE_BEFORE + r"(\d{1,2})\s*([-/.])\s*(\d{1,2})\s*\2\s*(\d{4})" + DATE_AFTER)
+# 날짜를 뺀 숫자: 구분 기호(, . 공백) 뒤가 정확히 숫자 3개면 천 단위(6,250 / 6.250 / 35 000), 그 밖의 . ,는 소수(10.05)
+NUMBER_RE = re.compile(r"(?P<int>\d+(?:[.,\s]\d{3}(?!\d))*)(?:[.,](?P<frac>\d+))?")
 
 # 대본에 들어가면 안 되는 것: 마스킹 표시·전화번호·주민/외국인등록번호·계좌번호·긴 숫자·이메일
 PRIVATE_PATTERNS = [re.compile(p) for p in (
@@ -189,7 +198,9 @@ SYSTEM = """너는 외국인 주민이 받은 한국어 행정문서의 할 일 
 [할 일]의 각 항목을 [공식 자료]와 비교하고, 글자는 {lang}로 옮겨.
 번역 규칙:
 - text·detail·method·note를 {lang}로 쉽게 써. 내용을 더하거나 빼지 마.
-- 금액·날짜의 숫자는 그대로 써 (예: 6,250원 → 6,250 won, 8월 31일 → 31/8). 숫자를 바꾸거나 빼지 마.
+- 금액·날짜의 숫자는 원문 그대로 아라비아 숫자(0~9)로 써. 연도도 빼지 말고 서기 그대로 써.
+  현지 숫자(३, ๓ 등)·단위(万 등)·불기 연도·월 이름(January 등)으로 바꾸지 마.
+  (예: 6,250원 → 6,250 won, 2026년 8월 31일 → 31/8/2026). 숫자를 바꾸거나 빼거나 더하지 마.
 state 규칙 (확실하지 않으면 원래 state 그대로):
 - state가 CONFIRMED인 항목은, [공식 자료]에 사람·상황에 따라 달라지는 조건(예: 납부 방법에 따라 필요 없음)이 있을 때만 CONDITIONAL로 바꿔.
 - kind가 docs인 항목(준비서류)은 [공식 자료]가 그 서류가 필요하다고 직접 말하면 CONFIRMED,
@@ -233,9 +244,35 @@ def _user_message(drafts, texts) -> str:
     return f"[할 일]\n{json.dumps(todo, ensure_ascii=False, indent=1)}\n\n[공식 자료]\n{sources}"
 
 
+def _ascii_digits(text: str) -> str:
+    """현지 숫자(데바나가리 ३, 태국 ๓ 등 유니코드 십진 숫자)를 0~9로 바꾼다."""
+    return "".join(str(unicodedata.decimal(ch)) if ch.isdecimal() and not ch.isascii() else ch for ch in text)
+
+
 def _numbers(text: str) -> Counter:
-    """금액·날짜 숫자를 개수까지 센다. 6,250 / 6.250 / 6 250은 모두 6250으로 본다."""
-    return Counter(re.sub(r"\D", "", n) for n in NUMBER_RE.findall(text))
+    """금액·날짜 숫자를 개수까지 센다.
+
+    1. 날짜를 먼저 찾아 (연, 월, 일)로 맞춘다: 2026년 8월 31일 = 31/08/2026 = 31.8.2026 = 2026-08-31.
+       연도 1900~2100, 월 1~12, 일 1~31이 아니거나 앞뒤에 숫자·"[-./]숫자"가 이어지면 날짜로 보지 않는다.
+    2. 날짜를 뺀 숫자는 앞의 0까지 글자 그대로 비교한다 (041 ≠ 41, 01-123 ≠ 1-123).
+       천 단위 구분만 지운다 (6,250 = 6.250 = 6 250), 소수는 한 덩어리로 본다 (10.05 = 10,05 ≠ 10.5).
+    현지 숫자는 0~9로 바꿔서 비교한다. 万 같은 단위·불기 연도·월 이름은 같은 값인지 확인할 수 없어서
+    맞추지 않는다 (→ 한국어 초안 유지).
+    """
+    found = []
+
+    def take_date(year, month, day, whole):
+        if 1900 <= int(year) <= 2100 and 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+            found.append(f"{int(year)}-{int(month):02d}-{int(day):02d}")
+            return " "
+        return whole
+
+    text = _ascii_digits(text)
+    text = YMD_RE.sub(lambda m: take_date(m[1], m[2] or m[4], m[3] or m[5], m[0]), text)
+    text = DMY_RE.sub(lambda m: take_date(m[4], m[3], m[1], m[0]), text)
+    for m in NUMBER_RE.finditer(text):
+        found.append(re.sub(r"\D", "", m["int"]) + (f".{m['frac']}" if m["frac"] else ""))
+    return Counter(found)
 
 
 def _translated(draft: dict, raw: dict) -> dict | None:
