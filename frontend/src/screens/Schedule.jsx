@@ -6,7 +6,7 @@ import { useServerSchedules } from '../lib/useServerSchedules.js'
 import { createSchedule, deleteSchedule, getSchedule, updateSchedule, ScheduleExistsError } from '../lib/schedules'
 import { localScheduleId, mergeServerSchedules, serverScheduleId } from '../lib/scheduleAdapter.js'
 import { isCalendarDate } from '../lib/documentAdapter.js'
-import { parseApiError } from '../lib/api'
+import { parseApiError, StaleSessionError, tokenStore } from '../lib/api'
 import { T } from '../i18n.js'
 
 /** 일정 카드 (목록·달력 공통) */
@@ -442,11 +442,23 @@ export function ScheduleDetail({ scheduleId }) {
   // 이 기기에 없는 서버 일정(이미 등록된 일정으로 이동한 경우 등)은 서버에서 불러온다
   useEffect(() => {
     if (s || serverId == null) return
-    getSchedule(serverId)
-      .then((item) => update((d) => ({ schedules: mergeServerSchedules(d.schedules, [item], { ownerId: d.user?.id, complete: false }) })))
-      .catch(() => setLoadError('일정을 불러오지 못했어요.'))
+    // 요청 도중 로그아웃·계정 전환이 있으면 응답을 버린다 (다른 계정 일정으로 저장되지 않게)
+    // 저장된 사용자가 지금 로그인 세션과 같은 계정으로 확인된 경우에만 불러온다 (App의 계정 확인과 같은 기준)
+    const session = tokenStore.session()
+    const marker = tokenStore.marker()
+    const ownerId = marker && data.user?.session === marker ? data.user.id : null
+    if (ownerId == null) return
+    getSchedule(serverId, session)
+      .then((item) => {
+        if (tokenStore.session() !== session) return
+        update((d) => (d.user?.id === ownerId && d.user?.session === marker ? { schedules: mergeServerSchedules(d.schedules, [item], { ownerId, complete: false }) } : {}))
+      })
+      .catch((err) => {
+        if (!(err instanceof StaleSessionError) && tokenStore.session() === session) setLoadError('일정을 불러오지 못했어요.')
+      })
+    // 사용자 확인이 늦게 끝나도(알림으로 바로 연 경우 등) 확인된 뒤 다시 불러온다
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleId])
+  }, [scheduleId, data.user?.id, data.user?.session])
 
   if (!s) {
     return (

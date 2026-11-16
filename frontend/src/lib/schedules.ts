@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { type AxiosRequestConfig } from 'axios'
 import { api } from './api'
 import type { Page } from './documents'
 
@@ -35,8 +35,10 @@ export async function listSchedules(page = 1): Promise<Page<ScheduleItem>> {
 }
 
 /** 일정 하나를 불러온다. */
-export async function getSchedule(scheduleId: number): Promise<ScheduleItem> {
-  const { data } = await api.get<ScheduleItem>(`/api/schedules/${scheduleId}/`)
+export async function getSchedule(scheduleId: number, session?: number): Promise<ScheduleItem> {
+  // session을 넘기면 그 세션이 끝난 뒤의 응답·재요청은 버린다 (api.ts의 _session)
+  const config = session == null ? undefined : ({ _session: session } as AxiosRequestConfig)
+  const { data } = await api.get<ScheduleItem>(`/api/schedules/${scheduleId}/`, config)
   return data
 }
 

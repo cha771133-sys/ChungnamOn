@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig } from 'axios'
 import { api, tokenStore } from './api'
 
 /** GET/PATCH /api/auth/me/ 응답 */
@@ -36,12 +37,16 @@ export async function updateMe(patch: ProfilePatch): Promise<Profile> {
 }
 
 /** 서버의 Refresh Token을 무효화하고, 결과와 관계없이 저장된 토큰을 지운다. */
-export async function logout(): Promise<void> {
+export async function logout(expectedSession?: number): Promise<void> {
+  const session = tokenStore.session()
+  // 로그아웃을 시작한 뒤(알림 해제 등을 기다리는 사이) 다른 계정으로 새로 로그인했으면 아무것도 하지 않는다
+  if (expectedSession != null && expectedSession !== session) return
   const refresh = tokenStore.getRefresh()
   try {
-    if (refresh) await api.post('/api/auth/logout/', { refresh })
+    if (refresh) await api.post('/api/auth/logout/', { refresh }, { _session: session } as AxiosRequestConfig)
   } finally {
-    tokenStore.clear()
+    // 로그아웃 요청 중에 다른 계정으로 새로 로그인했으면 그 세션은 지우지 않는다
+    if (tokenStore.session() === session) tokenStore.clear()
   }
 }
 

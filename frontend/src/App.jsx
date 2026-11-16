@@ -264,7 +264,9 @@ export default function App() {
     pushStatus,
     resetDemo: () => {
       // 로그아웃 전에 아직 유효한 토큰으로 이 기기의 알림 연결을 해제한다
-      releasePushForLogout().finally(() => apiLogout().catch(() => {}))
+      // 해제를 기다리는 사이 새로 로그인한 세션은 로그아웃하지 않도록 지금 세션을 기억해 둔다
+      const session = tokenStore.session()
+      releasePushForLogout().finally(() => apiLogout(session).catch(() => {}))
       setData(fresh())
       setStack([{ name: 'language', params: {} }])
       showToast(T('데모 데이터를 처음 상태로 되돌렸어요'))
