@@ -13,11 +13,14 @@ AI 모듈이 준비되면 docstring의 입출력 형식을 지키면서 함수 �
 import logging
 import re
 import time
+from uuid import uuid4
 
 from django.conf import settings
 from django.db import transaction
 
 from accounts.models import UserProfile
+from analytics.models import KPIEvent
+from analytics.services.document_events import finish_analysis, pipeline_data_kind, start_analysis
 
 from ..models import Document, InterpretationResult
 from .checklist import replace_checklist
@@ -330,31 +333,42 @@ def process_document(document_id):
         status=Document.Status.PROCESSING,
         step=Document.Step.QUEUED,
         fail_reason='',
+        analysis_attempt_id=uuid4(),
     )
     if not claimed:
         return False
 
     document = Document.objects.select_related('owner').get(id=document_id)
+    started = None
+    data_kind = pipeline_data_kind()
     try:
+        # 프로필 변경과 무관하게 이번 시도의 입력 언어와 이벤트 스냅샷을 일치시킨다.
+        language = get_language(document)
+        document._kpi_language = language
         _advance(document, Document.Step.OCR)
+        if data_kind != KPIEvent.DataKind.DUMMY:
+            started = start_analysis(document, language, data_kind)
         ocr = run_ocr(document)
 
         _advance(document, Document.Step.MASKING)
         masked = mask_personal_info(ocr['text'])
 
         _advance(document, Document.Step.INTERPRETING)
-        result = interpret(masked['masked_text'], get_language(document))
+        result = interpret(masked['masked_text'], language)
 
         _advance(document, Document.Step.VERIFYING)
         verification = verify(result)
         result.update(_run_actions(result, verification))
 
-        _save_result(document, ocr, masked, result, verification)
+        _save_result(document, ocr, masked, result, verification, started=started)
     except Exception:
         logger.exception('문서 처리 실패: document_id=%s step=%s', document.id, document.step)
         document.status = Document.Status.FAILED
         document.fail_reason = FAIL_MESSAGES.get(document.step, DEFAULT_FAIL_MESSAGE)
-        document.save(update_fields=['status', 'fail_reason'])
+        with transaction.atomic():
+            document.save(update_fields=['status', 'fail_reason'])
+            if data_kind != KPIEvent.DataKind.DUMMY:
+                finish_analysis(document, started)
     return True
 
 
@@ -366,7 +380,7 @@ def _advance(document, step):
         time.sleep(delay)
 
 
-def _save_result(document, ocr, masked, result, verification):
+def _save_result(document, ocr, masked, result, verification, *, started=None):
     threshold = getattr(settings, 'DOCUMENTS_LOW_CONFIDENCE_THRESHOLD', 0.7)
     with transaction.atomic():
         InterpretationResult.objects.update_or_create(
@@ -400,3 +414,5 @@ def _save_result(document, ocr, masked, result, verification):
         document.save(update_fields=[
             'doc_type', 'title', 'masked_count', 'low_confidence', 'status', 'step',
         ])
+        if started:
+            finish_analysis(document, started)

@@ -12,6 +12,12 @@ from ..models import KPIEvent
 logger = logging.getLogger(__name__)
 
 
+def event_idempotency_key(event_type, document_id, entity_id, occurrence_key):
+    """저장과 시도별 조회에서 같은 중복 방지 계약을 사용한다."""
+    transition = str(entity_id) if event_type == KPIEvent.Type.CHAT_ANSWER_CREATED else occurrence_key
+    return hashlib.sha256(f'{event_type}:{document_id}:{entity_id}:{transition}'.encode()).hexdigest()
+
+
 def record_event(event_type, *, document, entity_id, occurrence_key, language='',
                  properties=None, data_kind=KPIEvent.DataKind.UNKNOWN, occurred_at=None):
     """업무 전이 식별자를 해시로 저장한다. 같은 키의 다른 사실은 덮어쓰지 않고 거부한다.
@@ -26,8 +32,7 @@ def record_event(event_type, *, document, entity_id, occurrence_key, language=''
     entity_type = (KPIEvent.Entity.CHAT_MESSAGE if event_type == KPIEvent.Type.CHAT_ANSWER_CREATED
                    else KPIEvent.Entity.DOCUMENT)
     # 생성된 답변의 성공 사실은 답변 ID당 하나다. 호출 측 재시도 식별자가 달라도 증가하지 않는다.
-    transition = str(entity_id) if event_type == KPIEvent.Type.CHAT_ANSWER_CREATED else occurrence_key
-    key = hashlib.sha256(f'{event_type}:{document.pk}:{entity_id}:{transition}'.encode()).hexdigest()
+    key = event_idempotency_key(event_type, document.pk, entity_id, occurrence_key)
     values = dict(event_type=event_type, document=document, entity_type=entity_type,
                   entity_id=entity_id, language=language, properties=properties if properties is not None else {},
                   data_kind=data_kind)

@@ -504,6 +504,64 @@ class DeadlineReminderCommandTests(TestCase):
         self.assertFalse(DeadlineReminder.objects.exists())
         self.assertFalse(ReminderDelivery.objects.exists())
 
+    def test_limit_repeated_execution_advances_to_next_unsent_event(self):
+        """완료된 A를 건너뛰어 두 번째 제한 실행에서 B를 발송한다."""
+        first = self.create_schedule(TODAY + timedelta(days=1), title='A')
+        second = self.create_schedule(TODAY + timedelta(days=7), title='B')
+        accepted = PushResult(PushStatus.ACCEPTED)
+        with patch(f'{COMMAND}.send_deadline_push', return_value=accepted) as send:
+            output = self.run_command(limit=1)
+            self.assertEqual([call.kwargs['schedule_id'] for call in send.call_args_list], [first.pk])
+            self.assertIn('events=1 claimed=1 accepted=1', output)
+            output = self.run_command(limit=1)
+            self.assertEqual([call.kwargs['schedule_id'] for call in send.call_args_list], [first.pk, second.pk])
+            self.assertIn('events=1 claimed=1 accepted=1', output)
+            output = self.run_command(limit=1)
+        self.assertIn('events=0 claimed=0 accepted=0', output)
+
+    def test_limit_skips_event_without_devices_and_counts_event_not_devices(self):
+        """활성 기기가 없는 선행 일정은 제한을 차지하지 않고 한 일정의 두 기기를 모두 처리한다."""
+        empty = self.create_schedule(TODAY + timedelta(days=1), title='기기 없음')
+        ready = self.create_schedule(TODAY + timedelta(days=7), title='두 기기')
+        register_device(user=self.user, registration_id=OTHER_FID, registration_type='FID', platform='WEB')
+        other = get_user_model().objects.create_user(email='no-device@example.com')
+        other_document = Document.objects.create(
+            owner=other, file='documents/empty.pdf', file_name='empty.pdf', file_type='PDF',
+        )
+        NotificationPreference.objects.create(user=other, enabled=True, enabled_since=BEFORE_DUE)
+        Schedule.objects.filter(pk=empty.pk).update(owner=other, document=other_document)
+        with patch(f'{COMMAND}.send_deadline_push', return_value=PushResult(PushStatus.ACCEPTED)) as send:
+            output = self.run_command(limit=1)
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual({call.kwargs['schedule_id'] for call in send.call_args_list}, {ready.pk})
+        self.assertIn('events=1 claimed=2 accepted=2', output)
+
+    def test_dry_run_limit_skips_event_without_active_devices(self):
+        """활성 기기가 없는 이벤트를 제외한 dry-run 제한 결과도 실제 발송 단위와 같다."""
+        self.create_schedule(TODAY + timedelta(days=1), title='A')
+        self.create_schedule(TODAY + timedelta(days=7), title='B')
+        self.device.is_active = False
+        self.device.save()
+        before = [list(model.objects.values()) for model in (DeadlineReminder, ReminderDelivery)]
+        with patch(f'{COMMAND}.send_deadline_push') as send:
+            output = self.run_command(limit=1, dry_run=True)
+        self.assertIn('events=0 candidate_deliveries=0', output)
+        self.assertEqual(before, [list(model.objects.values()) for model in (DeadlineReminder, ReminderDelivery)])
+        send.assert_not_called()
+
+    def test_dry_run_limit_skips_sent_and_empty_events_without_database_changes(self):
+        """dry-run도 미처리 기기가 있는 이벤트를 세며 어떠한 행도 변경하지 않는다."""
+        self.create_schedule(TODAY + timedelta(days=1), title='완료 A')
+        with patch(f'{COMMAND}.send_deadline_push', return_value=PushResult(PushStatus.ACCEPTED)):
+            self.run_command()
+        self.create_schedule(TODAY + timedelta(days=7), title='미처리 B')
+        before = [list(model.objects.values()) for model in (DeadlineReminder, ReminderDelivery)]
+        with patch(f'{COMMAND}.send_deadline_push') as send:
+            output = self.run_command(limit=1, dry_run=True)
+        self.assertIn('events=1 candidate_deliveries=1', output)
+        self.assertEqual(before, [list(model.objects.values()) for model in (DeadlineReminder, ReminderDelivery)])
+        send.assert_not_called()
+
     def test_limit_and_invalid_limit(self):
         """처리 이벤트 수 제한을 적용하고 양수가 아닌 제한은 거부한다."""
         self.create_schedule(TODAY.replace(day=21), title='D-1')

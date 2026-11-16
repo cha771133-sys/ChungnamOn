@@ -408,6 +408,61 @@ class ManualImportTests(TestCase):
         document.refresh_from_db()
         self.assertEqual(document.review_status, 'APPROVED')
 
+    def test_changed_automatic_body_inherits_latest_manual_terms_and_trace(self):
+        """자동 승인 A → 수동 A → 자동 B에서도 조건과 TXT 원본 지문을 보존한다."""
+        for status in ('unverified', 'prohibited'):
+            with self.subTest(status=status):
+                url = f'{self.url}-{status}'
+                document = SourceDocument.objects.create(
+                    source_url=url, title='자동 승인 A', agency='법무부', region='전국', category='출입국·체류',
+                    content_text=self.text, content_hash=hashlib.sha256(self.text.encode()).hexdigest(),
+                    status='ACTIVE', review_status='APPROVED', version=1, metadata={'upstream': 'A'},
+                )
+                self.run_import(url=url, terms_status=status, terms_checked_on=None)
+                manual = document.revisions.get(review_status='PENDING_REVIEW')
+                record = OfficialRecord(
+                    provider='html', external_id='', source_url=url, title='자동 B', agency='법무부',
+                    region='전국', category='출입국·체류', content_text='변경된 자동 본문 B',
+                    metadata={'upstream': 'B', 'usage_terms': {'status': 'confirmed'}},
+                )
+                now = timezone.now()
+                stage_official_record(record, now, now)
+                candidate = document.revisions.get(content_hash=record.content_hash)
+                inherited = candidate.metadata['metadata']
+                self.assertEqual(inherited['usage_terms'], manual.metadata['metadata']['usage_terms'])
+                self.assertEqual(inherited['manual_import'], manual.metadata['metadata']['manual_import'])
+                self.assertEqual(inherited['manual_import_content_hash'], manual.content_hash)
+                self.assertEqual(inherited['collection_method'], 'automatic')
+                self.assertEqual(inherited['upstream'], 'B')
+                document.refresh_from_db()
+                self.assertEqual((document.status, document.version, document.content_text), ('ACTIVE', 1, self.text))
+                # 현행 참고 기록 정책: 승인하되 조건 상태는 바꾸지 않는다.
+                review_revision(candidate.pk, self.admin, approve=True)
+                document.refresh_from_db()
+                self.assertEqual(document.metadata['usage_terms']['status'], status)
+                self.assertTrue(document.ai_reprocessing_required)
+                self.assertEqual(document.status, 'PENDING')
+
+    def test_manual_correction_overrides_inherited_terms_for_next_automatic_candidate(self):
+        """수동 정정은 이전 승인 조건보다 우선하며 자동 B/C가 이를 확인 완료로 추측하지 않는다."""
+        document = self.run_import(terms_status='unverified', terms_checked_on=None)
+        self.approve()
+        self.run_import()  # 같은 A를 confirmed로 명시적으로 정정한다.
+        confirmed = self.pending().metadata['metadata']['usage_terms']
+        for body in ('자동 B', '자동 C'):
+            record = OfficialRecord(
+                provider='html', external_id='', source_url=self.url, title=body, agency='법무부',
+                region='전국', category='출입국·체류', content_text=body,
+            )
+            now = timezone.now()
+            stage_official_record(record, now, now)
+            candidate = document.revisions.get(content_hash=record.content_hash)
+            self.assertEqual(candidate.metadata['metadata']['usage_terms'], confirmed)
+        review_revision(candidate.pk, self.admin, approve=False)
+        document.refresh_from_db()
+        self.assertEqual(document.content_text, self.text)
+        self.assertEqual(document.metadata['usage_terms']['status'], 'unverified')
+
     def test_disabled_notice_url_variants_record_exclusion_without_blocking_approval(self):
         disabled = next(item for item in load_registry() if not item.enabled and 'pds_no=' in item.url)
         parts = urlsplit(disabled.url)

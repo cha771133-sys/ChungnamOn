@@ -357,7 +357,10 @@ class DocumentResultView(APIView):
         result, not_ready = get_done_result(request, self, pk)
         if not_ready:
             return not_ready
-        return Response(DocumentResultSerializer(result).data)
+        data = DocumentResultSerializer(result).data
+        # middleware는 이 응답이 읽은 시도만 제공 사실로 연결한다.
+        request._request._kpi_result_attempt_id = result.document.analysis_attempt_id
+        return Response(data)
 
 
 @extend_schema_view(get=extend_schema(
