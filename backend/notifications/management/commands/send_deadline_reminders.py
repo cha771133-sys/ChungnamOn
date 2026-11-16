@@ -24,15 +24,20 @@ class Command(BaseCommand):
         if options['limit'] is not None and options['limit'] <= 0:
             raise CommandError('--limit는 양의 정수여야 합니다.')
         events = due_schedule_events()
-        if options['limit'] is not None:
-            events = events[:options['limit']]
         stats = {
-            'events': len(events), 'candidates': 0, 'claimed': 0, 'accepted': 0,
+            'events': 0, 'candidates': 0, 'claimed': 0, 'accepted': 0,
             'invalid_devices': 0, 'configuration_errors': 0, 'other_failures': 0,
         }
 
         if options['dry_run']:
-            stats['candidates'] = sum(pending_delivery_count(event) for event in events)
+            for event in events:
+                candidates = pending_delivery_count(event)
+                if not candidates:
+                    continue
+                stats['events'] += 1
+                stats['candidates'] += candidates
+                if options['limit'] is not None and stats['events'] >= options['limit']:
+                    break
             self.stdout.write(
                 'dry-run deadline reminders: '
                 f'events={stats["events"]} candidate_deliveries={stats["candidates"]}',
@@ -41,6 +46,7 @@ class Command(BaseCommand):
 
         configuration_failed = False
         for event in events:
+            event_claimed = False
             # 기기 목록은 잠금 밖에서 읽고, 개별 기기는 claim_delivery에서 다시 검증한다.
             for device in active_devices_for(event.schedule):
                 # 같은 사용자의 재등록으로 스냅샷이 바뀌면 최신 조건으로 한 번 재점유한다.
@@ -58,6 +64,7 @@ class Command(BaseCommand):
                     stats['other_failures'] += 1
                 if claim is None:
                     continue
+                event_claimed = True
                 stats['candidates'] += 1
                 stats['claimed'] += 1
                 try:
@@ -82,7 +89,9 @@ class Command(BaseCommand):
                     break
                 else:
                     stats['other_failures'] += 1
-            if configuration_failed:
+            if event_claimed:
+                stats['events'] += 1
+            if configuration_failed or (options['limit'] is not None and stats['events'] >= options['limit']):
                 break
 
         self.stdout.write(
