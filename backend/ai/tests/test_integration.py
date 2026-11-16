@@ -842,6 +842,65 @@ class ChatAnswerTests(AIEnvMixin, TestCase):
         self.assertEqual(hint["source_ids"], ["S1"])
         self.assertLessEqual(reference_part.count("| 연결 안 된 자료"), k)  # 참고 자료도 k개까지만
 
+    def test_official_searched_separately_even_if_many_unlinked_are_closer(self):
+        """연결 안 된 자료가 아주 많고(예전 방식의 k×4개보다 많음) 훨씬 비슷해도 공식 자료는 따로 검색돼 S1·GROUNDED (CodeRabbit P1)."""
+        from ai.chatbot.config import get_settings
+        from ai.chatbot.embedder import get_embedder
+
+        k = get_settings().top_k
+        question = "주민세 납부 기간이 언제예요?"
+        for i in range(k * 4 + 3):
+            self.source(f"other{i}", title=f"연결 안 된 자료 {i}", text=question)
+        linked = self.source("linked", title="연결된 자료", text="# 안내\n세무과 문의 " * 3)
+        raw = {"answer": "답", "status": "GROUNDED", "used_sources": ["S1"], "suggested_questions": []}
+        emb = get_embedder()
+        with mock.patch.object(emb, "embed_query", wraps=emb.embed_query) as embed:
+            prompt, hint, out = self._prompt(self.official(linked), raw)
+        official_part, reference_part = prompt.split("[참고 자료 — 공식 출처로 표시 불가]")
+        self.assertIn("S1 | 연결된 자료", official_part)
+        self.assertNotIn("연결 안 된 자료", official_part)
+        self.assertEqual(hint["source_ids"], ["S1"])
+        self.assertEqual(reference_part.count("| 연결 안 된 자료"), k)  # 참고 자료는 k개
+        self.assertEqual((out["status"], out["sources"]), ("GROUNDED", [{"sourceDocumentId": linked.pk}]))
+        self.assertEqual(embed.call_count, 1)  # 공식·참고 두 번 검색해도 질문 임베딩은 한 번
+
+    def test_search_limits_by_source_document_ids(self):
+        from ai.chatbot.retriever import search
+
+        a, b = self.source("a", title="자료 A"), self.source("b", title="자료 B")
+        ids = lambda **kw: {r.source_document_id for r in search("주민세 납부", top_k=10, **kw)}  # noqa: E731
+        self.assertEqual(ids(), {a.pk, b.pk})
+        self.assertEqual(ids(document_ids={a.pk}), {a.pk})
+        self.assertEqual(ids(exclude_document_ids={a.pk}), {b.pk})
+        self.assertEqual(ids(document_ids=set()), set())          # 빈 범위면 결과 없음 (SQL 오류 아님)
+        self.assertEqual(ids(exclude_document_ids=set()), {a.pk, b.pk})
+
+    def test_query_vector_is_passed_not_cached(self):
+        """질문 벡터는 호출한 쪽이 넘긴 것만 씀 (프로세스 전역 캐시 없음). 다른 질문이 끼어들어도 영향 없음."""
+        from ai.chatbot.embedder import get_embedder
+        from ai.chatbot.retriever import embed_query, search
+
+        self.source("a", title="주민세 자료", text="# 주민세\n주민세 납부 기간은 8월입니다.")
+        self.source("b", title="외국인등록 자료", text="# 외국인등록\n입국 후 90일 이내에 외국인등록을 해야 합니다.")
+        scores = lambda rs: [(r.source_document_id, round(r.score, 6)) for r in rs]  # noqa: E731
+        q1, q2 = "주민세 납부 기간", "외국인등록 기한"
+        expected1, expected2 = scores(search(q1, top_k=5)), scores(search(q2, top_k=5))
+        self.assertNotEqual(expected1, expected2)
+
+        v1 = embed_query(q1)
+        emb = get_embedder()
+        with mock.patch.object(emb, "embed_query", wraps=emb.embed_query) as embed:
+            self.assertEqual(scores(search(q2, top_k=5)), expected2)                  # 사이에 다른 질문
+            self.assertEqual(scores(search(q1, top_k=5, query_vector=v1)), expected1)  # 넘긴 벡터 그대로 씀
+            self.assertEqual(scores(search(q1, top_k=5)), expected1)                   # 안 넘기면 다시 임베딩
+        self.assertEqual([c.args[0] for c in embed.call_args_list], [q2, q1])
+
+        # 챗봇 답변마다 질문 임베딩은 1번 (공식·참고 두 번 검색해도). 답변 사이에 남는 캐시는 없음
+        with mock.patch.object(emb, "embed_query", wraps=emb.embed_query) as embed:
+            self._prompt([{"sourceDocumentId": 1}])
+            self._prompt([{"sourceDocumentId": 1}])
+        self.assertEqual(embed.call_count, 2)
+
     def test_reference_numbers_are_never_sources(self):
         linked = self.source("linked", title="연결된 자료")
         self.source("other", title="연결 안 된 자료")
