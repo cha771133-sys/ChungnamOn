@@ -12,7 +12,7 @@ from .errors import CollectionError
 from .normalization import OfficialRecord, official_date, official_url
 from .parser import parse_html
 from .source_service import CollectionResult
-from .usage_conditions import is_manual_metadata
+from .usage_conditions import inherit_manual_terms, is_manual_metadata
 
 
 LEASE_DURATION = timedelta(minutes=30)
@@ -98,6 +98,15 @@ def stage_official_record(record, started_at, checked_at, *, document_id=None):
         raise CollectionError('IDENTITY_CONFLICT', '기존 출처 URL과 제공자 식별자가 충돌합니다.')
     if document.observed_started_at and document.observed_started_at > started_at:
         return 'skipped', document
+    if not is_manual_metadata(metadata['metadata']):
+        # 같은 본문 후보 유무보다 먼저 적용한다. 최신 미검토 수동 정정이 승인 기록보다 우선한다.
+        pending = document.revisions.filter(
+            base_version=document.version, review_status='PENDING_REVIEW',
+            metadata__metadata__has_key='manual_import',
+        ).order_by('-collected_at', '-pk').first()
+        previous = pending.metadata['metadata'] if pending else document.metadata
+        previous_hash = pending.content_hash if pending else document.content_hash
+        metadata = {**metadata, 'metadata': inherit_manual_terms(metadata['metadata'], previous, previous_hash)}
     digest = record.content_hash
     unchanged = document.content_hash == digest and document.content_text == record.content_text and document_snapshot(document) == metadata
     needs_review = not unchanged or document.review_status != 'APPROVED'
@@ -112,14 +121,6 @@ def stage_official_record(record, started_at, checked_at, *, document_id=None):
             },
         )
         if not revision_created:
-            previous = revision.metadata.get('metadata', {})
-            if is_manual_metadata(previous) and not is_manual_metadata(metadata['metadata']):
-                # 같은 본문의 자동 재수집이 수동 등록 이력과 미확인 조건을 지우지 못하게 한다.
-                # 조건을 정정하는 수동 재등록은 새 확인 정보로 갱신할 수 있다.
-                metadata = {**metadata, 'metadata': {
-                    **metadata['metadata'], 'manual_import': previous['manual_import'],
-                    'usage_terms': previous.get('usage_terms', {}),
-                }}
             # 본문은 같아도 공식 링크·공포일 등 메타데이터가 달라졌다면 최신 후보에 보존한다.
             revision.metadata, revision.collected_at = metadata, checked_at
             revision.save(update_fields=['metadata', 'collected_at'])
