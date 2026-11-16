@@ -36,6 +36,8 @@ class Document(models.Model):
     file_type = models.CharField(max_length=10, choices=FileType.choices)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     step = models.CharField(max_length=20, choices=Step.choices, blank=True)
+    # 상태 선점과 함께 바꾸는 내부 식별자. KPI 저장 실패 시 이전 시도와의 혼동을 막는다.
+    analysis_attempt_id = models.UUIDField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     # 원본 파일 자동 삭제 기준 시각 (업로드 후 30일)
     expires_at = models.DateTimeField(blank=True)
