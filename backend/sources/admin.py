@@ -2,14 +2,21 @@ from django import forms
 from django.contrib import admin
 from django.contrib import messages
 from django.db import DatabaseError, transaction
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import F
+from django.http import HttpResponseRedirect
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
+from django.utils.decorators import method_decorator
 from django.utils import timezone
+from django.views.decorators.http import require_http_methods
 
 from .models import Agency, AgencyAlias, CrawlLog, SourceChunk, SourceDocument, SourceRefreshTarget, SourceRevision
 from .services.errors import CollectionError
 from .services.freshness import freshness, next_due_at, filter_freshness
+from .services.manual_import import import_official_txt
 from .services.refresh_service import document_snapshot, review_revision
+from .services.source_registry import CATEGORIES, REGIONS
 from .services.usage_conditions import is_manual_metadata, validate_manual_approval
 
 
@@ -77,9 +84,46 @@ class SourceDocumentAdminForm(forms.ModelForm):
         return cleaned_data
 
 
+class OfficialTxtImportForm(forms.Form):
+    required_css_class = 'required'
+
+    file = forms.FileField(
+        label='공식자료 TXT 파일', widget=forms.ClearableFileInput(attrs={'accept': '.txt,text/plain'}),
+        help_text='UTF-8 또는 UTF-8 BOM .txt, BOM 포함 최대 2 MiB. 오류가 나면 파일을 다시 선택하세요.',
+    )
+    title = forms.CharField(label='공식자료 제목', max_length=500, widget=forms.TextInput(attrs={'class': 'vLargeTextField'}))
+    agency = forms.CharField(label='공식 기관명', max_length=255, widget=forms.TextInput(attrs={'class': 'vTextField'}))
+    url = forms.URLField(label='공식 원문 HTTPS URL', max_length=2048, widget=forms.URLInput(attrs={'class': 'vURLField'}))
+    region = forms.ChoiceField(label='적용 지역', choices=[(value, value) for value in sorted(REGIONS)], initial='전국')
+    category = forms.ChoiceField(label='분류', choices=[(value, value) for value in sorted(CATEGORIES)])
+    published_at = forms.DateField(label='공식 발행일', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+    terms_status = forms.ChoiceField(
+        label='AI 이용조건 확인 상태', initial='unverified',
+        choices=[('unverified', '미확인'), ('confirmed', 'AI 이용 허용 확인'), ('prohibited', '가공 금지')],
+    )
+    terms_note = forms.CharField(
+        label='이용조건 및 확인 근거', max_length=4000,
+        widget=forms.TextInput(attrs={'class': 'vLargeTextField'}),
+        help_text='AI 정제·청크·임베딩·검색 허용 근거 또는 미확인·금지 사유를 한 줄로 기록하세요.',
+    )
+    terms_url = forms.URLField(label='공식 이용조건 HTTPS URL', max_length=2048, required=False, widget=forms.URLInput(attrs={'class': 'vURLField'}))
+    terms_checked_on = forms.DateField(label='이용조건 확인일', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if cleaned_data.get('terms_status') == 'confirmed' and not cleaned_data.get('terms_checked_on'):
+            self.add_error('terms_checked_on', 'AI 이용 허용 확인에는 실제 확인일이 필요합니다.')
+        for field in ('published_at', 'terms_checked_on'):
+            value = cleaned_data.get(field)
+            if value and value > timezone.localdate():
+                self.add_error(field, '미래 날짜는 입력할 수 없습니다.')
+        return cleaned_data
+
+
 @admin.register(SourceDocument)
 class SourceDocumentAdmin(admin.ModelAdmin):
     form = SourceDocumentAdminForm
+    change_list_template = 'admin/sources/sourcedocument/change_list.html'
     list_display = ('id', 'title', 'source_url', 'provider', 'external_id', 'agency', 'region', 'category', 'published_at', 'collected_at', 'last_success_at', 'updated_at', 'status', 'freshness_state', 'review_status', 'reviewed_by', 'reviewed_at')
     list_filter = ('agency', 'region', 'category', 'status', 'provider', 'review_status', FreshnessFilter, 'ai_reprocessing_required')
     search_fields = ('title', 'source_url', 'agency')
@@ -87,6 +131,60 @@ class SourceDocumentAdmin(admin.ModelAdmin):
     ordering = ('collected_at', 'id')
     list_select_related = ('refresh_target', 'reviewed_by')
     inlines = (SourceChunkInline,)
+
+    def has_txt_import_permission(self, request):
+        """자료·후보를 생성하고 기존 대기 후보를 갱신할 권한을 모두 요구한다."""
+        user = request.user
+        return user.is_active and user.is_staff and all(user.has_perm(permission) for permission in (
+            'sources.add_sourcedocument', 'sources.change_sourcedocument',
+            'sources.add_sourcerevision', 'sources.change_sourcerevision',
+        ))
+
+    def get_urls(self):
+        return [path('import-txt/', self.admin_site.admin_view(self.import_txt_view),
+                     name='sources_sourcedocument_import_txt'), *super().get_urls()]
+
+    def changelist_view(self, request, extra_context=None):
+        return super().changelist_view(request, {
+            **(extra_context or {}), 'has_txt_import_permission': self.has_txt_import_permission(request),
+        })
+
+    @method_decorator(require_http_methods(['GET', 'POST']))
+    def import_txt_view(self, request):
+        """기존 수동 등록과 감사 로그를 함께 저장하고 기존 후보 검토 화면으로 연결한다."""
+        if not self.has_txt_import_permission(request):
+            raise PermissionDenied
+        form = OfficialTxtImportForm(request.POST, request.FILES) if request.method == 'POST' else OfficialTxtImportForm()
+        if request.method == 'POST' and form.is_valid():
+            try:
+                with transaction.atomic():
+                    result = import_official_txt(**form.cleaned_data, registered_by=request.user.get_username())
+                    if result.revision_id:
+                        obj = SourceRevision.objects.get(pk=result.revision_id)
+                        destination = reverse('admin:sources_sourcerevision_change', args=[obj.pk], current_app=self.admin_site.name)
+                    else:
+                        obj = SourceDocument.objects.get(pk=result.document_id)
+                        destination = reverse('admin:sources_sourcedocument_change', args=[obj.pk], current_app=self.admin_site.name)
+                    audit_message = f'공식자료 TXT 등록: {result.outcome}, 문서 {result.document_id}, 본문 해시 {result.content_hash}'
+                    if result.outcome in ('new', 'candidate'):
+                        self.log_addition(request, obj, audit_message)
+                    else:
+                        self.log_change(request, obj, audit_message)
+            except CollectionError as error:
+                form.add_error('file' if error.code.startswith('TXT_') else None, str(error))
+            except (DatabaseError, ValidationError):
+                form.add_error(None, '저장 충돌 또는 검증 실패입니다. 최신 자료 상태를 확인한 뒤 파일을 다시 선택하세요.')
+            else:
+                if result.revision_id:
+                    self.message_user(request, f'문서 {result.document_id} / 후보 {result.revision_id}: 검토 대기로 저장했습니다. 동일 본문의 대기 후보는 재사용합니다.', messages.SUCCESS)
+                else:
+                    self.message_user(request, f'문서 {result.document_id}: 새 후보 없이 처리했습니다. 최신 자료와 검토 상태를 확인하세요.', messages.INFO)
+                return HttpResponseRedirect(destination)
+        request.current_app = self.admin_site.name
+        return TemplateResponse(request, 'admin/sources/sourcedocument/import_txt.html', {
+            **self.admin_site.each_context(request), 'opts': self.model._meta,
+            'title': '공식자료 TXT 등록', 'form': form,
+        })
 
     def get_readonly_fields(self, request, obj=None):
         """기존 자료의 출처 식별자는 폼에서 바꾸지 못하게 하여 수집 대상과 일치시킨다."""
