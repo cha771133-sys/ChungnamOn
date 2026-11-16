@@ -10,7 +10,7 @@ import logging
 
 from . import prompts
 from .llm import get_llm
-from .retriever import SearchResult, search
+from .retriever import EmbeddingConfigError, SearchResult, search
 from .service import GroundingStatus, answer_with_results, normalize_document, regions_for
 
 log = logging.getLogger(__name__)
@@ -257,7 +257,12 @@ def _verify(result: dict, limit: int) -> dict:
         return _unverified_result([], REASON_NO_EVIDENCE)
     if not _identifiable(doc):
         return _unverified_result(values, REASON_NO_IDENTITY)
-    related = related_sources(doc, limit)
+    try:
+        related = related_sources(doc, limit)
+    except EmbeddingConfigError as exc:
+        # 결과 형식·문서 처리 흐름은 예전(차원이 안 맞아 빈 검색 결과)과 같게 두고, 로그로만 설정 문제를 구분한다
+        log.error("공식 자료 대조 불가 — 자료 없음이 아니라 임베딩 설정 문제: %s", exc)
+        related = []
     if not related:
         return _unverified_result(values, REASON_NO_SOURCES)
 

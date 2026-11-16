@@ -113,6 +113,36 @@ class OpenAIEmbedderTests(unittest.TestCase):
         self.assertEqual(sleeps, [1.5, 3.0, 4.0])  # ms 헤더 → 초 헤더 → 지수 백오프(2**2)
         self.assertEqual(len(rec.requests), 4)
 
+    def test_insufficient_quota_fails_without_retry(self):
+        """429 중 잔액 부족은 기다려도 안 풀려서 재시도하지 않고 바로 실패 (키·본문은 메시지에 없음)."""
+        from ai.chatbot.embedder import EmbeddingQuotaError
+
+        quota = {"error": {"message": f"You exceeded your current quota ({KEY}). 원문 문장",
+                           "type": "insufficient_quota", "code": "insufficient_quota"}}
+        for name, body in (("code", quota), ("type만", {"error": {"type": "insufficient_quota", "code": None}})):
+            for call in ("embed_passages", "embed_query"):
+                with self.subTest(name=name, call=call):
+                    sleeps = []
+                    rec = Recorder((429, body, {"retry-after": "1"}))
+                    emb = make(rec, sleeps)
+                    with self.assertRaises(EmbeddingQuotaError) as ctx:
+                        getattr(emb, call)(["청크"] if call == "embed_passages" else "질문")
+                    self.assertEqual((len(rec.requests), sleeps), (1, []))  # 재시도·대기 없음
+                    text = str(ctx.exception)
+                    self.assertIn("잔액 부족", text)
+                    self.assertNotIn(KEY, text)
+                    self.assertNotIn("원문 문장", text)
+                    self.assertNotIn("exceeded", text)
+
+    def test_rate_limit_429_still_retries(self):
+        """잔액 부족이 아닌 429(요청 한도)·본문이 JSON이 아닌 429는 지금처럼 재시도."""
+        for body in ({"error": {"type": "requests", "code": "rate_limit_exceeded"}}, "not json", {"error": "x"}):
+            with self.subTest(body=body):
+                sleeps = []
+                rec = Recorder((429, body, {"retry-after": "1"}))
+                self.assertEqual(len(make(rec, sleeps).embed_passages(["a"])), 1)
+                self.assertEqual((len(rec.requests), sleeps), (2, [1.0]))
+
     def test_retry_limits_query_short_passages_long(self):
         sleeps = []
         rec = Recorder(*[(429, {}, {"retry-after": "100"})] * 3)

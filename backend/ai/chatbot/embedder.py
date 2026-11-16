@@ -166,6 +166,10 @@ class GeminiEmbedder:
         return self._embed(texts, "RETRIEVAL_DOCUMENT", self.MAX_RETRIES, self.MAX_WAIT)
 
 
+class EmbeddingQuotaError(RuntimeError):
+    """임베딩 API 잔액 부족(OpenAI insufficient_quota). 재시도해도 안 풀리는 오류."""
+
+
 class OpenAIEmbedder:
     """OpenAI 임베딩 API (POST /v1/embeddings). 새 패키지 없이 httpx로 호출.
 
@@ -174,6 +178,7 @@ class OpenAIEmbedder:
     - 429·5xx는 잠깐 기다렸다가 재시도. 서버가 알려준 대기 시간(retry-after-ms, Retry-After)을 우선 사용
       - 청크 생성(embed_passages): 최대 5회, 한 번에 최대 60초 대기
       - 질문 검색(embed_query): 최대 1회, 최대 2초 대기 (챗봇 HTTP 요청 안에서 돎)
+      - 단, 429 중 잔액 부족(insufficient_quota)은 기다려도 안 풀리므로 재시도 없이 바로 EmbeddingQuotaError
     - 연결·읽기 timeout 설정. 키는 Authorization 헤더로만 보내고, 오류 메시지에는 상태 코드만 남김
       (OpenAI 오류 본문에는 키 일부가 들어갈 수 있어서 본문을 읽지 않음)
     """
@@ -221,6 +226,15 @@ class OpenAIEmbedder:
             wait = float(2 ** attempt)
         return min(max(wait, 0.0), max_wait)
 
+    @staticmethod
+    def _insufficient_quota(response) -> bool:
+        """429 응답이 잔액 부족(insufficient_quota)인지. 본문에서 error.code·error.type만 본다."""
+        try:
+            error = response.json().get("error") or {}
+        except Exception:
+            return False
+        return isinstance(error, dict) and "insufficient_quota" in (error.get("code"), error.get("type"))
+
     def _post(self, body: dict, max_retries: int, max_wait: float) -> dict:
         import httpx
 
@@ -230,6 +244,9 @@ class OpenAIEmbedder:
             except httpx.HTTPError as exc:
                 # 예외 문자열에 요청 정보가 섞이지 않게 종류만 남김
                 raise RuntimeError(f"OpenAI 임베딩 연결 실패: {type(exc).__name__}") from None
+            if r.status_code == 429 and self._insufficient_quota(r):
+                # 잔액 부족은 기다려도 안 풀려서 재시도하지 않음. 본문·키는 메시지에 넣지 않음
+                raise EmbeddingQuotaError("OpenAI 임베딩 실패: 잔액 부족(insufficient_quota). 결제·사용 한도 확인 필요")
             if r.status_code in self.RETRY_STATUSES and attempt < max_retries:
                 wait = self._wait_seconds(r, attempt, max_wait)
                 log.warning("OpenAI 임베딩 HTTP %s, %.1f초 뒤 재시도 (%d/%d)", r.status_code, wait, attempt + 1, max_retries)

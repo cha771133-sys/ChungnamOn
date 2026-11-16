@@ -48,7 +48,8 @@ python manage.py shell -c "from ai.chatbot import build_source_chunks; print(bui
 - 완료 처리는 `status`·`ai_reprocessing_required`·`version`·`updated_at`만 바꿈 (제목·기관 등 관리자 입력은 그대로)
 - 이미 재처리가 끝난 자료(플래그 `False`)는 상태·`version`을 바꾸지 않음. 여러 번 실행해도 청크 중복·`version` 중복 증가 없음
 - 임베딩이 실패하면 예외가 나고 자료는 기존 상태 그대로
-- 반환값: `documents`·`chunks`·`skipped`·`completed`·`activated`(그중 `ACTIVE`로 바꾼 수)·`changed`
+- 반환값: `documents`·`chunks`·`skipped`(이미 최신)·`empty`(분할 결과 0개라 완료 안 함)·`completed`·`activated`(그중 `ACTIVE`로 바꾼 수)·`changed`
+- 검색 대상 청크는 있는데 질문 임베딩과 차원이 맞는 청크가 하나도 없으면 빈 결과 대신 `EmbeddingConfigError` (임베딩 모델·차원을 바꾸고 청크를 다시 안 만든 설정 문제). verify는 결과를 예전처럼 UNVERIFIED로 두고 ERROR 로그로 구분, 챗봇도 예전처럼 UNVERIFIED로 답하고 ERROR 로그로 구분 (401 등 다른 임베딩 오류는 지금처럼 503)
 
 검색(`DbRetriever`)·verify 후보도 같은 계약: `ai_eligible`(ACTIVE·승인·재처리 완료·공식 링크) 자료의
 `source_content_hash`가 현재 본문 해시와 같은 청크만 씀. 승인 전 자료와 이전 본문 청크는 검색되지 않음.
@@ -190,7 +191,7 @@ AI_TOP_K=5
 AI_MIN_SCORE=0.65
 ```
 - 배포(Railway)엔 Ollama가 없어서 `AI_LLM_PROVIDER=anthropic`, 임베딩은 `openai`(1536차원). `gemini`도 선택지로 남겨 둠
-- openai: 429·5xx는 서버가 준 대기 시간(retry-after-ms·Retry-After)만큼 기다렸다가 재시도 (청크 생성 최대 5회·60초, 질문 검색 최대 1회·2초), 문장은 100개씩 묶어서 전송
+- openai: 429·5xx는 서버가 준 대기 시간(retry-after-ms·Retry-After)만큼 기다렸다가 재시도 (청크 생성 최대 5회·60초, 질문 검색 최대 1회·2초), 문장은 100개씩 묶어서 전송. 단 429 중 잔액 부족(insufficient_quota)은 재시도 없이 바로 EmbeddingQuotaError
 - gemini 무료 등급은 429(한도 초과)가 날 수 있음: 서버가 준 대기 시간(최대 60초)만큼 기다렸다가 최대 5번 재시도, 문장은 100개씩 묶어서 전송
 - `AI_MIN_SCORE=0.65`: Gemini 기준 (관련 없는 자료도 0.5~0.6이 나옴). 임베딩 모델을 바꾸면 `--search --db`로 다시 조정 (OpenAI 값은 데모 자료가 들어온 뒤 조정 예정)
 - 임베딩 모델·차원을 바꾸면 `build_source_chunks()`를 다시 실행 (차원이 다른 청크는 자동으로 다시 만듦)
