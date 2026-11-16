@@ -320,6 +320,23 @@ def _judge_item(key, label, doc_value, raw: dict | None, valid_ids: set[str]) ->
     return _item(key, label, doc_value, status, official_value, reason, ids)
 
 
+def _judge_relative_deadline(item: dict, raw, doc: dict, source_texts: dict[str, str]) -> dict | None:
+    """DEADLINE에 LLM이 상대 기한 규칙(rule)을 냈으면 코드가 계산해서 판정 (deadline_rules). 규칙이 없으면 None.
+
+    LLM의 status는 쓰지 않고 계산 결과만 쓴다. 로그에는 원문·날짜를 남기지 않는다.
+    """
+    from . import deadline_rules
+
+    rule = deadline_rules.parse_rule(raw.get("rule") if isinstance(raw, dict) else None, set(source_texts))
+    if rule is None:
+        return None
+    j = deadline_rules.judge(rule, source_texts[rule.source_id], doc.get("original_text") or "",
+                             doc.get("deadlines"))
+    log.info("verify 상대 기한 판정: %s (단위 %s)", j.status, rule.unit)
+    return _item(item["key"], item["label"], item["docValue"], j.status, j.official_value,
+                 j.reason[:VALUE_MAX_CHARS], j.source_ids)
+
+
 def _unverified_result(values, reason: str) -> dict:
     items = [_item(key, label, value, reason=reason) for key, label, value in values]
     return {"overall": "UNVERIFIED", "status": "UNVERIFIED", "items": items, "sources": []}
@@ -390,6 +407,12 @@ def _verify(result: dict, limit: int) -> dict:
     for entry in entries if isinstance(entries, list) else []:
         if isinstance(entry, dict):
             by_key.setdefault(_text(entry.get("key")).upper(), entry)
-    items = [_judge_item(key, label, value, by_key.get(key), set(source_ids)) for key, label, value in values]
+    source_texts = {s["id"]: h.text for s, (h, _) in zip(sources, related)}
+    items = []
+    for key, label, value in values:
+        item = _judge_item(key, label, value, by_key.get(key), set(source_ids))
+        if key == "DEADLINE":
+            item = _judge_relative_deadline(item, by_key.get(key), doc, source_texts) or item
+        items.append(item)
     overall = _overall(items)
     return {"overall": overall, "status": overall, "items": items, "sources": sources}

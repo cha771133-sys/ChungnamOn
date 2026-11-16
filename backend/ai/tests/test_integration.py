@@ -728,6 +728,85 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         for b in bests:
             self.assertIn(b, texts)
 
+    # ---- 상대 기한 (입국한 날부터 90일 이내) ----
+    REG_SOURCE = "# 외국인등록\n이 민원은 입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
+    REG_ORIGINAL = "외국인등록 안내\n성명 [이름 가림]\n입국일 2026년 10월 5일\n신청 기한 2027년 1월 3일까지\n수수료 35,000원"
+
+    def registration(self, deadline="2027-01-03", original=None):
+        return {**C1_RESULT, "title": "외국인등록 안내문", "doc_type": "안내문",
+                "original_text": self.REG_ORIGINAL if original is None else original,
+                "deadlines": [{"label": "신청 기한", "date": deadline}], "amount": "", "payment_methods": [],
+                "agency": {"name": "대전출입국·외국인사무소 천안출장소", "phone": ""}, "region": "전국"}
+
+    def deadline_item(self, result, rule=None, status="UNVERIFIED"):
+        rule = rule if rule is not None else {
+            "base": "입국일", "baseLabels": ["입국일", "입국한 날"], "amount": 90, "unit": "day",
+            "appliesTo": "신청 기한", "quote": "입국한 날부터 90일 이내에", "sourceId": "s1"}
+        llm = {"items": [{"key": "DEADLINE", "status": status, "officialValue": None, "reason": "LLM 이유",
+                          "sourceIds": [], "rule": rule}]}
+        import logging
+
+        records = []
+        handler = logging.Handler(logging.DEBUG)
+        handler.emit = lambda record: records.append(record.getMessage())
+        logger = logging.getLogger("ai.chatbot")
+        old_level = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        try:
+            out = self.verify(result, llm)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+        (item,) = [i for i in out["items"] if i["key"] == "DEADLINE"]
+        return item, out, "\n".join(records)
+
+    def test_relative_deadline_2a_matches(self):
+        doc = self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        item, out, logs = self.deadline_item(self.registration())
+        self.assertEqual(item["status"], "MATCHED")
+        self.assertEqual(item["officialValue"], "입국일(2026-10-05)부터 90일 이내 → 2027-01-03")
+        self.assertEqual(item["sourceIds"], ["s1"])
+        self.assertEqual(out["sources"][0]["sourceDocumentId"], doc.pk)
+        self.assertEqual(out["overall"], "MATCHED")
+        # 로그에는 원문·날짜를 남기지 않음 (판정 결과만)
+        self.assertIn("verify 상대 기한 판정: MATCHED", logs)
+        for secret in ("2026-10-05", "2027-01-03", "2026년 10월", "입국일 2026", "[이름 가림]"):
+            self.assertNotIn(secret, logs)
+
+    def test_relative_deadline_entry_date_on_next_line_matches(self):
+        """Railway 문서 #4 원문 모양: '입국일' 줄 다음 줄에 날짜, 본문에도 '입국한 날부터 90일' 문장이 있음."""
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        original = ("외국인등록 안내\n입국일\n2026년 10월 5일\n안내 내용\n"
+                    "귀하는 입국한 날부터 90일을 초과하여 대한민국에 체류할 예정이므로, 입국한 날부터 90일 이내\n"
+                    "신청 기한\n2027년 1월 3일까지")
+        item, _, _ = self.deadline_item(self.registration(original=original))
+        self.assertEqual(item["status"], "MATCHED")
+
+    def test_relative_deadline_changed_document_mismatch(self):
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        item, out, _ = self.deadline_item(self.registration("2027-01-20"))
+        self.assertEqual((item["status"], out["overall"]), ("MISMATCH", "MISMATCH"))
+        self.assertIn("2027-01-20", item["reason"])
+
+    def test_relative_deadline_without_entry_date_unverified(self):
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        original = "외국인등록 안내\n신청 기한 2027년 1월 3일까지"
+        item, _, _ = self.deadline_item(self.registration(original=original), status="MATCHED")
+        self.assertEqual((item["status"], item["officialValue"], item["sourceIds"]), ("UNVERIFIED", None, []))
+        self.assertIn("공식 기준: 입국한 날부터 90일 이내에", item["reason"])
+
+    def test_relative_deadline_rule_not_in_source_or_bad_is_ignored_or_unverified(self):
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        # 인용문이 자료에 없음 → 계산하지 않고 UNVERIFIED
+        made_up = {"base": "입국일", "baseLabels": ["입국일"], "amount": 30, "unit": "day",
+                   "appliesTo": "신청 기한", "quote": "입국한 날부터 30일 이내", "sourceId": "s1"}
+        item, _, _ = self.deadline_item(self.registration(), made_up)
+        self.assertEqual(item["status"], "UNVERIFIED")
+        # rule 모양이 이상하면(없는 출처) 예전처럼 LLM 판정 검사만 → UNVERIFIED
+        item, _, _ = self.deadline_item(self.registration(), {**made_up, "sourceId": "s9"})
+        self.assertEqual((item["status"], item["reason"]), ("UNVERIFIED", "LLM 이유"))
+
     def test_items_without_document_value_are_excluded(self):
         self.source("a")
         # 지금 더미 interpret처럼 amount·payment_methods가 없으면 → 2개만
