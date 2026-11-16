@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -36,6 +36,14 @@ DOCUMENT_EXAMPLE = {
     'expiresAt': '2026-12-05T09:00:00+09:00',
 }
 PK_PARAMETER = OpenApiParameter('pk', int, OpenApiParameter.PATH, description='문서 ID')
+
+
+class DocumentFileDeleteFailed(APIException):
+    """원본 파일을 지우지 못해 문서 삭제를 멈춘 경우. 공통 오류 형식으로 503을 응답한다."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_detail = '원본 파일을 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+    default_code = 'file_delete_failed'
 
 
 @extend_schema_view(get=extend_schema(
@@ -186,6 +194,8 @@ class DocumentStatusView(generics.RetrieveAPIView):
         summary='내 문서 삭제',
         description=(
             '현재 사용자 소유 문서와 해석 결과·챗봇 대화, 저장된 원본 파일을 삭제합니다. '
+            '원본 파일을 먼저 지우고, 파일 삭제에 실패하면 문서도 지우지 않고 503을 반환합니다(다시 요청 가능). '
+            '파일이 이미 없으면 그대로 문서를 삭제합니다. '
             'PROCESSING 문서는 처리가 끝난 뒤 삭제할 수 있으며 결과 조회 API와 같은 형식의 409를 반환합니다. '
             '타인 문서와 없는 문서는 동일하게 404를 반환합니다.'
         ),
@@ -197,10 +207,16 @@ class DocumentStatusView(generics.RetrieveAPIView):
             404: error_response('NOT_FOUND: 접근 가능한 문서가 없음'),
             405: error_response('METHOD_NOT_ALLOWED: 지원하지 않는 HTTP 메서드'),
             409: DocumentNotReadySerializer,
+            503: error_response('API_ERROR: 원본 파일 삭제 실패. 문서는 삭제되지 않았으며 다시 요청할 수 있음'),
         },
-        examples=[OpenApiExample('처리 중인 문서', value={
-            'detail': '처리 중인 문서는 삭제할 수 없습니다.', 'status': 'PROCESSING', 'step': 'OCR',
-        }, response_only=True, status_codes=['409'])],
+        examples=[
+            OpenApiExample('처리 중인 문서', value={
+                'detail': '처리 중인 문서는 삭제할 수 없습니다.', 'status': 'PROCESSING', 'step': 'OCR',
+            }, response_only=True, status_codes=['409']),
+            OpenApiExample('파일 삭제 실패', value={
+                'code': 'API_ERROR', 'message': '요청을 처리할 수 없습니다.', 'details': {},
+            }, response_only=True, status_codes=['503']),
+        ],
         tags=['문서'],
     ),
 )
@@ -224,13 +240,18 @@ class DocumentDetailView(generics.RetrieveDestroyAPIView):
                 raise Http404
             if current.status == Document.Status.PROCESSING:
                 return self._processing_response(current)
+            # 원본 파일에는 개인정보가 있을 수 있어 파일을 먼저 지운다.
+            # 실패하면 DB 행을 남겨 같은 요청으로 다시 지울 수 있게 한다.
+            file_name = current.file.name
+            try:
+                current.file.delete(save=False)
+            except FileNotFoundError:
+                # 이미 없는 파일은 지운 것으로 본다.
+                pass
+            except OSError:
+                logger.exception('문서 파일 삭제 실패: document_id=%s file=%s', current.pk, file_name)
+                raise DocumentFileDeleteFailed()
             current.delete()
-
-        try:
-            document.file.delete(save=False)
-        except OSError:
-            # DB 삭제는 끝났으므로 파일 정리 실패는 기록만 하고 응답은 성공으로 둔다.
-            logger.exception('문서 파일 삭제 실패: document_id=%s file=%s', document.pk, document.file.name)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def _processing_response(self, document):
