@@ -9,6 +9,7 @@ from datetime import date
 from pathlib import Path
 
 from django.conf import settings
+from django.core.files.uploadedfile import UploadedFile
 from django.utils import timezone
 
 from sources.models import SourceRevision
@@ -33,7 +34,9 @@ class ManualImportResult:
 
 
 def read_official_txt(file):
-    """지정 폴더 안의 일반 TXT만 제한 크기로 읽고 원본 바이트와 본문을 보존한다."""
+    """지정 폴더의 파일 또는 관리자 업로드를 읽고 같은 TXT 검증을 적용한다."""
+    if isinstance(file, UploadedFile):
+        return read_uploaded_official_txt(file)
     try:
         path = Path(file)
         if '..' in path.parts or str(path).startswith(('\\\\', '//')):
@@ -59,6 +62,27 @@ def read_official_txt(file):
             raise CollectionError('TXT_TOO_LARGE', 'TXT 파일은 BOM을 포함하여 2 MiB 이하여야 합니다.')
     except (OSError, ValueError, RuntimeError, TypeError):
         raise CollectionError('TXT_PATH_INVALID', '지정된 수동 등록 폴더 안의 존재하는 일반 .txt 파일이 필요합니다. 상위 경로·링크·네트워크 경로는 허용하지 않습니다.') from None
+    return _decode_official_txt(raw, resolved.name)
+
+
+def read_uploaded_official_txt(upload):
+    """업로드를 별도 저장하지 않고 크기를 제한해 읽으며 파일명은 추적에만 사용한다."""
+    filename = (upload.name or '').replace('\\', '/').rsplit('/', 1)[-1]
+    if Path(filename).suffix.lower() != '.txt':
+        raise CollectionError('TXT_EXTENSION_INVALID', '.txt 확장자의 UTF-8 파일만 업로드할 수 있습니다.')
+    try:
+        if upload.size is not None and upload.size > MAX_TXT_BYTES:
+            raise CollectionError('TXT_TOO_LARGE', 'TXT 파일은 BOM을 포함하여 2 MiB 이하여야 합니다.')
+        raw = upload.read(MAX_TXT_BYTES + 1)
+    except (OSError, ValueError):
+        raise CollectionError('TXT_UPLOAD_FAILED', '업로드 파일을 읽지 못했습니다. TXT 파일을 다시 선택하세요.') from None
+    return _decode_official_txt(raw, filename)
+
+
+def _decode_official_txt(raw, filename):
+    """CLI와 Admin에 동일한 크기·인코딩·본문 검증과 원본 지문 규칙을 적용한다."""
+    if len(raw) > MAX_TXT_BYTES:
+        raise CollectionError('TXT_TOO_LARGE', 'TXT 파일은 BOM을 포함하여 2 MiB 이하여야 합니다.')
     try:
         text = raw.decode('utf-8-sig')
     except UnicodeError:
@@ -70,7 +94,7 @@ def read_official_txt(file):
     ):
         raise CollectionError('TXT_BINARY_REJECTED', '바이너리 또는 제어 문자가 포함된 파일은 TXT로 등록할 수 없습니다.')
     return text, {
-        'method': 'manual_txt', 'filename': resolved.name,
+        'method': 'manual_txt', 'filename': filename,
         'raw_sha256': hashlib.sha256(raw).hexdigest(), 'byte_size': len(raw),
         'encoding': 'utf-8-sig' if raw.startswith(b'\xef\xbb\xbf') else 'utf-8',
     }
