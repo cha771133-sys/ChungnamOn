@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
 import { api, parseApiError } from '../lib/api'
 import { refreshNotifyPreference, saveNotifyPreference } from '../lib/notifications'
-import { connectPush, releasePushForLogout, requestPushPermission } from '../lib/push'
+import { releasePushForLogout, requestPushPermission, retryPush } from '../lib/push'
 import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
 import { useApp, purgeServerData } from '../store.js'
 import { LANGS } from '../data/mock.js'
@@ -210,7 +210,7 @@ function PushStatusNote({ status, userId }) {
         </button>
       )}
       {status === 'failed' && (
-        <button className="btn btn-outline btn-small" onClick={() => run(connectPush)} disabled={busy}>
+        <button className="btn btn-outline btn-small" onClick={() => run(retryPush)} disabled={busy}>
           {T('다시 연결하기')}
         </button>
       )}

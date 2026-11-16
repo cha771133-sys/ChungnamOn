@@ -132,23 +132,28 @@ function blockedStatus(): PushStatus | null {
 type MessagingSdk = typeof import('@firebase/messaging')
 
 let messagingPromise: Promise<{ sdk: MessagingSdk; messaging: Messaging } | null> | null = null
+/** SDK 파일을 받지 못한 적이 있는지. 브라우저가 실패한 import를 기억할 수 있어, 다시 시도할 때 새로고침한다 */
+let sdkLoadFailed = false
 
 /** Firebase SDK는 알림을 연결할 때만 불러온다 (설정이 없거나 알림을 안 쓰면 내려받지 않음) */
 function getMessagingOnce(): Promise<{ sdk: MessagingSdk; messaging: Messaging } | null> {
   if (!messagingPromise) {
+    // 지원하지 않는 브라우저(isSupported false)만 null로 기억한다.
+    // SDK를 내려받지 못한 경우(오프라인 등)는 기억하지 않고 오류를 넘겨, 상태를 'failed'로 두고 다시 시도할 수 있게 한다
     messagingPromise = (async () => {
-      try {
-        const [{ initializeApp }, sdk] = await Promise.all([import('@firebase/app'), import('@firebase/messaging')])
-        if (!(await sdk.isSupported())) return null
-        const messaging = sdk.getMessaging(initializeApp(firebaseConfig, 'chungnamon'))
-        // 직접 register()한 뒤뿐 아니라 FID가 바뀌거나 푸시 구독이 바뀔 때도 불린다
-        sdk.onRegistered(messaging, (fid) => void enqueue(() => saveDevice(fid)))
-        sdk.onUnregistered(messaging, (fid) => void enqueue(() => dropDevice(fid)))
-        return { sdk, messaging }
-      } catch {
-        return null
-      }
+      const [{ getApps, initializeApp }, sdk] = await Promise.all([import('@firebase/app'), import('@firebase/messaging')])
+      if (!(await sdk.isSupported())) return null
+      const app = getApps().find((a) => a.name === 'chungnamon') ?? initializeApp(firebaseConfig, 'chungnamon')
+      const messaging = sdk.getMessaging(app)
+      // 직접 register()한 뒤뿐 아니라 FID가 바뀌거나 푸시 구독이 바뀔 때도 불린다
+      sdk.onRegistered(messaging, (fid) => void enqueue(() => saveDevice(fid)))
+      sdk.onUnregistered(messaging, (fid) => void enqueue(() => dropDevice(fid)))
+      return { sdk, messaging }
     })()
+    messagingPromise.catch(() => {
+      messagingPromise = null
+      sdkLoadFailed = true
+    })
   }
   return messagingPromise
 }
@@ -269,6 +274,15 @@ export async function connectPush(userId: string | number): Promise<PushStatus> 
   return status
 }
 
+/** '다시 연결' 버튼: SDK 파일을 받지 못해 실패했으면 새로고침해서 다시 받고, 아니면 바로 다시 연결한다. */
+export function retryPush(userId: string | number): Promise<PushStatus> {
+  if (sdkLoadFailed) {
+    window.location.reload()
+    return Promise.resolve(status)
+  }
+  return connectPush(userId)
+}
+
 /** 버튼을 눌렀을 때 브라우저 알림 권한을 요청하고, 허용되면 연결한다. */
 export async function requestPushPermission(userId: string | number): Promise<PushStatus> {
   if ('Notification' in window && Notification.permission === 'default') {
@@ -315,12 +329,9 @@ export async function releasePushForLogout(): Promise<void> {
       LOGOUT_WAIT_MS,
     )
   if (messagingPromise) {
-    const fcm = await messagingPromise
-    if (fcm)
-      await withTimeout(
-        fcm.sdk.unregister(fcm.messaging).catch(() => {}),
-        LOGOUT_WAIT_MS,
-      )
+    // SDK를 불러오는 중이면 그것도 몇 초만 기다린다 (로그아웃이 멈추지 않게)
+    const fcm = await withTimeout(messagingPromise.catch(() => null), LOGOUT_WAIT_MS)
+    if (fcm) await withTimeout(fcm.sdk.unregister(fcm.messaging).catch(() => {}), LOGOUT_WAIT_MS)
   }
 }
 
