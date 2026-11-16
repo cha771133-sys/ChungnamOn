@@ -1,12 +1,13 @@
 import type { AxiosRequestConfig } from 'axios'
 import type { Messaging } from '@firebase/messaging'
 import { api, StaleSessionError, tokenStore } from './api'
+import { registerServiceWorker } from './serviceWorker'
 
 /*
  * 이 기기를 마감 알림 받을 기기로 연결한다 (Firebase Cloud Messaging, FID 방식).
  *
  * 순서 (백엔드 notifications/README.md 계약)
- * 1. 브라우저 알림 권한 확인 → 서비스 워커(/sw.js) 준비
+ * 1. 브라우저 알림 권한 확인 → 루트 서비스 워커(/firebase-messaging-sw.js) 준비
  * 2. register(messaging, { vapidKey, serviceWorkerRegistration }) → onRegistered 콜백으로 FID를 받는다
  * 3. FID를 POST /api/notifications/devices/ 로 보내고, 받은 기기 ID를 계정별로 저장한다
  *    FID가 바뀌면 replacesDeviceId로 이전 기기를 함께 넘긴다
@@ -160,7 +161,7 @@ function getMessagingOnce(): Promise<{ sdk: MessagingSdk; messaging: Messaging }
 
 async function getServiceWorker(): Promise<ServiceWorkerRegistration> {
   // 이미 등록돼 있으면 같은 등록을 돌려준다
-  await navigator.serviceWorker.register('/sw.js')
+  await registerServiceWorker()
   return navigator.serviceWorker.ready
 }
 

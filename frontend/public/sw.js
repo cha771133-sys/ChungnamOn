@@ -114,11 +114,15 @@ async function showPush(payload) {
 }
 
 self.addEventListener('push', (e) => {
+  // SDK의 notification 자동 표시보다 이 처리기가 먼저 실행된다.
+  // 포그라운드·백그라운드 모두 기존 다국어 시스템 알림을 한 번만 표시한다.
+  e.stopImmediatePropagation()
   e.waitUntil(showPush(readPush(e)))
 })
 
 // 알림을 누르면 열려 있는 앱 창을 그 일정으로 옮기고, 없으면 새로 연다 (앱이 /?schedule=ID를 일정 상세로 연다)
 self.addEventListener('notificationclick', (e) => {
+  e.stopImmediatePropagation()
   e.notification.close()
   const path = safePath(e.notification.data?.url)
   e.waitUntil(

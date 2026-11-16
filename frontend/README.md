@@ -84,6 +84,8 @@ VITE_FIREBASE_VAPID_KEY=
 ```
 
 - 서비스 워커가 있어야 해서 `npm run dev`에서는 연결하지 않습니다. `npm run build` 후 `npm run preview`(localhost) 또는 배포 주소(HTTPS)에서 확인합니다.
+- 빌드는 `src/firebase-messaging-sw.js`와 Firebase SDK를 `dist/firebase-messaging-sw.js`로 묶습니다. 앱 시작과 푸시 연결은 같은 `/` 범위 등록을 공유합니다. 기존 `/sw.js` 등록도 같은 범위에서 교체하며 별도 범위를 추가하지 않습니다.
+- 기존 `public/sw.js`의 PWA·다국어 표시·안전한 클릭 경로를 재사용합니다. 포그라운드·백그라운드 알림을 이 처리기가 전담하고 SDK 자동 표시를 막아 중복을 방지합니다. 별도 `onMessage`/`onBackgroundMessage` 표시기를 추가하지 않습니다. SDK는 서비스 워커에서 FID 구독 갱신을 처리합니다.
 - 백엔드는 같은 Firebase 프로젝트의 서비스 계정(`FIREBASE_SERVICE_ACCOUNT_JSON`)으로 보냅니다.
 - iPhone은 홈 화면에 추가한 앱에서만 알림을 받습니다 (iOS 16.4 이상).
 - 잠금 화면 문구에는 업무명·금액 같은 문서 내용이 들어가지 않습니다. 서비스 워커(`public/sw.js`)가 서버의 한국어 문구를 안내 언어(vi·en·ko, 그 밖의 언어는 영어)로 바꿔 보여주고, 누르면 `/?schedule=일정ID`로 일정 상세를 엽니다.
