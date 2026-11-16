@@ -20,8 +20,6 @@ from .retriever import EmbeddingConfigError, SearchResult, search
 
 log = logging.getLogger(__name__)
 
-# 공식/참고 자료를 나눌 때 먼저 검색하는 양 (top_k의 몇 배)
-SPLIT_SEARCH_FACTOR = 4
 # 같은 내용 자료로 묶을 제목 유사도 (보수적으로 높게)
 SAME_TITLE_RATIO = 0.9
 
@@ -268,11 +266,13 @@ def answer_with_results(
     if official_ids is None:
         official, reference = _search(query, regions=regions), []
     else:
-        # 상위 k개를 먼저 자르면 연결 안 된 자료가 칸을 다 차지해 공식 자료가 밀려날 수 있음.
-        # 넉넉히 검색해서 나눈 뒤 그룹마다 k개로 자름
-        results = _search(query, regions=regions, top_k=k * SPLIT_SEARCH_FACTOR)
-        official = [r for r in results if r.source_document_id in official_ids][:k]
-        reference = [r for r in results if r.source_document_id not in official_ids][:k]
+        # 한 번에 검색해서 자른 뒤 나누면, 연결 안 된 자료가 더 비슷할 때 공식 자료가 다 잘려 나감.
+        # 그래서 공식 자료(official_ids 청크 안)와 참고 자료(그 밖)를 따로 k개씩 검색 (임베딩은 한 번만 계산)
+        official = _search(query, regions=regions, top_k=k, document_ids=official_ids) if official_ids else []
+        reference = _search(query, regions=regions, top_k=k, exclude_document_ids=official_ids)
+        # 검색 범위가 이미 나뉘어 있지만, 출처 자격은 여기서 한 번 더 확인
+        official = [r for r in official if r.source_document_id in official_ids][:k]
+        reference = [r for r in reference if r.source_document_id not in official_ids][:k]
     # 같은 내용의 공식 자료가 여러 개면 최근 자료를 앞에 (S1이 최근 자료가 되게)
     official = prefer_recent(official)
     # 검색어에는 질문 내용이 들어 있어서 로그에 남기지 않음

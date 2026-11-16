@@ -842,6 +842,39 @@ class ChatAnswerTests(AIEnvMixin, TestCase):
         self.assertEqual(hint["source_ids"], ["S1"])
         self.assertLessEqual(reference_part.count("| 연결 안 된 자료"), k)  # 참고 자료도 k개까지만
 
+    def test_official_searched_separately_even_if_many_unlinked_are_closer(self):
+        """연결 안 된 자료가 아주 많고(예전 방식의 k×4개보다 많음) 훨씬 비슷해도 공식 자료는 따로 검색돼 S1·GROUNDED (CodeRabbit P1)."""
+        from ai.chatbot.config import get_settings
+        from ai.chatbot.embedder import get_embedder
+
+        k = get_settings().top_k
+        question = "주민세 납부 기간이 언제예요?"
+        for i in range(k * 4 + 3):
+            self.source(f"other{i}", title=f"연결 안 된 자료 {i}", text=question)
+        linked = self.source("linked", title="연결된 자료", text="# 안내\n세무과 문의 " * 3)
+        raw = {"answer": "답", "status": "GROUNDED", "used_sources": ["S1"], "suggested_questions": []}
+        emb = get_embedder()
+        with mock.patch.object(emb, "embed_query", wraps=emb.embed_query) as embed:
+            prompt, hint, out = self._prompt(self.official(linked), raw)
+        official_part, reference_part = prompt.split("[참고 자료 — 공식 출처로 표시 불가]")
+        self.assertIn("S1 | 연결된 자료", official_part)
+        self.assertNotIn("연결 안 된 자료", official_part)
+        self.assertEqual(hint["source_ids"], ["S1"])
+        self.assertEqual(reference_part.count("| 연결 안 된 자료"), k)  # 참고 자료는 k개
+        self.assertEqual((out["status"], out["sources"]), ("GROUNDED", [{"sourceDocumentId": linked.pk}]))
+        self.assertEqual(embed.call_count, 1)  # 공식·참고 두 번 검색해도 질문 임베딩은 한 번
+
+    def test_search_limits_by_source_document_ids(self):
+        from ai.chatbot.retriever import search
+
+        a, b = self.source("a", title="자료 A"), self.source("b", title="자료 B")
+        ids = lambda **kw: {r.source_document_id for r in search("주민세 납부", top_k=10, **kw)}  # noqa: E731
+        self.assertEqual(ids(), {a.pk, b.pk})
+        self.assertEqual(ids(document_ids={a.pk}), {a.pk})
+        self.assertEqual(ids(exclude_document_ids={a.pk}), {b.pk})
+        self.assertEqual(ids(document_ids=set()), set())          # 빈 범위면 결과 없음 (SQL 오류 아님)
+        self.assertEqual(ids(exclude_document_ids=set()), {a.pk, b.pk})
+
     def test_reference_numbers_are_never_sources(self):
         linked = self.source("linked", title="연결된 자료")
         self.source("other", title="연결 안 된 자료")
