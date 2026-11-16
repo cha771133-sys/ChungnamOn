@@ -2,14 +2,31 @@ from django import forms
 from django.contrib import admin
 from django.contrib import messages
 from django.db import DatabaseError, transaction
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import F
+from django.http import Http404, HttpResponseRedirect
+from django.shortcuts import get_object_or_404
+from django.template.response import TemplateResponse
+from django.urls import path, reverse
+from django.utils.decorators import method_decorator
 from django.utils import timezone
+from django.utils.html import format_html
+from django.views.decorators.http import require_http_methods
 
 from .models import Agency, AgencyAlias, CrawlLog, SourceChunk, SourceDocument, SourceRefreshTarget, SourceRevision
 from .services.errors import CollectionError
 from .services.freshness import freshness, next_due_at, filter_freshness
+from .services.manual_import import import_official_txt
 from .services.refresh_service import review_revision
+from .services.source_registry import CATEGORIES, REGIONS
+from .services.usage_conditions import is_manual_metadata
+
+
+def _has_txt_import_permission(user):
+    return user.is_active and user.is_staff and all(user.has_perm(permission) for permission in (
+        'sources.add_sourcedocument', 'sources.change_sourcedocument',
+        'sources.add_sourcerevision', 'sources.change_sourcerevision',
+    ))
 
 
 class PipelineReadOnlyMixin:
@@ -66,12 +83,53 @@ class SourceDocumentAdminForm(forms.ModelForm):
                 self.add_error(None, '화면을 연 뒤 자료가 변경되었습니다. 최신 화면을 다시 열어 확인하세요.')
             if cleaned_data.get('status') == SourceDocument.Status.ACTIVE and current.ai_reprocessing_required:
                 self.add_error('status', 'AI 재처리가 끝날 때까지 자료를 사용 중으로 변경할 수 없습니다.')
+            if cleaned_data.get('status') == SourceDocument.Status.ACTIVE and is_manual_metadata(current.metadata):
+                if current.review_status != SourceDocument.ReviewStatus.APPROVED:
+                    self.add_error('status', 'TXT는 변경 후보의 관리자 승인 전 사용 중으로 변경할 수 없습니다.')
+        return cleaned_data
+
+
+class OfficialTxtImportForm(forms.Form):
+    required_css_class = 'required'
+
+    file = forms.FileField(
+        label='공식자료 TXT 파일', widget=forms.ClearableFileInput(attrs={'accept': '.txt,text/plain'}),
+        help_text='UTF-8 또는 UTF-8 BOM .txt, BOM 포함 최대 2 MiB. 오류가 나면 파일을 다시 선택하세요.',
+    )
+    title = forms.CharField(label='공식자료 제목', max_length=500, widget=forms.TextInput(attrs={'class': 'vLargeTextField'}))
+    agency = forms.CharField(label='공식 기관명', max_length=255, widget=forms.TextInput(attrs={'class': 'vTextField'}))
+    url = forms.URLField(label='공식 원문 HTTPS URL', max_length=2048, widget=forms.URLInput(attrs={'class': 'vURLField'}))
+    region = forms.ChoiceField(label='적용 지역', choices=[(value, value) for value in sorted(REGIONS)], initial='전국')
+    category = forms.ChoiceField(label='분류', choices=[(value, value) for value in sorted(CATEGORIES)])
+    published_at = forms.DateField(label='공식 발행일', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+    terms_status = forms.ChoiceField(
+        label='AI 이용조건 확인 상태', initial='unverified',
+        choices=[('unverified', '미확인'), ('confirmed', 'AI 이용 허용 확인'), ('prohibited', '가공 금지')],
+        help_text='이용조건은 참고 기록입니다. 어떤 상태에서도 권한 있는 관리자가 승인할 수 있습니다.',
+    )
+    terms_note = forms.CharField(
+        label='이용조건 및 확인 근거', max_length=4000,
+        widget=forms.TextInput(attrs={'class': 'vLargeTextField'}),
+        help_text='AI 정제·청크·임베딩·검색 허용 근거 또는 미확인·금지 사유를 한 줄로 기록하세요.',
+    )
+    terms_url = forms.URLField(label='공식 이용조건 HTTPS URL', max_length=2048, required=False, widget=forms.URLInput(attrs={'class': 'vURLField'}))
+    terms_checked_on = forms.DateField(label='이용조건 확인일', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if cleaned_data.get('terms_status') == 'confirmed' and not cleaned_data.get('terms_checked_on'):
+            self.add_error('terms_checked_on', 'AI 이용 허용 확인에는 실제 확인일이 필요합니다.')
+        for field in ('published_at', 'terms_checked_on'):
+            value = cleaned_data.get(field)
+            if value and value > timezone.localdate():
+                self.add_error(field, '미래 날짜는 입력할 수 없습니다.')
         return cleaned_data
 
 
 @admin.register(SourceDocument)
 class SourceDocumentAdmin(admin.ModelAdmin):
     form = SourceDocumentAdminForm
+    change_list_template = 'admin/sources/sourcedocument/change_list.html'
     list_display = ('id', 'title', 'source_url', 'provider', 'external_id', 'agency', 'region', 'category', 'published_at', 'collected_at', 'last_success_at', 'updated_at', 'status', 'freshness_state', 'review_status', 'reviewed_by', 'reviewed_at')
     list_filter = ('agency', 'region', 'category', 'status', 'provider', 'review_status', FreshnessFilter, 'ai_reprocessing_required')
     search_fields = ('title', 'source_url', 'agency')
@@ -79,6 +137,73 @@ class SourceDocumentAdmin(admin.ModelAdmin):
     ordering = ('collected_at', 'id')
     list_select_related = ('refresh_target', 'reviewed_by')
     inlines = (SourceChunkInline,)
+
+    def has_txt_import_permission(self, request):
+        """자료·후보를 생성하고 기존 대기 후보를 갱신할 권한을 모두 요구한다."""
+        return _has_txt_import_permission(request.user)
+
+    def get_urls(self):
+        return [path('import-txt/', self.admin_site.admin_view(self.import_txt_view),
+                     name='sources_sourcedocument_import_txt'), *super().get_urls()]
+
+    def changelist_view(self, request, extra_context=None):
+        return super().changelist_view(request, {
+            **(extra_context or {}), 'has_txt_import_permission': self.has_txt_import_permission(request),
+        })
+
+    @method_decorator(require_http_methods(['GET', 'POST']))
+    def import_txt_view(self, request):
+        """기존 수동 등록과 감사 로그를 함께 저장하고 기존 후보 검토 화면으로 연결한다."""
+        if not self.has_txt_import_permission(request):
+            raise PermissionDenied
+        source_revision, initial = None, {}
+        if 'revision' in request.GET:
+            try:
+                source_revision = get_object_or_404(SourceRevision.objects.select_related('document'), pk=request.GET['revision'])
+            except (ValueError, OverflowError):
+                raise Http404 from None
+            snapshot = source_revision.metadata
+            metadata = snapshot.get('metadata', {})
+            if not is_manual_metadata(metadata) and not is_manual_metadata(source_revision.document.metadata):
+                raise Http404
+            terms = metadata.get('usage_terms', {})
+            if not isinstance(terms, dict):
+                terms = {}
+            initial = {field: snapshot.get(field) for field in ('title', 'agency', 'region', 'category', 'published_at')}
+            initial.update(url=snapshot.get('source_url'), terms_status=terms.get('status', 'unverified'),
+                           terms_note=terms.get('note'), terms_url=terms.get('url'), terms_checked_on=terms.get('checked_on'))
+        form = OfficialTxtImportForm(request.POST, request.FILES) if request.method == 'POST' else OfficialTxtImportForm(initial=initial)
+        if request.method == 'POST' and form.is_valid():
+            try:
+                with transaction.atomic():
+                    result = import_official_txt(**form.cleaned_data, registered_by=request.user.get_username())
+                    if result.revision_id:
+                        obj = SourceRevision.objects.get(pk=result.revision_id)
+                        destination = reverse('admin:sources_sourcerevision_change', args=[obj.pk], current_app=self.admin_site.name)
+                    else:
+                        obj = SourceDocument.objects.get(pk=result.document_id)
+                        destination = reverse('admin:sources_sourcedocument_change', args=[obj.pk], current_app=self.admin_site.name)
+                    audit_message = f'공식자료 TXT 등록: {result.outcome}, 문서 {result.document_id}, 본문 해시 {result.content_hash}'
+                    if result.outcome in ('new', 'candidate'):
+                        self.log_addition(request, obj, audit_message)
+                    else:
+                        self.log_change(request, obj, audit_message)
+            except CollectionError as error:
+                form.add_error('file' if error.code.startswith('TXT_') else None, str(error))
+            except (DatabaseError, ValidationError):
+                form.add_error(None, '저장 충돌 또는 검증 실패입니다. 최신 자료 상태를 확인한 뒤 파일을 다시 선택하세요.')
+            else:
+                if result.revision_id:
+                    notice = f'문서 {result.document_id} / 후보 {result.revision_id}: 검토 대기로 저장했습니다. 동일 본문의 대기 후보는 재사용합니다.'
+                    self.message_user(request, notice, messages.SUCCESS)
+                else:
+                    self.message_user(request, f'문서 {result.document_id}: 새 후보 없이 처리했습니다. 최신 자료와 검토 상태를 확인하세요.', messages.INFO)
+                return HttpResponseRedirect(destination)
+        request.current_app = self.admin_site.name
+        return TemplateResponse(request, 'admin/sources/sourcedocument/import_txt.html', {
+            **self.admin_site.each_context(request), 'opts': self.model._meta,
+            'title': '공식자료 TXT 등록', 'form': form, 'source_revision': source_revision,
+        })
 
     def get_readonly_fields(self, request, obj=None):
         """기존 자료의 출처 식별자는 폼에서 바꾸지 못하게 하여 수집 대상과 일치시킨다."""
@@ -162,12 +287,54 @@ class SourceRefreshTargetAdmin(admin.ModelAdmin):
 
 @admin.register(SourceRevision)
 class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
-    list_display = ('id', 'document', 'provider', 'content_hash', 'collected_at', 'review_status', 'reviewed_by', 'reviewed_at')
+    list_display = ('id', 'document', 'provider', 'registration_method', 'usage_terms_status', 'content_hash', 'collected_at', 'review_status', 'reviewed_by', 'reviewed_at')
     list_filter = ('review_status', 'provider')
     search_fields = ('document__title', 'document__external_id', 'content_hash')
-    readonly_fields = tuple(field.name for field in SourceRevision._meta.fields)
+    readonly_fields = ('usage_terms_status', 'manual_review_notice', *tuple(field.name for field in SourceRevision._meta.fields))
     list_select_related = ('document', 'reviewed_by')
     actions = ('approve_candidates', 'reject_candidates')
+
+    @admin.display(description='등록 방식')
+    def registration_method(self, obj):
+        return '수동 TXT' if is_manual_metadata(obj.metadata.get('metadata', {})) else '자동 수집'
+
+    @admin.display(description='TXT 이용조건')
+    def usage_terms_status(self, obj):
+        if not is_manual_metadata(obj.metadata.get('metadata', {})) and not is_manual_metadata(obj.document.metadata):
+            return '해당 없음'
+        terms = obj.metadata.get('metadata', {}).get('usage_terms', {})
+        status = terms.get('status') if isinstance(terms, dict) else None
+        label = {'unverified': '미확인', 'prohibited': '가공 금지', 'confirmed': 'AI 이용 허용 확인'}.get(status, '미기록')
+        if isinstance(terms, dict) and terms.get('registry_excluded'):
+            label += ' / 수집 목록 제외 표시'
+        return label
+
+    def _correction_url(self, pk):
+        return f"{reverse('admin:sources_sourcedocument_import_txt', current_app=self.admin_site.name)}?revision={pk}"
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj and _has_txt_import_permission(request.user) and (
+            is_manual_metadata(obj.metadata.get('metadata', {})) or is_manual_metadata(obj.document.metadata)
+        ):
+            return ('manual_import_correction', *self.readonly_fields)
+        return self.readonly_fields
+
+    @admin.display(description='TXT 이용조건 정정')
+    def manual_import_correction(self, obj):
+        return format_html('<a href="{}">TXT 이용조건 확인·정정</a> — 기존 입력을 불러옵니다. 같은 TXT를 다시 선택하세요.', self._correction_url(obj.pk))
+
+    @admin.display(description='TXT 원문·이용조건 검토')
+    def manual_review_notice(self, obj):
+        if self.registration_method(obj) != '수동 TXT':
+            return '해당 없음'
+        return (
+            f'현재 TXT 이용조건: {self.usage_terms_status(obj)}. '
+            '확인일을 입력해도 AI 이용조건 확인 상태는 자동으로 바뀌지 않습니다. '
+            '공식 URL만으로 원문 일치를 보증하지 않습니다. 새 본문과 공식 원문을 직접 대조하고 '
+            'metadata의 manual_import(파일명·원본 해시·등록자), usage_terms(조건·근거·확인일)를 검토하세요. '
+            'AI 정제·청크·임베딩·검색 허용과 현재 적용 범위를 확인한 뒤 기존 승인 액션을 사용하세요. '
+            '이용조건과 수집 목록 제외 표시는 참고 기록이며 관리자 승인을 제한하지 않습니다.'
+        )
 
     def has_review_permission(self, request):
         """활성 staff와 자료·후보 양쪽의 수정 권한이 있는 사용자만 검토하게 한다."""

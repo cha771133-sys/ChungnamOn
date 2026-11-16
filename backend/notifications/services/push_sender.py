@@ -61,11 +61,15 @@ def build_deadline_message(*, registration_id, schedule_id, deadline_date, days_
     }
     if document_id is not None:
         data['documentId'] = str(document_id)
+    body = (
+        '등록한 일정의 마감일이 7일 남았습니다.'
+        if days_before == 7 else '등록한 일정의 마감일이 내일입니다.'
+    )
     return messaging.Message(
         fid=registration_id,
         notification=messaging.Notification(
-            title=f'마감일이 {days_before}일 남았습니다.',
-            body=f'등록한 행정업무의 마감일은 {deadline_date.month}월 {deadline_date.day}일입니다.',
+            title='ChungnamOn 마감 알림',
+            body=body,
         ),
         data=data,
     )

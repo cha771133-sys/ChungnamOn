@@ -1,3 +1,4 @@
+anthropic==2.4.0
 asgiref==3.13.0
 beautifulsoup4==4.14.3
 charset-normalizer==3.5.2
@@ -9,6 +10,8 @@ djangorestframework_simplejwt==5.5.1
 drf-spectacular==0.30.0
 firebase-admin==7.7.0
 gunicorn==26.2.0
+httpx==0.28.1
+numpy==2.5.4
 psycopg==3.3.6
 psycopg-binary==3.3.6
 PyJWT==2.15.1

@@ -1,0 +1,44 @@
+{% extends "admin/base_site.html" %}
+{% load admin_urls static %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'admin/css/forms.css' %}">
+{% endblock %}
+
+{% block breadcrumbs %}
+<ol class="breadcrumbs">
+  <li><a href="{% url 'admin:index' %}">홈</a></li>
+  <li><a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a></li>
+  <li><a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural }}</a></li>
+  <li aria-current="page">{{ title }}</li>
+</ol>
+{% endblock %}
+
+{% block content %}
+{% if source_revision %}
+<p class="help">후보 {{ source_revision.pk }}의 기존 입력을 불러왔습니다. 같은 TXT를 다시 선택하고 이용조건 상태와 확인 근거를 직접 확인하세요. 이 화면을 여는 것만으로 조건이나 승인 상태가 바뀌지 않습니다.</p>
+{% endif %}
+<p>등록자: {{ request.user.get_username }}. 업로드한 자료는 검토 대기 후보로 저장됩니다.</p>
+<p>공식 원문과 TXT를 직접 대조하고 이용조건을 기록하세요. 이용조건 상태와 수집 목록 제외 표시와 관계없이 관리자가 승인할 수 있습니다.</p>
+<p>등록 후 변경 후보 목록의 기존 승인 기능을 사용하세요. 승인 후에도 AI 재처리가 완료되어야 새 본문을 사용할 수 있습니다.</p>
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  <fieldset class="module aligned">
+    {% for field in form %}
+      <div class="form-row{% if field.errors %} errors{% endif %}">
+        {{ field.errors }}
+        <div class="flex-container">
+          {{ field.label_tag }} {{ field }}
+        </div>
+        {% if field.help_text %}<div class="help" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</div>{% endif %}
+      </div>
+    {% endfor %}
+  </fieldset>
+  <div class="submit-row">
+    <input type="submit" value="검토 후보 등록" class="default">
+    <a href="{% url opts|admin_urlname:'changelist' %}" class="closelink">자료 목록</a>
+  </div>
+</form>
+{% endblock %}

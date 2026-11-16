@@ -234,8 +234,12 @@ class OfficialRefreshTests(TestCase):
         with self.assertRaisesMessage(CollectionError, 'PERMISSION_DENIED'):
             review_revision(revision.pk, self.user, approve=True)
         review_revision(revision.pk, self.admin, approve=True)
+        approved = SourceDocument.objects.values().get()
+        reviewed = SourceRevision.objects.values().get(pk=revision.pk)
         with self.assertRaisesMessage(CollectionError, 'REVIEW_CONFLICT'):
             review_revision(revision.pk, self.admin, approve=True)
+        self.assertEqual(SourceDocument.objects.values().get(), approved)
+        self.assertEqual(SourceRevision.objects.values().get(pk=revision.pk), reviewed)
 
     def test_inactive_document_not_reactivated_by_collection_or_review(self):
         document = self.approve_initial()

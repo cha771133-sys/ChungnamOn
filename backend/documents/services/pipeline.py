@@ -1,6 +1,7 @@
 """문서 처리 파이프라인.
 
 OCR → 마스킹 → 해석 → 검증 순서로 실행하고 단계마다 Document.status·step을 갱신한다.
+체크리스트·전화 대본(S4)은 검증 단계 안에서 검증 다음에 만든다(_run_actions).
 run_ocr, mask_personal_info, interpret, verify는 AI 모듈 자리의 더미 함수다.
 AI 모듈이 준비되면 docstring의 입출력 형식을 지키면서 함수 내용만 교체한다.
 
@@ -19,6 +20,7 @@ from django.db import transaction
 from accounts.models import UserProfile
 
 from ..models import Document, InterpretationResult
+from .checklist import replace_checklist
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,7 @@ ADDRESS_PATTERN = re.compile(r'(주소\s*[:：]\s*)[^\n]+')
 
 
 def run_ocr(document):
-    """문서 파일에서 글자를 읽는다. (더미)
+    """문서 파일에서 글자를 읽는다. OCR_MODE가 dummy면 더미, clova면 CLOVA OCR을 쓴다.
 
     입력: document (Document) — document.file, document.file_type 사용
     출력: {
@@ -58,26 +60,44 @@ def run_ocr(document):
         "confidence": float,  # 0~1, 핵심 항목(기한·금액·기관명) 기준 신뢰도
     }
     """
-    return {'text': DUMMY_OCR_TEXT, 'confidence': 0.92}
+    mode = getattr(settings, 'OCR_MODE', 'dummy')
+    if mode == 'dummy':
+        return {'text': DUMMY_OCR_TEXT, 'confidence': 0.92}
+    if mode == 'clova':
+        from .ocr import run_clova_ocr
+
+        return run_clova_ocr(document)
+    raise ValueError('지원하지 않는 OCR_MODE입니다.')
 
 
 def mask_personal_info(text):
-    """원문에서 외국인등록번호·주소 같은 개인정보를 가린다. (더미: 정규식)
+    """원문에서 외국인등록번호·주소 같은 개인정보를 가린다. MASK_MODE가 dummy면 더미 정규식, rules면 masking.py를 쓴다.
 
-    입력: text (str) — OCR 원문
+    입력: text (str) — OCR 원문. 챗봇(prepare_ai_payload)도 질문·이력·해석에 이 함수를 쓴다.
     출력: {
         "masked_text": str,   # 개인정보를 가린 원문
         "masked_count": int,  # 가린 항목 수
     }
     마스킹에 실패하면 예외를 던진다. 실패한 문서는 결과를 내보내지 않는다(F1-4).
+    dummy는 등록번호와 "주소:" 줄만 가린다. 실제 문서(OCR_MODE=clova)에는 rules를 쓴다.
     """
-    masked_text, registration_count = REGISTRATION_NUMBER_PATTERN.subn('******-*******', text)
-    masked_text, address_count = ADDRESS_PATTERN.subn(r'\1[주소 가림]', masked_text)
-    return {'masked_text': masked_text, 'masked_count': registration_count + address_count}
+    mode = getattr(settings, 'MASK_MODE', 'dummy')
+    if mode == 'dummy':
+        # 실제 문서를 읽으면서 더미 마스킹을 쓰면 이름·연락처 등이 그대로 남는다. 설정 누락을 처리 실패로 드러낸다.
+        if getattr(settings, 'OCR_MODE', 'dummy') != 'dummy':
+            raise ValueError('실제 OCR을 쓸 때는 MASK_MODE=rules가 필요합니다.')
+        masked_text, registration_count = REGISTRATION_NUMBER_PATTERN.subn('******-*******', text)
+        masked_text, address_count = ADDRESS_PATTERN.subn(r'\1[주소 가림]', masked_text)
+        return {'masked_text': masked_text, 'masked_count': registration_count + address_count}
+    if mode == 'rules':
+        from .masking import mask_text
+
+        return mask_text(text)
+    raise ValueError('지원하지 않는 MASK_MODE입니다.')
 
 
 def interpret(masked_text, language):
-    """마스킹된 원문을 사용자 언어로 해석한다. (더미: 아산시 주민세 고지서)
+    """마스킹된 원문을 사용자 언어로 해석한다. INTERPRET_MODE가 dummy면 더미(아산시 주민세 고지서), llm이면 interpret.py를 쓴다.
 
     입력: masked_text (str), language (str, 언어 코드 예: "vi")
     출력: {
@@ -91,8 +111,33 @@ def interpret(masked_text, language):
         "deadlines": [{"label": str, "date": "YYYY-MM-DD"}],
         "required_docs": [str],
         "agency": {"name": str, "phone": str, "source": "document" | "official" | "unknown"},
+        "amount": str,                      # 납부 금액 예: "6,250원". 없으면 빈 문자열
+        "payment_methods": [str],           # 납부 방법
+        "checklist": [{                     # 사용자가 할 일. 없거나 형식이 틀리면 체크리스트만 비운다
+            "text": str,                    # 할 일 (필수, 최대 300자)
+            "detail": str,
+            "docs": [str],                  # 준비할 서류
+            "method": str,                  # 하는 방법
+            "due": "YYYY-MM-DD" | None,     # 형식이 틀리면 None으로 저장
+            "state": "CONFIRMED" | "CONDITIONAL" | "CHECK_NEEDED",  # 그 외 값은 CHECK_NEEDED
+            "note": str,
+            "sourceIds": [str],             # verify 결과 sources[].id
+        }],
     }
+    해석에 실패하면 예외를 던진다. 실패한 문서는 더미 결과로 대체하지 않는다.
+    llm은 checklist를 만들지 않고 빈 목록을 돌려준다(체크리스트는 S4가 만든다).
+    llm은 DOCUMENTS_VERIFY_MODE=rag와 함께 쓴다. 검증이 dummy면 예외를 던진다.
     """
+    mode = getattr(settings, 'INTERPRET_MODE', 'dummy')
+    if mode == 'llm':
+        # 더미 검증은 고정된 주민세 결과를 돌려준다. 실제 해석 결과에 붙으면 가짜 "일치"가 보이므로 설정 누락을 처리 실패로 드러낸다.
+        if getattr(settings, 'DOCUMENTS_VERIFY_MODE', 'dummy') != 'rag':
+            raise ValueError('실제 해석을 쓸 때는 DOCUMENTS_VERIFY_MODE=rag가 필요합니다.')
+        from .interpret import interpret_document
+
+        return interpret_document(masked_text, language)
+    if mode != 'dummy':
+        raise ValueError('지원하지 않는 INTERPRET_MODE입니다.')
     # 더미는 요청 언어와 상관없이 베트남어 번역만 돌려준다.
     return {
         'doc_type': '고지서',
@@ -118,6 +163,50 @@ def interpret(masked_text, language):
         'deadlines': [{'label': '납부 마감', 'date': '2026-08-31'}],
         'required_docs': ['고지서', '외국인등록증'],
         'agency': {'name': '아산시청 세무과', 'phone': '041-000-0000', 'source': 'document'},
+        'amount': '6,250원',
+        'payment_methods': ['은행 창구', '가상계좌', '위택스'],
+        'checklist': [
+            {
+                'text': '주민세 6,250원 내기',
+                'detail': '2026년 개인분 주민세예요. 기한이 지나면 가산세가 붙어요.',
+                'docs': ['고지서'],
+                'method': '은행 창구, 가상계좌, 위택스(www.wetax.go.kr) 중 하나로 내요.',
+                'due': '2026-08-31',
+                'state': 'CONFIRMED',
+                'note': '',
+                'sourceIds': ['s1'],
+            },
+            {
+                'text': '외국인등록증 챙기기',
+                'detail': '은행 창구에서 낼 때 신분 확인에 필요할 수 있어요.',
+                'docs': ['외국인등록증'],
+                'method': '은행 창구에 갈 때 가져가요.',
+                'due': None,
+                'state': 'CONDITIONAL',
+                'note': '가상계좌나 위택스로 내면 필요 없어요.',
+                'sourceIds': ['s1'],
+            },
+            {
+                'text': '세무과 연락처 확인하기',
+                'detail': '고지서의 연락처가 공식 자료와 달라요.',
+                'docs': [],
+                'method': '아산시청 누리집에서 세무과 번호를 확인해요.',
+                'due': None,
+                'state': 'CHECK_NEEDED',
+                'note': '전화하기 전에 공식 번호를 먼저 확인하세요.',
+                'sourceIds': ['s2'],
+            },
+            {
+                'text': '납부 영수증 보관하기',
+                'detail': '나중에 체류 연장 등에서 납세 증명이 필요할 수 있어요.',
+                'docs': ['납부 영수증'],
+                'method': '종이 영수증이나 위택스 납부 내역을 저장해요.',
+                'due': None,
+                'state': 'CONFIRMED',
+                'note': '',
+                'sourceIds': [],
+            },
+        ],
     }
 
 
@@ -125,22 +214,102 @@ def verify(result):
     """해석 결과를 공식 자료와 대조한다. (더미)
 
     입력: result (dict) — interpret()의 출력
-    출력: {
-        "status": "MATCHED" | "MISMATCH" | "UNVERIFIED",
-        "sources": [{"title": str, "url": str, "checkedAt": "YYYY-MM-DD"}],
+    출력 (C1 항목별 형식): {
+        "overall": "MATCHED" | "MISMATCH" | "UNVERIFIED",
+        "status": overall과 같은 값 (기존 코드·챗봇 호환),
+        "items": [{"key": "AMOUNT" | "DEADLINE" | "PAYMENT_METHOD" | "AGENCY_CONTACT", "label": str,
+                   "docValue": str, "officialValue": str | None, "status": str, "reason": str,
+                   "sourceIds": ["s1"]}],
+        "sources": [{"id": "s1", "title": str, "url": str, "checkedAt": "YYYY-MM-DD",
+                     "publishedAt": "YYYY-MM-DD"(선택), "sourceDocumentId": int(선택)}],
     }
     발신기관·지역을 식별하지 못하면 "UNVERIFIED"를 반환한다(F2-1).
+
+    DOCUMENTS_VERIFY_MODE=rag: backend/ai/chatbot RAG로 관련 공식 자료(최대 10개, 관련도 순)를 찾고
+    LLM이 대조해 status를 정한다. 각 sources 항목에 "sourceDocumentId": int (SourceDocument.pk)가 추가된다.
+    검색·임베딩·LLM 오류가 나면 문서 처리를 실패시키지 않고 {"status": "UNVERIFIED", "sources": []}를 반환한다.
+    기본값 dummy는 아래 고정 결과를 반환한다.
     """
+    if getattr(settings, 'DOCUMENTS_VERIFY_MODE', 'dummy') == 'rag':
+        try:
+            from ai.chatbot.integration import verify_interpretation
+
+            return verify_interpretation(result)
+        except Exception as exc:
+            # 오류 원문에는 문서 내용이 섞일 수 있어서 종류만 남긴다.
+            logger.warning('공식 자료 대조 실패, UNVERIFIED로 처리: %s', type(exc).__name__)
+            return {'status': 'UNVERIFIED', 'sources': []}
+    # 더미는 근거 화면을 확인할 수 있게 항목 3개 일치, 1개 불일치를 돌려준다.
     return {
-        'status': 'MATCHED',
+        'overall': 'MISMATCH',
+        'status': 'MISMATCH',
+        'items': [
+            {
+                'key': 'AMOUNT', 'label': '납부 금액', 'docValue': '6,250원', 'officialValue': '6,250원',
+                'status': 'MATCHED', 'reason': '공식 자료의 개인분 주민세 금액과 같아요.', 'sourceIds': ['s1'],
+            },
+            {
+                'key': 'DEADLINE', 'label': '납부 기한', 'docValue': '납부 마감 2026-08-31',
+                'officialValue': '2026-08-31', 'status': 'MATCHED',
+                'reason': '공식 자료의 주민세 납부 기한과 같아요.', 'sourceIds': ['s1'],
+            },
+            {
+                'key': 'PAYMENT_METHOD', 'label': '납부 방법', 'docValue': '은행 창구, 가상계좌, 위택스',
+                'officialValue': '은행 창구, 가상계좌, 위택스', 'status': 'MATCHED',
+                'reason': '공식 자료에 안내된 납부 방법과 같아요.', 'sourceIds': ['s1'],
+            },
+            {
+                'key': 'AGENCY_CONTACT', 'label': '문의 연락처', 'docValue': '041-000-0000',
+                'officialValue': '041-000-1234', 'status': 'MISMATCH',
+                'reason': '공식 자료의 세무과 연락처와 달라요. 전화 전에 공식 번호를 확인하세요.',
+                'sourceIds': ['s2'],
+            },
+        ],
         'sources': [
             {
+                'id': 's1',
                 'title': '아산시 지방세 납부 안내 (더미)',
+                'url': 'https://www.asan.go.kr/',
+                'checkedAt': '2026-10-30',
+                'publishedAt': '2026-07-01',
+            },
+            {
+                'id': 's2',
+                'title': '아산시청 부서별 연락처 (더미)',
                 'url': 'https://www.asan.go.kr/',
                 'checkedAt': '2026-10-30',
             },
         ],
     }
+
+
+def _run_actions(result, verification):
+    """해석·검증 결과로 체크리스트와 전화 대본을 만든다 (S4, ai.chatbot.build_actions).
+
+    출력: {"checklist": [항목], "call_script": str} — 항목 형식은 interpret() docstring의 checklist와 같다.
+    DOCUMENTS_CHECKLIST_MODE=rag인데 검증이 rag가 아니면 더미 검증 결과로 만들지 않고 interpret의 checklist를 쓴다.
+    예상 밖의 오류가 나도 문서 처리를 실패시키지 않고 interpret의 checklist와 빈 대본을 돌려준다.
+    """
+    fallback = {'checklist': result.get('checklist'), 'call_script': ''}
+    # build_actions와 같은 기준(앞뒤 공백 제거, 소문자)으로 모드를 읽는다.
+    checklist_mode = str(getattr(settings, 'DOCUMENTS_CHECKLIST_MODE', '') or 'dummy').strip().lower()
+    verify_mode = getattr(settings, 'DOCUMENTS_VERIFY_MODE', 'dummy')
+    if checklist_mode == 'rag' and verify_mode != 'rag':
+        logger.warning(
+            '체크리스트 rag 모드는 DOCUMENTS_VERIFY_MODE=rag와 함께 써야 합니다. '
+            'interpret 체크리스트를 사용: checklist=%s verify=%s', checklist_mode, verify_mode,
+        )
+        return fallback
+    try:
+        # ai.chatbot은 무거운 의존성을 함께 불러와서 쓸 때만 import한다.
+        from ai.chatbot.checklist import build_actions
+
+        actions = build_actions(result, verification, result['language'])
+        return {'checklist': actions.get('checklist'), 'call_script': actions.get('call_script') or ''}
+    except Exception as exc:
+        # 오류 원문에는 문서 내용이 섞일 수 있어서 종류만 남긴다.
+        logger.warning('체크리스트·전화 대본 생성 실패, interpret 체크리스트 사용: %s', type(exc).__name__)
+        return fallback
 
 
 def get_language(document):
@@ -174,6 +343,7 @@ def process_document(document_id):
 
         _advance(document, Document.Step.VERIFYING)
         verification = verify(result)
+        result.update(_run_actions(result, verification))
 
         _save_result(document, ocr, masked, result, verification)
     except Exception:
@@ -207,10 +377,16 @@ def _save_result(document, ocr, masked, result, verification):
                 'deadlines': result['deadlines'],
                 'required_docs': result['required_docs'],
                 'agency': result['agency'],
+                # 실제 해석 모듈이 아직 두 값을 내지 않을 수 있어 없으면 비워 둔다.
+                'amount': (result.get('amount') or '')[:100],
+                'payment_methods': result.get('payment_methods') or [],
                 'verification': verification,
                 'language': result['language'],
+                'call_script': result.get('call_script') or '',
             },
         )
+        # 다시 처리하면 이전 체크리스트(완료 표시 포함)를 새 해석 결과로 교체한다.
+        replace_checklist(document, result.get('checklist'))
         document.doc_type = result['doc_type']
         document.title = result['title']
         document.masked_count = masked['masked_count']

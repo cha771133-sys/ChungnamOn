@@ -70,3 +70,76 @@ class PushDevice(models.Model):
     def __str__(self):
         """로그·관리자 관계 표시에서 FID 원문과 해시가 노출되지 않게 한다."""
         return f'푸시 기기 {self.pk} (사용자 {self.user_id})'
+
+
+class DeadlineReminder(models.Model):
+    """Schedule의 D-7 또는 D-1 알림 이벤트.
+
+    일정의 제목이나 문서 원문을 복제하지 않는다. Schedule의 날짜는 등록 뒤 변경할 수
+    없으므로 ``schedule``과 ``days_before`` 조합이 알림 이벤트를 안정적으로 식별한다.
+    """
+
+    class DaysBefore(models.IntegerChoices):
+        ONE = 1, 'D-1'
+        SEVEN = 7, 'D-7'
+
+    schedule = models.ForeignKey(
+        'documents.Schedule', on_delete=models.CASCADE, related_name='deadline_reminders',
+    )
+    days_before = models.PositiveSmallIntegerField(choices=DaysBefore.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['schedule', 'days_before'], name='unique_deadline_reminder_per_event',
+            ),
+        ]
+
+    def __str__(self):
+        return f'마감 알림 {self.pk} (일정 {self.schedule_id}, D-{self.days_before})'
+
+
+class ReminderDelivery(models.Model):
+    """한 알림 이벤트의 기기별 FCM 요청 결과.
+
+    FCM 호출과 DB 갱신은 하나의 원자 작업이 될 수 없다. UNKNOWN 상태는 FCM이
+    접수했을 가능성이 있으므로 자동 재시도하지 않는다. 명시적으로 거절된 RETRYABLE과
+    설정 오류만 같은 한국 날짜의 이후 명령 실행에서 다시 점유할 수 있다.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', '대기'
+        PROCESSING = 'PROCESSING', '전송 중'
+        SENT = 'SENT', 'FCM 접수'
+        INVALID_DEVICE = 'INVALID_DEVICE', '무효 기기'
+        RETRYABLE = 'RETRYABLE', '재시도 가능 오류'
+        CONFIGURATION_ERROR = 'CONFIGURATION_ERROR', 'Firebase 설정 오류'
+        FAILED = 'FAILED', '확정 실패'
+        UNKNOWN = 'UNKNOWN', '결과 불명'
+
+    reminder = models.ForeignKey(
+        DeadlineReminder, on_delete=models.CASCADE, related_name='deliveries',
+    )
+    device = models.ForeignKey(PushDevice, on_delete=models.CASCADE, related_name='reminder_deliveries')
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.PENDING)
+    provider_message_id = models.CharField(max_length=255, blank=True)
+    error_code = models.CharField(max_length=64, blank=True)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reminder', 'device'], name='unique_reminder_delivery_per_device',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['reminder', 'status'], name='delivery_reminder_status_idx'),
+            models.Index(fields=['device', 'status'], name='delivery_device_status_idx'),
+        ]
+
+    def __str__(self):
+        return f'알림 발송 {self.pk} ({self.status})'

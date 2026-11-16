@@ -50,7 +50,7 @@ class OpenAPITests(APISimpleTestCase):
         }.issubset(self.schema['paths']))
         for path in self.schema['paths']:
             with self.subTest(path=path):
-                self.assertIsNotNone(resolve(path.replace('{pk}', '1')))
+                self.assertIsNotNone(resolve(path.replace('{pk}', '1').replace('{item_id}', '1')))
         status = self.schema['paths']['/api/documents/{pk}/status/']['get']
         self.assertIn({'in': 'path', 'name': 'pk', 'schema': {'type': 'integer'},
                        'description': '문서 ID', 'required': True}, status['parameters'])
@@ -125,6 +125,7 @@ class OpenAPITests(APISimpleTestCase):
                     self.assertEqual(set(error['properties']), {'code', 'message', 'details'})
 
     def test_profile_patch_documents_only_editable_fields(self):
+        """프로필 수정 필드·오류 형식과 입력·응답의 국적 ZZ 설명을 문서화한다."""
         operation = self.schema['paths']['/api/auth/me/']['patch']
         request = self.dereference(operation['requestBody']['content']['application/json']['schema'])
         self.assertEqual(set(request['properties']), {'language', 'nationality', 'visaType'})
@@ -135,6 +136,10 @@ class OpenAPITests(APISimpleTestCase):
         self.assertEqual(response['properties']['onboardingCompleted']['type'], 'boolean')
         for field in ('language', 'nationality', 'visaType'):
             self.assertTrue(response['properties'][field]['nullable'])
+        for properties in (request['properties'], response['properties']):
+            nationality = properties['nationality']
+            self.assertIn('ZZ', nationality['description'])
+            self.assertIn('기타', nationality['description'])
         for method in ('get', 'patch'):
             operation = self.schema['paths']['/api/auth/me/'][method]
             for code in (('401',) if method == 'get' else ('400', '401')):
@@ -146,8 +151,8 @@ class OpenAPITests(APISimpleTestCase):
         result = self.dereference(responses['200']['content']['application/json']['schema'])
         self.assertEqual(set(result['properties']), {
             'documentId', 'docType', 'title', 'originalText', 'translatedText',
-            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'verification',
-            'maskedCount', 'lowConfidence',
+            'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
+            'verification', 'maskedCount', 'lowConfidence', 'callScript',
         })
         pending = self.dereference(responses['409']['content']['application/json']['schema'])
         self.assertEqual(set(pending['properties']), {'detail', 'status', 'step', 'failReason'})

@@ -14,7 +14,19 @@ export const LANGS = [
   { code: 'ko', label: '한국어', ko: '한국어', flag: '🇰🇷' },
 ]
 
-export const NATIONALITIES = ['베트남', '중국', '우즈베키스탄', '네팔', '캄보디아', '필리핀', '태국', '인도네시아', '몽골', '기타']
+// 서버에는 영문 대문자 두 자리 코드로 저장한다 (ZZ는 서비스 내부의 ‘기타’ 코드)
+export const NATIONALITIES = [
+  { code: 'VN', ko: '베트남' },
+  { code: 'CN', ko: '중국' },
+  { code: 'UZ', ko: '우즈베키스탄' },
+  { code: 'NP', ko: '네팔' },
+  { code: 'KH', ko: '캄보디아' },
+  { code: 'PH', ko: '필리핀' },
+  { code: 'TH', ko: '태국' },
+  { code: 'ID', ko: '인도네시아' },
+  { code: 'MN', ko: '몽골' },
+  { code: 'ZZ', ko: '기타' },
+]
 
 export const VISAS = [
   { code: 'E-9', label: 'E-9 비전문취업' },
@@ -355,9 +367,9 @@ const D4 = {
 export const INITIAL_DOCS = [D3, D1, D4, D2]
 
 export const INITIAL_SCHEDULES = [
-  { id: 'sc1', docId: 'd1', title: '주민세 내기', date: '2026-11-30', done: false, remind: { d7: true, d1: true } },
-  { id: 'sc2', docId: 'd2', title: '11월분 건강보험료 내기', date: '2026-11-10', done: false, remind: { d7: true, d1: true } },
-  { id: 'sc3', docId: 'd2', title: '10월분 건강보험료 내기', date: '2026-10-25', done: false, remind: { d7: true, d1: true } },
+  { id: 'sc1', docId: 'd1', title: '주민세 내기', date: '2026-11-30', done: false },
+  { id: 'sc2', docId: 'd2', title: '11월분 건강보험료 내기', date: '2026-11-10', done: false },
+  { id: 'sc3', docId: 'd2', title: '10월분 건강보험료 내기', date: '2026-10-25', done: false },
 ]
 
 // 새로 업로드한 문서는 데모에서 주민세 고지서 데이터를 복제해 보여줍니다.

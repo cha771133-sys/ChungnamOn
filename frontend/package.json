@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@firebase/app": "0.16.4",
+    "@firebase/messaging": "0.13.3",
     "axios": "^1.21.0",
     "lucide-react": "^1.66.0",
     "react": "^19.3.1",

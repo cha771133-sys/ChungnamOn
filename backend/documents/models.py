@@ -73,9 +73,82 @@ class InterpretationResult(models.Model):
     deadlines = models.JSONField(default=list)
     required_docs = models.JSONField(default=list)
     agency = models.JSONField(default=dict)
+    # 납부 금액 예: "6,250원". 문서에 없으면 빈 문자열
+    amount = models.CharField(max_length=100, blank=True)
+    payment_methods = models.JSONField(default=list)
     verification = models.JSONField(default=dict)
     language = models.CharField(max_length=10, blank=True)
+    # 기관 담당자에게 보여줄 한국어 전화 대본 (S4). 만들지 못했으면 빈 문자열
+    call_script = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f'{self.document_id} {self.title}'
+
+
+class Schedule(models.Model):
+    """해석 결과의 마감일 하나를 사용자가 등록한 일정. notifications 마감 알림의 대상이 된다."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='schedules',
+    )
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='schedules')
+    # 업무명
+    title = models.CharField(max_length=200)
+    # 마감일 (한국 날짜)
+    date = models.DateField()
+    done = models.BooleanField(default=False)
+    done_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['date', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner', 'document', 'date', 'title'],
+                name='unique_schedule_per_document_date_title',
+            ),
+        ]
+        indexes = [models.Index(fields=['owner', 'date'], name='schedule_owner_date_idx')]
+
+    def __str__(self):
+        return f'{self.id} {self.date} {self.title}'
+
+
+class ChecklistItem(models.Model):
+    """해석(interpret)이 만든 체크리스트 항목. 문서를 다시 처리하면 새 항목으로 교체한다."""
+
+    class State(models.TextChoices):
+        CONFIRMED = 'CONFIRMED', '확정'
+        CONDITIONAL = 'CONDITIONAL', '조건부'
+        CHECK_NEEDED = 'CHECK_NEEDED', '확인 필요'
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='checklist_items')
+    # interpret이 낸 순서 (0부터)
+    order = models.PositiveIntegerField()
+    text = models.CharField(max_length=300)
+    detail = models.TextField(blank=True)
+    # 준비할 서류 이름 목록
+    docs = models.JSONField(default=list)
+    method = models.TextField(blank=True)
+    due = models.DateField(null=True, blank=True)
+    state = models.CharField(max_length=20, choices=State.choices, default=State.CHECK_NEEDED)
+    done = models.BooleanField(default=False)
+    done_at = models.DateTimeField(null=True, blank=True)
+    note = models.TextField(blank=True)
+    # 근거 출처 id 목록 (verification sources[].id)
+    source_ids = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['document', 'order'], name='unique_checklist_item_order'),
+        ]
+
+    def __str__(self):
+        return f'{self.document_id}-{self.order} {self.text}'

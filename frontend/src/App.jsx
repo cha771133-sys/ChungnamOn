@@ -1,6 +1,12 @@
-import { useEffect, useState } from 'react'
-import { Ctx, CONTENT_LANGS } from './store.js'
-import { INITIAL_DOCS, INITIAL_SCHEDULES } from './data/mock.js'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { AUTH_EXPIRED_EVENT, SESSION_CHANGED_EVENT, tokenStore } from './lib/api'
+import { fetchMe, hasSession, logout as apiLogout } from './lib/auth'
+import { refreshNotifyPreference } from './lib/notifications'
+import { connectPush, disconnectPush, forgetPush, getPushStatus, releasePushForLogout, subscribePush, syncPushLanguage } from './lib/push'
+import { localScheduleId } from './lib/scheduleAdapter.js'
+import { t, setUiLang } from './i18n.js'
+import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
+import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
 import { WifiOff } from 'lucide-react'
 import SheetHost from './components/Sheets.jsx'
 import { Intro, LanguageSelect, Login, Signup, ProfileSetup, NotifyPermission } from './screens/Onboarding.jsx'
@@ -13,18 +19,29 @@ import Agency from './screens/Agency.jsx'
 import Chat from './screens/Chat.jsx'
 import { Schedule, ScheduleNew, ScheduleDetail } from './screens/Schedule.jsx'
 import Settings from './screens/Settings.jsx'
+import { T } from './i18n.js'
 
 const KEY = 'chungnamon-demo-v1'
 
+/** 예전 버전에서 한국어 이름(베트남)으로 저장한 국적을 서버 형식 코드(VN)로 바꾼다. */
+function migrate(saved) {
+  const nat = saved.profile?.nationality
+  const found = NATIONALITIES.find((n) => n.ko === nat)
+  if (found) saved.profile.nationality = found.code
+  return saved
+}
+
+/** 브라우저에 저장된 앱 상태를 불러온다. 없거나 깨져 있으면 null. */
 function load() {
   try {
     const raw = localStorage.getItem(KEY)
-    return raw ? JSON.parse(raw) : null
+    return raw ? migrate(JSON.parse(raw)) : null
   } catch {
     return null
   }
 }
 
+/** 처음 설치했을 때의 앱 상태 */
 function fresh() {
   return {
     onboarded: false,
@@ -33,7 +50,7 @@ function fresh() {
     docs: INITIAL_DOCS,
     schedules: INITIAL_SCHEDULES,
     chats: {},
-    notify: { enabled: false, d7: true, d1: true },
+    notify: { enabled: false, deviceCount: 0 },
     installDismissed: false,
   }
 }
@@ -61,17 +78,23 @@ const SCREENS = {
   scheduleDetail: ScheduleDetail,
 }
 
+/** 앱 전체 상태와 화면 이동(스택)을 관리하는 최상위 컴포넌트 */
 export default function App() {
   const [data, setData] = useState(() => load() || fresh())
   const [stack, setStack] = useState(() => {
     if (!data.onboarded) return [{ name: 'language', params: {} }]
+    // 온보딩은 마쳤지만 토큰이 없으면(로그아웃·만료) 로그인부터
+    if (!hasSession()) return [{ name: 'login', params: {} }]
     // 유저 플로우 n3 → n44 → n39: 마감 알림을 누르면 /?schedule=ID 로 열려 일정 상세로 이동
+    // 서버 알림의 ID는 서버 일정 번호라 화면 ID(ss번호)로 바꾼다. 이 기기에 없으면 일정 상세가 서버에서 불러온다
     const sid = new URLSearchParams(window.location.search).get('schedule')
-    if (sid && data.schedules.some((s) => s.id === sid)) {
+    if (sid) {
       window.history.replaceState(null, '', '/')
+      const scheduleId = data.schedules.some((s) => s.id === sid) ? sid : /^\d+$/.test(sid) ? localScheduleId(sid) : null
+      if (!scheduleId) return [{ name: 'schedule', params: {} }]
       return [
         { name: 'home', params: {} },
-        { name: 'scheduleDetail', params: { scheduleId: sid } },
+        { name: 'scheduleDetail', params: { scheduleId } },
       ]
     }
     return [{ name: 'home', params: {} }]
@@ -80,6 +103,71 @@ export default function App() {
   const [toast, setToast] = useState(null)
   const [online, setOnline] = useState(navigator.onLine)
   const [installEvt, setInstallEvt] = useState(null)
+  // 이벤트 핸들러에서 최신 언어를 읽기 위한 참조
+  const langRef = useRef(data.profile.language)
+  useEffect(() => {
+    langRef.current = data.profile.language
+  }, [data.profile.language])
+
+  // 저장된 사용자 정보가 없거나 다른 세션(이전 계정·다른 탭 로그인)의 것이면 현재 토큰으로 다시 확인한다.
+  // 계정이 다르면 이전 계정의 서버 문서를 지운다. 확인 전까지 서버 문서는 isVisibleDoc에서 숨겨진다.
+  const [verifyAttempt, setVerifyAttempt] = useState(0)
+  useEffect(() => {
+    const marker = tokenStore.marker()
+    if (!hasSession() || (data.user?.id != null && data.user.session === marker)) return
+    const session = tokenStore.session()
+    fetchMe()
+      .then((me) => {
+        // 조회하는 사이 로그아웃·계정 전환이 있었으면 이전 계정 정보를 저장하지 않는다
+        if (tokenStore.session() !== session) return
+        setData((d) => ({
+          ...d,
+          ...(d.user?.id !== me.id ? purgeServerData(d) : {}),
+          user: { id: me.id, email: me.email, session: marker },
+        }))
+      })
+      .catch(() => {
+        /* 실패하면 인터넷이 다시 연결될 때나 화면에서 다시 시도할 때 확인한다 */
+      })
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifyAttempt])
+
+  // 계정이 확인되면 그 계정의 알림 수신 설정(서버 저장)을 받아 화면 상태를 맞춘다
+  const verifiedUser = data.user?.id != null && data.user.session === tokenStore.marker() ? data.user.id : null
+  useEffect(() => {
+    if (verifiedUser == null) return
+    // 그사이 설정을 바꿨거나 계정이 바뀌었으면 늦게 온 응답은 버린다 (refreshNotifyPreference가 확인)
+    refreshNotifyPreference((pref) => setData((d) => ({ ...d, notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))).catch(() => {
+      /* 실패하면 기기에 저장된 값을 그대로 쓰고, 설정 화면에서 다시 맞춘다 */
+    })
+  }, [verifiedUser, verifyAttempt])
+
+  // 이 기기를 알림 받을 기기로 연결한다 (알림이 켜진 확인된 계정일 때). 끄면 이 기기만 서버에서 해제한다
+  const pushStatus = useSyncExternalStore(subscribePush, getPushStatus)
+  const notifyOn = data.notify.enabled
+  useEffect(() => {
+    if (verifiedUser == null) return
+    if (notifyOn) connectPush(verifiedUser)
+    else disconnectPush(verifiedUser)
+  }, [verifiedUser, notifyOn])
+
+  // 연결되면 계정의 등록 기기 수를 다시 받아 일정 화면 안내를 맞춘다
+  useEffect(() => {
+    if (pushStatus !== 'connected') return
+    refreshNotifyPreference((pref) => setData((d) => ({ ...d, notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))).catch(() => {})
+  }, [pushStatus])
+
+  // 잠금 화면 알림 문구도 안내 언어로 보이게 서비스 워커에 알려준다
+  useEffect(() => {
+    syncPushLanguage(data.profile.language)
+  }, [data.profile.language])
+
+  // 인터넷이 다시 연결되면 계정 확인을 다시 시도한다
+  useEffect(() => {
+    const onOnline = () => setVerifyAttempt((n) => n + 1)
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
+  }, [])
 
   useEffect(() => {
     try {
@@ -99,7 +187,23 @@ export default function App() {
     window.addEventListener('online', on)
     window.addEventListener('offline', off)
     window.addEventListener('beforeinstallprompt', bip)
+    // 토큰 갱신까지 실패하면 로그인 화면으로 보낸다
+    const expired = () => {
+      // 토큰이 없어 서버에서 기기를 해제할 수 없으므로 이 기기에 저장한 연결 정보만 지운다
+      forgetPush()
+      setData((d) => ({ ...d, ...purgeServerData(d), user: null }))
+      setStack([{ name: 'login', params: {} }])
+      setToast(t(langRef.current, 'sessionExpired'))
+      clearTimeout(window.__toastTimer)
+      window.__toastTimer = setTimeout(() => setToast(null), 2400)
+    }
+    window.addEventListener(AUTH_EXPIRED_EVENT, expired)
+    // 다른 탭에서 계정이 바뀌면, 그 탭이 정리한 저장소 상태를 다시 읽도록 새로고침한다
+    const sessionChanged = () => window.location.reload()
+    window.addEventListener(SESSION_CHANGED_EVENT, sessionChanged)
     return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, expired)
+      window.removeEventListener(SESSION_CHANGED_EVENT, sessionChanged)
       window.removeEventListener('online', on)
       window.removeEventListener('offline', off)
       window.removeEventListener('beforeinstallprompt', bip)
@@ -122,8 +226,7 @@ export default function App() {
     top()
   }
   const update = (fn) => setData((d) => ({ ...d, ...fn(d) }))
-  const updateDoc = (docId, fn) =>
-    setData((d) => ({ ...d, docs: d.docs.map((doc) => (doc.id === docId ? { ...doc, ...fn(doc) } : doc)) }))
+  const updateDoc = (docId, fn) => setData((d) => ({ ...d, docs: d.docs.map((doc) => (doc.id === docId ? { ...doc, ...fn(doc) } : doc)) }))
   const showToast = (msg) => {
     setToast(msg)
     clearTimeout(window.__toastTimer)
@@ -131,6 +234,8 @@ export default function App() {
   }
 
   const lang = data.profile.language
+  // 화면 문구 T()·날짜 형식이 쓰는 안내 언어. 하위 화면을 그리기 전에 맞춘다
+  setUiLang(lang)
   const contentLang = CONTENT_LANGS.includes(lang) ? lang : 'en'
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
@@ -154,10 +259,15 @@ export default function App() {
     isStandalone,
     isIOS,
     openLang: () => setSheet({ type: 'lang' }),
+    /** 저장된 사용자 정보가 현재 세션과 맞지 않을 때 계정 확인을 다시 시도한다 */
+    reverifyUser: () => setVerifyAttempt((n) => n + 1),
+    pushStatus,
     resetDemo: () => {
+      // 로그아웃 전에 아직 유효한 토큰으로 이 기기의 알림 연결을 해제한다
+      releasePushForLogout().finally(() => apiLogout().catch(() => {}))
       setData(fresh())
       setStack([{ name: 'language', params: {} }])
-      showToast('데모 데이터를 처음 상태로 되돌렸어요')
+      showToast(T('데모 데이터를 처음 상태로 되돌렸어요'))
     },
   }
 
@@ -168,7 +278,7 @@ export default function App() {
       <div className="app">
         {!online && (
           <div className="offline" role="status">
-            <WifiOff size={16} /> 오프라인 상태예요. 저장된 문서는 계속 볼 수 있어요.
+            <WifiOff size={16} /> {T('오프라인 상태예요. 저장된 문서는 계속 볼 수 있어요.')}
           </div>
         )}
         <Screen key={stack.length + cur.name + JSON.stringify(cur.params)} {...cur.params} />

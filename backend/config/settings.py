@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'sources',
     'chatbot',
     'notifications',
+    'analytics',
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
@@ -106,6 +107,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'analytics.middleware.ResultProvidedMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -219,8 +221,35 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 
-# P2-13: 로컬 더미만 제공한다. 지원하지 않는 실제 모드는 503으로 차단한다.
+# P2-13: 기본은 로컬 더미. rag는 backend/ai/chatbot RAG 모듈, 그 밖의 값은 503으로 차단한다.
 CHATBOT_AI_MODE = os.environ.get('CHATBOT_AI_MODE', 'dummy')
+# 문서 처리 파이프라인의 공식 자료 대조(verify). dummy(기본) | rag
+DOCUMENTS_VERIFY_MODE = os.environ.get('DOCUMENTS_VERIFY_MODE', 'dummy')
+
+# 문서 OCR. dummy는 외부 호출 없이 더미 결과를 쓰고, clova는 CLOVA OCR을 호출한다.
+# .env에 OCR_MODE=처럼 값이 비어 있어도 dummy로 동작하도록 or를 쓴다.
+OCR_MODE = os.environ.get('OCR_MODE') or 'dummy'
+CLOVA_OCR_INVOKE_URL = os.environ.get('CLOVA_OCR_INVOKE_URL', '')
+CLOVA_OCR_SECRET = os.environ.get('CLOVA_OCR_SECRET', '')
+
+# 개인정보 마스킹. dummy는 등록번호·"주소:" 줄만 가리는 더미, rules는 documents/services/masking.py 규칙.
+# 실제 문서(OCR_MODE=clova)를 처리할 때는 rules를 쓴다. 값이 비어 있으면 dummy로 동작한다.
+MASK_MODE = os.environ.get('MASK_MODE') or 'dummy'
+
+# 문서 해석. dummy는 외부 호출 없이 고정 결과를 쓰고, llm은 documents/services/interpret.py로 AI를 호출한다.
+# llm은 DOCUMENTS_VERIFY_MODE=rag와 함께 쓴다. 검증이 dummy면 문서가 FAILED(INTERPRETING)가 된다.
+# 키는 INTERPRET_API_KEY가 있으면 그 값을, 없으면 챗봇과 같은 ANTHROPIC_API_KEY를 쓴다.
+INTERPRET_MODE = os.environ.get('INTERPRET_MODE') or 'dummy'
+INTERPRET_API_KEY = os.environ.get('INTERPRET_API_KEY') or os.environ.get('ANTHROPIC_API_KEY', '')
+INTERPRET_MODEL = os.environ.get('INTERPRET_MODEL') or 'claude-haiku-5-5'
+
+# S4 체크리스트·전화 대본(backend/ai/chatbot/checklist.py). dummy(기본)는 interpret의 체크리스트를 그대로 쓰고
+# 대본은 규칙으로 만든다. rag는 DOCUMENTS_VERIFY_MODE=rag와 함께 쓴다. 검증이 rag가 아니면 interpret의
+# 체크리스트를 저장하고 대본은 비운다(문서는 실패시키지 않음). 값이 비어 있으면 dummy로 동작한다.
+DOCUMENTS_CHECKLIST_MODE = os.environ.get('DOCUMENTS_CHECKLIST_MODE') or 'dummy'
 
 # 실제 발송 시에만 Firebase 자격증명을 읽고 SDK를 초기화한다.
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
+
+# B10: 운영 보관 기간 미확정. 자동 삭제를 실행하지 않으며 새 환경변수를 요구하지 않는다.
+KPI_EVENT_RETENTION_DAYS = None

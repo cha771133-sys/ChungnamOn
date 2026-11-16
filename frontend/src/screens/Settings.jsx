@@ -1,31 +1,79 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
-import { api } from '../lib/api'
-import { useApp } from '../store.js'
+import { api, parseApiError } from '../lib/api'
+import { refreshNotifyPreference, saveNotifyPreference } from '../lib/notifications'
+import { releasePushForLogout, requestPushPermission, retryPush } from '../lib/push'
+import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
+import { useApp, purgeServerData } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, TabBar, Toggle } from '../components/ui.jsx'
 import { ProfileForm } from './Onboarding.jsx'
+import { T } from '../i18n.js'
 
+/** 설정 화면: 프로필(서버 저장), 안내 언어, 알림, 개인정보 안내, 로그아웃 */
 export default function Settings() {
-  const { data, update, openLang, setSheet, showToast, resetDemo, isStandalone, tab } = useApp()
+  const { data, update, openLang, setSheet, showToast, resetDemo, isStandalone, tab, pushStatus } = useApp()
   const L = LANGS.find((l) => l.code === data.profile.language)
-  const [server, setServer] = useState('')
+  const [server, setServer] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [notifySaving, setNotifySaving] = useState(false)
 
+  // 설정 화면에 들어올 때마다 서버의 알림 설정으로 다시 맞춘다 (다른 곳에서 저장에 실패했어도 바로잡힘)
+  useEffect(() => {
+    if (!hasSession()) return
+    refreshNotifyPreference((pref) => update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } }))).catch(() => {})
+    // 화면에 들어올 때 한 번만
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** 서버 상태 확인 (GET /api/health/) */
   const checkServer = async () => {
-    setServer('확인 중...')
+    // 언어를 바꿔도 다시 번역되도록 원문 키와 값만 저장하고 표시할 때 번역한다
+    setServer({ key: '확인 중...' })
     try {
       const { data: res } = await api.get('/api/health/')
-      setServer(`연결 성공: ${res.status}`)
+      setServer({ key: '연결 성공: {v0}', vars: { v0: res.status } })
     } catch (e) {
-      setServer(`연결 실패: ${e.message}`)
+      setServer({ key: '연결 실패: {v0}', vars: { v0: e.message } })
     }
   }
 
-  const setProfile = (p) => {
+  /**
+   * 프로필을 바로 화면에 반영하고 서버에 저장한다. 실패하면 이전 값으로 되돌린다.
+   * 저장 중에는 폼을 잠가 요청이 겹치지 않게 하고, 국적·체류자격이 비어 있으면 보내지 않는다.
+   */
+  const setProfile = async (p) => {
+    if (saving) return
+    if (!p.nationality || !p.visa) {
+      showToast(T('국적과 체류자격을 선택하세요'))
+      return
+    }
+    const prev = data.profile
     update(() => ({ profile: p }))
-    showToast('저장했어요')
+    setSaving(true)
+    try {
+      await updateMe({ language: p.language, nationality: p.nationality, visaType: p.visa })
+      showToast(T('저장했어요'))
+    } catch (error) {
+      update(() => ({ profile: prev }))
+      const info = parseApiError(error)
+      // 세션이 만료됐으면 앱이 로그인 화면으로 보내며 안내하므로 여기서는 알리지 않는다
+      if (!hasSession()) return
+      showToast(
+        info.code === 'NETWORK_ERROR' || info.code === 'AUTHENTICATION_FAILED' || info.code === 'NOT_AUTHENTICATED'
+          ? T('서버에 연결하지 못했어요. 다시 시도하세요')
+          : T('저장하지 못했어요. 다시 시도하세요'),
+      )
+    } finally {
+      setSaving(false)
+    }
   }
+  /**
+   * 알림 켜기·끄기. 계정 설정이라 서버에 저장하고, 실패하면 원래 값으로 되돌린다.
+   * 켤 때 브라우저 알림 권한을 아직 묻지 않았으면 요청한다.
+   */
   const setNotify = async (enabled) => {
+    if (notifySaving) return
     if (enabled && 'Notification' in window && Notification.permission === 'default') {
       try {
         await Notification.requestPermission()
@@ -33,25 +81,46 @@ export default function Settings() {
         /* 무시 */
       }
     }
+    const before = data.notify.enabled
     update((d) => ({ notify: { ...d.notify, enabled } }))
+    if (!hasSession()) return
+    setNotifySaving(true)
+    // 저장 중 계정이 바뀌거나 더 새로운 변경이 생기면 지난 결과로 화면을 바꾸지 않는다
+    await saveNotifyPreference(enabled, {
+      onSaved: (pref) => update((d) => ({ notify: { ...d.notify, enabled: pref.enabled, deviceCount: pref.registeredDeviceCount } })),
+      onFailed: () => {
+        update((d) => ({ notify: { ...d.notify, enabled: before } }))
+        showToast(T('알림 설정을 저장하지 못했어요. 다시 시도하세요'))
+      },
+    })
+    setNotifySaving(false)
   }
-  const logout = () => {
-    update(() => ({ user: null, onboarded: false }))
+
+  /** 서버의 Refresh Token을 무효화하고 로그인 화면으로 이동한다. */
+  const logout = async () => {
+    // 토큰이 아직 유효할 때 이 기기의 알림 연결부터 해제한다
+    await releasePushForLogout()
+    try {
+      await apiLogout()
+    } catch {
+      /* 서버 요청이 실패해도 저장된 토큰은 이미 지웠다 */
+    }
+    update((d) => ({ ...purgeServerData(d), user: null }))
     tab('login')
   }
 
   return (
     <>
-      <TopBar title="설정" />
+      <TopBar title={T('설정')} />
       <main className="screen has-tabbar">
         <section className="settings-group">
-          <h2>내 정보</h2>
+          <h2>{T('내 정보')}</h2>
           {data.user?.email && <p className="settings-email">{data.user.email}</p>}
-          <ProfileForm value={data.profile} onChange={setProfile} />
+          <ProfileForm value={data.profile} onChange={setProfile} disabled={saving} lang={data.profile.language} />
         </section>
 
         <section className="settings-group">
-          <h2>안내 언어</h2>
+          <h2>{T('안내 언어')}</h2>
           <button className="settings-row" onClick={openLang}>
             <span>{L?.label}</span>
             <small>{L?.ko}</small>
@@ -60,27 +129,21 @@ export default function Settings() {
         </section>
 
         <section className="settings-group">
-          <h2>알림</h2>
+          <h2>{T('알림')}</h2>
           <div className="toggle-row">
-            <span>마감 알림 받기</span>
-            <Toggle checked={data.notify.enabled} onChange={setNotify} label="마감 알림 받기" />
+            <span>{T('마감 알림 받기')}</span>
+            <Toggle checked={data.notify.enabled} onChange={setNotify} label={T('마감 알림 받기')} disabled={notifySaving} />
           </div>
-          <div className={`toggle-row${data.notify.enabled ? '' : ' is-disabled'}`}>
-            <span>마감 7일 전</span>
-            <Toggle checked={data.notify.d7} onChange={(v) => update((d) => ({ notify: { ...d.notify, d7: v } }))} label="기본 7일 전 알림" />
-          </div>
-          <div className={`toggle-row${data.notify.enabled ? '' : ' is-disabled'}`}>
-            <span>마감 1일 전</span>
-            <Toggle checked={data.notify.d1} onChange={(v) => update((d) => ({ notify: { ...d.notify, d1: v } }))} label="기본 1일 전 알림" />
-          </div>
-          <p className="hint">iPhone은 홈 화면에 추가한 뒤에만 알림을 받을 수 있어요.</p>
+          <p className="hint">{T('켜 두면 완료하지 않은 일정의 마감 7일 전과 1일 전에 알려드려요.')}</p>
+          {data.notify.enabled && hasSession() && <PushStatusNote status={pushStatus} userId={data.user?.id} />}
+          {pushStatus !== 'needs-install' && <p className="hint">{T('iPhone은 홈 화면에 추가한 뒤에만 알림을 받을 수 있어요.')}</p>}
         </section>
 
         <section className="settings-group">
-          <h2>개인정보</h2>
+          <h2>{T('개인정보')}</h2>
           <div className="privacy-note">
             <ShieldCheck size={20} />
-            <p>올린 문서의 외국인등록번호와 주소는 자동으로 가려요. 원본 파일은 30일 뒤 자동 삭제되고, 저장된 정보는 암호화돼요.</p>
+            <p>{T('올린 문서의 외국인등록번호와 주소는 자동으로 가려요. 원본 파일은 30일 뒤 자동 삭제되고, 저장된 정보는 암호화돼요.')}</p>
           </div>
         </section>
 
@@ -88,27 +151,69 @@ export default function Settings() {
           {!isStandalone && (
             <button className="settings-row" onClick={() => setSheet({ type: 'install' })}>
               <Download size={18} />
-              <span>홈 화면에 추가하기</span>
+              <span>{T('홈 화면에 추가하기')}</span>
               <ChevronRight size={18} />
             </button>
           )}
           <button className="settings-row" onClick={checkServer}>
             <Server size={18} />
-            <span>서버 연결 확인</span>
-            <small role="status">{server}</small>
+            <span>{T('서버 연결 확인')}</span>
+            <small role="status">{server && T(server.key, server.vars)}</small>
           </button>
           <button className="settings-row" onClick={resetDemo}>
             <RotateCcw size={18} />
-            <span>데모 데이터 처음으로</span>
+            <span>{T('데모 데이터 처음으로')}</span>
             <ChevronRight size={18} />
           </button>
           <button className="settings-row danger" onClick={logout}>
             <LogOut size={18} />
-            <span>로그아웃</span>
+            <span>{T('로그아웃')}</span>
           </button>
         </section>
       </main>
       <TabBar active="settings" />
     </>
+  )
+}
+
+/** 이 기기가 알림을 받을 수 있는지 (알림을 켠 상태에서만 보인다) */
+const PUSH_NOTE = {
+  unconfigured: '이 기기를 알림 받을 기기로 연결하는 기능은 준비 중이에요.',
+  unsupported: '이 브라우저에서는 알림을 받을 수 없어요. Chrome이나 삼성 인터넷에서 열어 주세요.',
+  'needs-install': 'iPhone은 홈 화면에 추가한 앱에서만 알림을 받을 수 있어요. 공유 버튼에서 홈 화면에 추가한 뒤, 추가한 앱에서 다시 켜 주세요.',
+  denied: '브라우저에서 이 사이트의 알림이 막혀 있어요. 브라우저 설정에서 알림을 허용해 주세요.',
+  prompt: '이 기기에서 알림을 받으려면 알림을 허용해 주세요.',
+  connecting: '이 기기를 연결하는 중이에요...',
+  connected: '이 기기로 알림을 받아요.',
+  failed: '이 기기를 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도하세요.',
+}
+
+function PushStatusNote({ status, userId }) {
+  const [busy, setBusy] = useState(false)
+  const note = PUSH_NOTE[status]
+  if (!note) return null
+  const run = async (fn) => {
+    if (busy || userId == null) return
+    setBusy(true)
+    try {
+      await fn(userId)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className={`push-status is-${status}`} role="status">
+      <p className="hint">{T(note)}</p>
+      {status === 'prompt' && (
+        <button className="btn btn-outline btn-small" onClick={() => run(requestPushPermission)} disabled={busy}>
+          {T('알림 허용하기')}
+        </button>
+      )}
+      {status === 'failed' && (
+        <button className="btn btn-outline btn-small" onClick={() => run(retryPush)} disabled={busy}>
+          {T('다시 연결하기')}
+        </button>
+      )}
+    </div>
   )
 }
