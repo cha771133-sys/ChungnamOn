@@ -289,6 +289,97 @@ class AdminTxtImportTests(TestCase):
         self.approve(revision)
         self.assertEqual(SourceDocument.objects.get().review_status, 'APPROVED')
 
+    def test_unverified_with_check_date_shows_block_reason_and_correction_link(self):
+        response = self.upload(terms_status='unverified')
+        self.assertEqual(response.status_code, 302)
+        revision = SourceRevision.objects.get()
+        detail_url = reverse('admin:sources_sourcerevision_change', args=[revision.pk])
+        correction_url = f'{self.url}?revision={revision.pk}'
+        detail = self.client.get(detail_url)
+        self.assertContains(detail, '승인 차단: TERMS_UNCONFIRMED')
+        self.assertContains(detail, '미확인 — 승인 차단')
+        self.assertContains(detail, correction_url)
+        self.assertContains(detail, '확인일을 입력해도 AI 이용조건 확인 상태는 자동으로 바뀌지 않습니다')
+        self.assertContains(self.client.get(self.revisions_url), '미확인 — 승인 차단')
+        response = self.approve(revision)
+        self.assertContains(response, correction_url)
+        self.assertEqual(SourceDocument.objects.get().review_status, 'PENDING_REVIEW')
+
+    def test_correction_prefills_metadata_without_confirming_terms_or_modifying_rows(self):
+        self.upload(terms_status='unverified')
+        revision = SourceRevision.objects.get()
+        before = [list(model.objects.values()) for model in (SourceDocument, SourceRevision, LogEntry)]
+        response = self.client.get(self.url, {'revision': revision.pk})
+        self.assertContains(response, '기존 입력을 불러왔습니다')
+        initial = response.context['form'].initial
+        for field in self.data:
+            self.assertEqual(initial[field], 'unverified' if field == 'terms_status' else self.data[field], field)
+        self.assertNotIn('file', initial)
+        self.assertEqual([list(model.objects.values()) for model in (SourceDocument, SourceRevision, LogEntry)], before)
+
+    def test_correction_form_requires_file_and_explicit_confirmation_then_approval(self):
+        self.upload(terms_status='unverified')
+        revision = SourceRevision.objects.get()
+        correction_url = f'{self.url}?revision={revision.pk}'
+        initial = self.client.get(correction_url).context['form'].initial
+        response = self.client.post(correction_url, {**initial, 'terms_status': 'confirmed'})
+        self.assertIn('file', response.context['form'].errors)
+        revision.refresh_from_db()
+        self.assertEqual(revision.metadata['metadata']['usage_terms']['status'], 'unverified')
+        file = SimpleUploadedFile('official.txt', self.text.encode('utf-8'), content_type='text/plain')
+        response = self.client.post(correction_url, {**initial, 'file': file, 'terms_status': 'confirmed'})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual((SourceDocument.objects.count(), SourceRevision.objects.count()), (1, 1))
+        revision.refresh_from_db()
+        self.assertEqual(revision.review_status, 'PENDING_REVIEW')
+        self.assertEqual(revision.metadata['metadata']['usage_terms']['status'], 'confirmed')
+        self.assertEqual(SourceDocument.objects.get().review_status, 'PENDING_REVIEW')
+        self.assertContains(self.client.get(self.revisions_url), 'AI 이용 허용 확인')
+        self.assertContains(self.approve(revision), '검토 결과를 기록했습니다')
+        revision.refresh_from_db()
+        self.assertEqual(revision.review_status, 'APPROVED')
+        document = SourceDocument.objects.get()
+        self.assertEqual((document.status, document.review_status), ('PENDING', 'APPROVED'))
+        self.assertTrue(document.ai_reprocessing_required)
+
+    def test_prohibited_and_excluded_reasons_are_visible_before_approval(self):
+        excluded = next(spec.url for spec in load_registry() if not spec.enabled)
+        for status, url, label in (
+            ('prohibited', self.data['url'], '가공 금지 — 승인 차단'),
+            ('confirmed', excluded, '목록 제외 — 승인 차단'),
+        ):
+            with self.subTest(status=status):
+                self.upload(terms_status=status, url=url)
+                revision = SourceRevision.objects.get(document__source_url=url)
+                self.assertContains(self.client.get(self.revisions_url), label)
+                self.approve(revision)
+                revision.refresh_from_db()
+                self.assertEqual(revision.review_status, 'PENDING_REVIEW')
+
+    def test_invalid_correction_identifiers_are_not_found(self):
+        for value in ('missing', '999999', '-1', '999999999999999999999999999999999'):
+            with self.subTest(value=value):
+                self.assertEqual(self.client.get(self.url, {'revision': value}).status_code, 404)
+        self.assert_no_import()
+
+    def test_reviewer_without_import_permissions_has_no_correction_link(self):
+        self.upload(terms_status='unverified')
+        revision = SourceRevision.objects.get()
+        correction_url = f'{self.url}?revision={revision.pk}'
+        self.staff.user_permissions.add(*Permission.objects.filter(
+            content_type__app_label='sources', codename__in=('change_sourcedocument', 'change_sourcerevision'),
+        ))
+        self.client.force_login(self.staff)
+        detail = self.client.get(reverse('admin:sources_sourcerevision_change', args=[revision.pk]))
+        self.assertContains(detail, '미확인 — 승인 차단')
+        self.assertNotContains(detail, correction_url)
+        self.assertNotContains(self.approve(revision), correction_url)
+        self.assertEqual(self.client.get(correction_url).status_code, 403)
+        response = self.client.post(correction_url, {**self.data, 'file': SimpleUploadedFile('official.txt', b'text')})
+        self.assertEqual(response.status_code, 403)
+        revision.refresh_from_db()
+        self.assertEqual(revision.metadata['metadata']['usage_terms']['status'], 'unverified')
+
     def test_each_required_permission_is_enforced_for_get_post_and_link(self):
         self.client.force_login(self.staff)
         for missing in self.permissions:

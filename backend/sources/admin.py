@@ -4,11 +4,13 @@ from django.contrib import messages
 from django.db import DatabaseError, transaction
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import F
-from django.http import HttpResponseRedirect
+from django.http import Http404, HttpResponseRedirect
+from django.shortcuts import get_object_or_404
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils.decorators import method_decorator
 from django.utils import timezone
+from django.utils.html import format_html
 from django.views.decorators.http import require_http_methods
 
 from .models import Agency, AgencyAlias, CrawlLog, SourceChunk, SourceDocument, SourceRefreshTarget, SourceRevision
@@ -18,6 +20,13 @@ from .services.manual_import import import_official_txt
 from .services.refresh_service import document_snapshot, review_revision
 from .services.source_registry import CATEGORIES, REGIONS
 from .services.usage_conditions import is_manual_metadata, validate_manual_approval
+
+
+def _has_txt_import_permission(user):
+    return user.is_active and user.is_staff and all(user.has_perm(permission) for permission in (
+        'sources.add_sourcedocument', 'sources.change_sourcedocument',
+        'sources.add_sourcerevision', 'sources.change_sourcerevision',
+    ))
 
 
 class PipelineReadOnlyMixin:
@@ -99,7 +108,8 @@ class OfficialTxtImportForm(forms.Form):
     published_at = forms.DateField(label='공식 발행일', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
     terms_status = forms.ChoiceField(
         label='AI 이용조건 확인 상태', initial='unverified',
-        choices=[('unverified', '미확인'), ('confirmed', 'AI 이용 허용 확인'), ('prohibited', '가공 금지')],
+        choices=[('unverified', '미확인 — 후보 저장만 가능, 승인 차단'), ('confirmed', 'AI 이용 허용 확인'), ('prohibited', '가공 금지 — 승인 차단')],
+        help_text='확인일을 입력해도 확인 상태는 자동으로 바뀌지 않습니다. AI 이용 허용 근거를 확인한 경우에만 허용 확인을 선택하세요.',
     )
     terms_note = forms.CharField(
         label='이용조건 및 확인 근거', max_length=4000,
@@ -134,11 +144,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 
     def has_txt_import_permission(self, request):
         """자료·후보를 생성하고 기존 대기 후보를 갱신할 권한을 모두 요구한다."""
-        user = request.user
-        return user.is_active and user.is_staff and all(user.has_perm(permission) for permission in (
-            'sources.add_sourcedocument', 'sources.change_sourcedocument',
-            'sources.add_sourcerevision', 'sources.change_sourcerevision',
-        ))
+        return _has_txt_import_permission(request.user)
 
     def get_urls(self):
         return [path('import-txt/', self.admin_site.admin_view(self.import_txt_view),
@@ -154,7 +160,23 @@ class SourceDocumentAdmin(admin.ModelAdmin):
         """기존 수동 등록과 감사 로그를 함께 저장하고 기존 후보 검토 화면으로 연결한다."""
         if not self.has_txt_import_permission(request):
             raise PermissionDenied
-        form = OfficialTxtImportForm(request.POST, request.FILES) if request.method == 'POST' else OfficialTxtImportForm()
+        source_revision, initial = None, {}
+        if 'revision' in request.GET:
+            try:
+                source_revision = get_object_or_404(SourceRevision.objects.select_related('document'), pk=request.GET['revision'])
+            except (ValueError, OverflowError):
+                raise Http404 from None
+            snapshot = source_revision.metadata
+            metadata = snapshot.get('metadata', {})
+            if not is_manual_metadata(metadata) and not is_manual_metadata(source_revision.document.metadata):
+                raise Http404
+            terms = metadata.get('usage_terms', {})
+            if not isinstance(terms, dict):
+                terms = {}
+            initial = {field: snapshot.get(field) for field in ('title', 'agency', 'region', 'category', 'published_at')}
+            initial.update(url=snapshot.get('source_url'), terms_status=terms.get('status', 'unverified'),
+                           terms_note=terms.get('note'), terms_url=terms.get('url'), terms_checked_on=terms.get('checked_on'))
+        form = OfficialTxtImportForm(request.POST, request.FILES) if request.method == 'POST' else OfficialTxtImportForm(initial=initial)
         if request.method == 'POST' and form.is_valid():
             try:
                 with transaction.atomic():
@@ -176,14 +198,20 @@ class SourceDocumentAdmin(admin.ModelAdmin):
                 form.add_error(None, '저장 충돌 또는 검증 실패입니다. 최신 자료 상태를 확인한 뒤 파일을 다시 선택하세요.')
             else:
                 if result.revision_id:
-                    self.message_user(request, f'문서 {result.document_id} / 후보 {result.revision_id}: 검토 대기로 저장했습니다. 동일 본문의 대기 후보는 재사용합니다.', messages.SUCCESS)
+                    notice = f'문서 {result.document_id} / 후보 {result.revision_id}: 검토 대기로 저장했습니다. 동일 본문의 대기 후보는 재사용합니다.'
+                    try:
+                        validate_manual_approval(obj.metadata, previous_metadata=obj.document.metadata)
+                    except CollectionError as error:
+                        self.message_user(request, f'{notice} 승인 차단: {error}', messages.WARNING)
+                    else:
+                        self.message_user(request, notice, messages.SUCCESS)
                 else:
                     self.message_user(request, f'문서 {result.document_id}: 새 후보 없이 처리했습니다. 최신 자료와 검토 상태를 확인하세요.', messages.INFO)
                 return HttpResponseRedirect(destination)
         request.current_app = self.admin_site.name
         return TemplateResponse(request, 'admin/sources/sourcedocument/import_txt.html', {
             **self.admin_site.each_context(request), 'opts': self.model._meta,
-            'title': '공식자료 TXT 등록', 'form': form,
+            'title': '공식자료 TXT 등록', 'form': form, 'source_revision': source_revision,
         })
 
     def get_readonly_fields(self, request, obj=None):
@@ -268,10 +296,10 @@ class SourceRefreshTargetAdmin(admin.ModelAdmin):
 
 @admin.register(SourceRevision)
 class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
-    list_display = ('id', 'document', 'provider', 'registration_method', 'content_hash', 'collected_at', 'review_status', 'reviewed_by', 'reviewed_at')
+    list_display = ('id', 'document', 'provider', 'registration_method', 'usage_terms_status', 'content_hash', 'collected_at', 'review_status', 'reviewed_by', 'reviewed_at')
     list_filter = ('review_status', 'provider')
     search_fields = ('document__title', 'document__external_id', 'content_hash')
-    readonly_fields = ('manual_review_notice', *tuple(field.name for field in SourceRevision._meta.fields))
+    readonly_fields = ('usage_terms_status', 'manual_review_notice', *tuple(field.name for field in SourceRevision._meta.fields))
     list_select_related = ('document', 'reviewed_by')
     actions = ('approve_candidates', 'reject_candidates')
 
@@ -279,11 +307,42 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
     def registration_method(self, obj):
         return '수동 TXT' if is_manual_metadata(obj.metadata.get('metadata', {})) else '자동 수집'
 
+    @admin.display(description='TXT 이용조건·승인 제한')
+    def usage_terms_status(self, obj):
+        if not is_manual_metadata(obj.metadata.get('metadata', {})) and not is_manual_metadata(obj.document.metadata):
+            return '해당 없음'
+        terms = obj.metadata.get('metadata', {}).get('usage_terms', {})
+        status = terms.get('status') if isinstance(terms, dict) else None
+        try:
+            validate_manual_approval(obj.metadata, previous_metadata=obj.document.metadata)
+        except CollectionError as error:
+            if error.code == 'SOURCE_DISABLED':
+                return '목록 제외 — 승인 차단'
+            label = {'unverified': '미확인', 'prohibited': '가공 금지'}.get(status, '확인 정보 부족')
+            return f'{label} — 승인 차단'
+        return 'AI 이용 허용 확인'
+
+    def _correction_url(self, pk):
+        return f"{reverse('admin:sources_sourcedocument_import_txt', current_app=self.admin_site.name)}?revision={pk}"
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj and _has_txt_import_permission(request.user) and (
+            is_manual_metadata(obj.metadata.get('metadata', {})) or is_manual_metadata(obj.document.metadata)
+        ):
+            return ('manual_import_correction', *self.readonly_fields)
+        return self.readonly_fields
+
+    @admin.display(description='TXT 이용조건 정정')
+    def manual_import_correction(self, obj):
+        return format_html('<a href="{}">TXT 이용조건 확인·정정</a> — 기존 입력을 불러옵니다. 같은 TXT를 다시 선택하세요.', self._correction_url(obj.pk))
+
     @admin.display(description='TXT 원문·이용조건 검토')
     def manual_review_notice(self, obj):
         if self.registration_method(obj) != '수동 TXT':
             return '해당 없음'
         return (
+            f'현재 TXT 이용조건: {self.usage_terms_status(obj)}. '
+            '확인일을 입력해도 AI 이용조건 확인 상태는 자동으로 바뀌지 않습니다. '
             '공식 URL만으로 원문 일치를 보증하지 않습니다. 새 본문과 공식 원문을 직접 대조하고 '
             'metadata의 manual_import(파일명·원본 해시·등록자), usage_terms(조건·근거·확인일)를 검토하세요. '
             'AI 정제·청크·임베딩·검색 허용과 현재 적용 범위를 확인한 뒤 기존 승인 액션을 사용하세요. '
@@ -303,7 +362,10 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
                 self.log_change(request, revision, '공식자료 변경 후보 승인' if approve else '공식자료 변경 후보 반려')
                 self.message_user(request, f'후보 {pk}: 검토 결과를 기록했습니다.', messages.SUCCESS)
             except CollectionError as error:
-                self.message_user(request, f'후보 {pk}: {error}', messages.ERROR)
+                notice = f'후보 {pk}: {error}'
+                if error.code == 'TERMS_UNCONFIRMED' and _has_txt_import_permission(request.user):
+                    notice = format_html('{} <a href="{}">TXT 이용조건 확인·정정</a>', notice, self._correction_url(pk))
+                self.message_user(request, notice, messages.ERROR)
             except (DatabaseError, ValidationError):
                 self.message_user(request, f'후보 {pk}: 저장 충돌 또는 검증 실패입니다. 최신 상태를 다시 확인하세요.', messages.ERROR)
 
