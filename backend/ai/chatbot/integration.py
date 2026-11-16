@@ -178,6 +178,7 @@ def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchRe
       2. 문서 값(연락처 번호·금액)이 글자 그대로 들어 있는 같은 자료의 청크 (점수가 기준 미만이어도)
       3. 나머지 AI_MIN_SCORE 이상 청크 (점수 순)
     다른 자료의 청크는 추가하지 않는다. 전체 청크는 VERIFY_MAX_CHUNKS개까지 (모든 자료의 1번을 먼저 채움).
+    검색 청크·literal 청크 모두 자료의 현재 본문 해시(content_hash)로 만든 것만 쓴다 (검색 직후 재승인 대비).
 
     doc은 normalize_document()를 거친 dict. 반환: [(합친 검색 결과, SourceDocument), ...]
       합친 결과의 chunk_id·score는 최고 점수 청크 값, text는 고른 청크들을 원문 순서로 이은 것.
@@ -187,20 +188,32 @@ def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchRe
     for h in hits:  # 점수 내림차순
         if h.source_document_id is not None:
             by_doc.setdefault(h.source_document_id, []).append(h)
+    from sources.models import SourceChunk
+
     official = _official_documents(list(by_doc))
-    # 자료마다 청크가 최소 1개는 들어가야 해서 자료 수도 전체 청크 상한을 넘지 않게
-    order = [i for i in by_doc if i in official][:min(limit, VERIFY_MAX_CHUNKS)]
-    literal = _literal_chunks({i: official[i] for i in order}, _literal_needles(doc))
+    candidates_docs = [i for i in by_doc if i in official]
+    # 검색 뒤 자료가 새 본문으로 재승인됐을 수 있어서, 검색 청크도 자료의 현재 본문 해시로 만든 것만 씀
+    # (literal 청크와 같은 기준 → 한 출처 블록에 옛 본문·새 본문 청크가 섞이지 않게)
+    hashes = dict(SourceChunk.objects.filter(pk__in=[h.chunk_id for i in candidates_docs for h in by_doc[i]])
+                  .values_list("id", "source_content_hash"))
+    current = {i: [h for h in by_doc[i] if official[i].content_hash
+                   and hashes.get(h.chunk_id) == official[i].content_hash] for i in candidates_docs}
+    literal = _literal_chunks({i: official[i] for i in candidates_docs}, _literal_needles(doc))
 
-    # 자료별 후보 (우선순위 순, 중복 없이): [(청크 id, 본문)]
+    # 자료별 후보 (우선순위 순, 중복 없이, 빈 본문 제외): [(청크 id, 본문)]
+    # 최고 점수 청크가 옛 본문이라 빠지면 literal 청크가 그 자리를 채움
     picks: dict[int, list[tuple[int, str]]] = {}
-    for i in order:
-        ranked = by_doc[i]
-        candidates = [(ranked[0].chunk_id, ranked[0].text), *literal.get(i, []),
+    for i in candidates_docs:
+        ranked = current[i]
+        candidates = [*((h.chunk_id, h.text) for h in ranked[:1]), *literal.get(i, []),
                       *((h.chunk_id, h.text) for h in ranked[1:])]
-        picks[i] = list(dict(candidates).items())[:VERIFY_CHUNKS_PER_SOURCE]
+        picked = [(c, t) for c, t in dict(candidates).items() if t and t.strip()][:VERIFY_CHUNKS_PER_SOURCE]
+        if picked:  # 쓸 청크가 없는 자료는 출처로 내지 않음
+            picks[i] = picked
+    # 자료마다 청크가 최소 1개는 들어가야 해서 자료 수도 전체 청크 상한을 넘지 않게
+    order = list(picks)[:min(limit, VERIFY_MAX_CHUNKS)]
 
-    # 전체 상한: 라운드마다 자료 순서대로 하나씩 (모든 자료가 최고 점수 청크는 먼저 갖게)
+    # 전체 상한: 라운드마다 자료 순서대로 하나씩 (모든 자료가 1순위 청크는 먼저 갖게)
     chosen: dict[int, list[tuple[int, str]]] = {i: [] for i in order}
     total = 0
     for rank in range(VERIFY_CHUNKS_PER_SOURCE):
@@ -210,16 +223,15 @@ def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchRe
                 total += 1
 
     # 같은 자료 청크는 원문 순서(SourceChunk.chunk_order)로 이어 붙임. 청크 id 순서는 원문 순서와 다를 수 있음
-    from sources.models import SourceChunk
-
     chunk_ids = [c for picked in chosen.values() for c, _ in picked]
     position = dict(SourceChunk.objects.filter(pk__in=chunk_ids).values_list("id", "chunk_order"))
     out = []
     for i in order:
         picked = sorted(chosen[i], key=lambda c: (position.get(c[0], 0), c[0]))
-        text = "\n\n…\n\n".join(t for _, t in picked if t)
-        if text.strip():  # 본문이 빈 자료는 출처로 내지 않음
-            out.append((replace(by_doc[i][0], text=text), official[i]))
+        text = "\n\n…\n\n".join(t for _, t in picked)
+        # 메타(제목·URL·점수)는 현재 본문의 최고 점수 검색 청크. 없으면(literal만) 그 자료의 검색 결과 메타에 첫 청크 id
+        base = current[i][0] if current[i] else replace(by_doc[i][0], chunk_id=picks[i][0][0])
+        out.append((replace(base, text=text), official[i]))
     return out
 
 

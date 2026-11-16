@@ -648,6 +648,33 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         with mock.patch("ai.chatbot.integration.search", return_value=[self.hit(self.chunk(empty, "", 0), 0.95)]):
             self.assertEqual(related_sources(normalize_document(C1_RESULT)), [])
 
+    def test_search_chunks_with_old_body_hash_are_dropped(self):
+        """검색 직후 자료가 새 본문(H2)으로 재승인되면 H1 검색 청크는 빼고 현재 해시 청크만 넣음 (CodeRabbit)."""
+        from ai.chatbot.integration import related_sources
+        from ai.chatbot.service import normalize_document
+
+        a = self.source("a", title="자료 A", index=False)
+        old_best = self.chunk(a, "A 옛 본문 개요", 0)       # 검색 시점(H1) 청크
+        old_mid = self.chunk(a, "A 옛 본문 설명", 1)
+        hits = [self.hit(old_best, 0.9), self.hit(old_mid, 0.8)]
+        self.set_body(a, "새 본문 H2")                      # 검색 뒤 재승인 → content_hash가 H2
+        new_phone = self.chunk(a, "A 새 본문 연락처 041-000-0000", 2)  # H2 literal 청크 (자료+순서는 유일해서 2부터)
+        new_plain = self.chunk(a, "A 새 본문 기타", 3)                 # H2지만 검색에도 literal에도 안 걸림
+
+        prompt, out = self.verify_prompt(hits)
+        self.assertNotIn("옛 본문", prompt)
+        self.assertIn(new_phone.chunk_text, prompt)   # 첫 후보가 빠진 자리를 literal 청크가 채움
+        self.assertNotIn(new_plain.chunk_text, prompt)
+        self.assertEqual([s["sourceDocumentId"] for s in out["sources"]], [a.pk])
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            (merged, _), = related_sources(normalize_document(C1_RESULT))
+        self.assertEqual((merged.chunk_id, merged.text), (new_phone.pk, new_phone.chunk_text))
+
+        # 현재 해시 청크가 하나도 없으면 그 자료는 출처로 내지 않음
+        new_phone.delete()
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            self.assertEqual(related_sources(normalize_document(C1_RESULT)), [])
+
     def test_chunks_joined_by_chunk_order_not_id(self):
         """청크 id가 아니라 chunk_order 순으로 이어 붙임 (CodeRabbit)."""
         a = self.source("a", title="자료 A", index=False)
