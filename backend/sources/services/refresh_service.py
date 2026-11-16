@@ -12,7 +12,7 @@ from .errors import CollectionError
 from .normalization import OfficialRecord, official_date, official_url
 from .parser import parse_html
 from .source_service import CollectionResult
-from .usage_conditions import is_manual_metadata, validate_manual_approval
+from .usage_conditions import is_manual_metadata
 
 
 LEASE_DURATION = timedelta(minutes=30)
@@ -215,7 +215,7 @@ def review_revision(revision_id, user, *, approve):
             # 후보 확인일은 후보를 재확인할 때 함께 갱신하므로 최신 성공 관측과 일치해야 한다.
             if document.version != revision.base_version or document.content_hash != revision.previous_hash or document.observed_hash != revision.content_hash or document.last_success_at != revision.collected_at:
                 raise CollectionError('REVIEW_CONFLICT', '더 최근 자료 또는 관리자 수정이 있습니다. 최신 후보를 검토하세요.')
-            validate_manual_approval(revision.metadata, previous_metadata=document.metadata)
+            # 이용조건과 수집 목록 제외 표시는 참고 기록이며 관리자 승인을 제한하지 않는다.
             needs_reprocessing = document.ai_reprocessing_required or document.review_status != 'APPROVED' or document.content_hash != revision.content_hash or document.content_text != revision.content_text
             for name, value in revision.metadata.items():
                 setattr(document, name, official_date(value) if name in ('published_at', 'effective_at') else value)

@@ -17,9 +17,9 @@ from .models import Agency, AgencyAlias, CrawlLog, SourceChunk, SourceDocument, 
 from .services.errors import CollectionError
 from .services.freshness import freshness, next_due_at, filter_freshness
 from .services.manual_import import import_official_txt
-from .services.refresh_service import document_snapshot, review_revision
+from .services.refresh_service import review_revision
 from .services.source_registry import CATEGORIES, REGIONS
-from .services.usage_conditions import is_manual_metadata, validate_manual_approval
+from .services.usage_conditions import is_manual_metadata
 
 
 def _has_txt_import_permission(user):
@@ -86,10 +86,6 @@ class SourceDocumentAdminForm(forms.ModelForm):
             if cleaned_data.get('status') == SourceDocument.Status.ACTIVE and is_manual_metadata(current.metadata):
                 if current.review_status != SourceDocument.ReviewStatus.APPROVED:
                     self.add_error('status', 'TXT는 변경 후보의 관리자 승인 전 사용 중으로 변경할 수 없습니다.')
-                try:
-                    validate_manual_approval(document_snapshot(current))
-                except CollectionError as error:
-                    self.add_error('status', str(error))
         return cleaned_data
 
 
@@ -108,8 +104,8 @@ class OfficialTxtImportForm(forms.Form):
     published_at = forms.DateField(label='공식 발행일', required=False, widget=forms.DateInput(attrs={'type': 'date'}))
     terms_status = forms.ChoiceField(
         label='AI 이용조건 확인 상태', initial='unverified',
-        choices=[('unverified', '미확인 — 후보 저장만 가능, 승인 차단'), ('confirmed', 'AI 이용 허용 확인'), ('prohibited', '가공 금지 — 승인 차단')],
-        help_text='확인일을 입력해도 확인 상태는 자동으로 바뀌지 않습니다. AI 이용 허용 근거를 확인한 경우에만 허용 확인을 선택하세요.',
+        choices=[('unverified', '미확인'), ('confirmed', 'AI 이용 허용 확인'), ('prohibited', '가공 금지')],
+        help_text='이용조건은 참고 기록입니다. 어떤 상태에서도 권한 있는 관리자가 승인할 수 있습니다.',
     )
     terms_note = forms.CharField(
         label='이용조건 및 확인 근거', max_length=4000,
@@ -199,12 +195,7 @@ class SourceDocumentAdmin(admin.ModelAdmin):
             else:
                 if result.revision_id:
                     notice = f'문서 {result.document_id} / 후보 {result.revision_id}: 검토 대기로 저장했습니다. 동일 본문의 대기 후보는 재사용합니다.'
-                    try:
-                        validate_manual_approval(obj.metadata, previous_metadata=obj.document.metadata)
-                    except CollectionError as error:
-                        self.message_user(request, f'{notice} 승인 차단: {error}', messages.WARNING)
-                    else:
-                        self.message_user(request, notice, messages.SUCCESS)
+                    self.message_user(request, notice, messages.SUCCESS)
                 else:
                     self.message_user(request, f'문서 {result.document_id}: 새 후보 없이 처리했습니다. 최신 자료와 검토 상태를 확인하세요.', messages.INFO)
                 return HttpResponseRedirect(destination)
@@ -307,20 +298,16 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
     def registration_method(self, obj):
         return '수동 TXT' if is_manual_metadata(obj.metadata.get('metadata', {})) else '자동 수집'
 
-    @admin.display(description='TXT 이용조건·승인 제한')
+    @admin.display(description='TXT 이용조건')
     def usage_terms_status(self, obj):
         if not is_manual_metadata(obj.metadata.get('metadata', {})) and not is_manual_metadata(obj.document.metadata):
             return '해당 없음'
         terms = obj.metadata.get('metadata', {}).get('usage_terms', {})
         status = terms.get('status') if isinstance(terms, dict) else None
-        try:
-            validate_manual_approval(obj.metadata, previous_metadata=obj.document.metadata)
-        except CollectionError as error:
-            if error.code == 'SOURCE_DISABLED':
-                return '목록 제외 — 승인 차단'
-            label = {'unverified': '미확인', 'prohibited': '가공 금지'}.get(status, '확인 정보 부족')
-            return f'{label} — 승인 차단'
-        return 'AI 이용 허용 확인'
+        label = {'unverified': '미확인', 'prohibited': '가공 금지', 'confirmed': 'AI 이용 허용 확인'}.get(status, '미기록')
+        if isinstance(terms, dict) and terms.get('registry_excluded'):
+            label += ' / 수집 목록 제외 표시'
+        return label
 
     def _correction_url(self, pk):
         return f"{reverse('admin:sources_sourcedocument_import_txt', current_app=self.admin_site.name)}?revision={pk}"
@@ -346,7 +333,7 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
             '공식 URL만으로 원문 일치를 보증하지 않습니다. 새 본문과 공식 원문을 직접 대조하고 '
             'metadata의 manual_import(파일명·원본 해시·등록자), usage_terms(조건·근거·확인일)를 검토하세요. '
             'AI 정제·청크·임베딩·검색 허용과 현재 적용 범위를 확인한 뒤 기존 승인 액션을 사용하세요. '
-            '이용조건 미확인·가공 금지·목록 제외 자료는 승인할 수 없습니다.'
+            '이용조건과 수집 목록 제외 표시는 참고 기록이며 관리자 승인을 제한하지 않습니다.'
         )
 
     def has_review_permission(self, request):
@@ -362,10 +349,7 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
                 self.log_change(request, revision, '공식자료 변경 후보 승인' if approve else '공식자료 변경 후보 반려')
                 self.message_user(request, f'후보 {pk}: 검토 결과를 기록했습니다.', messages.SUCCESS)
             except CollectionError as error:
-                notice = f'후보 {pk}: {error}'
-                if error.code == 'TERMS_UNCONFIRMED' and _has_txt_import_permission(request.user):
-                    notice = format_html('{} <a href="{}">TXT 이용조건 확인·정정</a>', notice, self._correction_url(pk))
-                self.message_user(request, notice, messages.ERROR)
+                self.message_user(request, f'후보 {pk}: {error}', messages.ERROR)
             except (DatabaseError, ValidationError):
                 self.message_user(request, f'후보 {pk}: 저장 충돌 또는 검증 실패입니다. 최신 상태를 다시 확인하세요.', messages.ERROR)
 

@@ -261,25 +261,27 @@ class AdminTxtImportTests(TestCase):
         self.assertEqual(older.review_status, 'PENDING_REVIEW')
         self.assertEqual(SourceDocument.objects.get().content_text, '')
 
-    def test_unverified_prohibited_and_registry_excluded_candidates_cannot_be_approved(self):
+    def test_unverified_prohibited_and_registry_excluded_candidates_can_be_approved(self):
         excluded = next(spec.url for spec in load_registry() if not spec.enabled)
         cases = (
-            ('unverified', self.data['url'] + '/unverified', 'TERMS_UNCONFIRMED'),
-            ('prohibited', self.data['url'] + '/prohibited', 'TERMS_UNCONFIRMED'),
-            ('confirmed', excluded, 'SOURCE_DISABLED'),
+            ('unverified', self.data['url'] + '/unverified'),
+            ('prohibited', self.data['url'] + '/prohibited'),
+            ('confirmed', excluded),
         )
-        for status, url, code in cases:
+        for status, url in cases:
             with self.subTest(status=status, url=url):
                 response = self.upload(url=url, terms_status=status)
                 self.assertEqual(response.status_code, 302)
                 revision = SourceRevision.objects.get(document__source_url=url)
-                self.assertContains(self.approve(revision), code)
+                self.assertContains(self.approve(revision), '검토 결과를 기록했습니다')
                 revision.refresh_from_db()
                 document = revision.document
-                self.assertEqual((revision.review_status, document.review_status, document.status), ('PENDING_REVIEW', 'PENDING_REVIEW', 'PENDING'))
+                self.assertEqual((revision.review_status, document.review_status, document.status), ('APPROVED', 'APPROVED', 'PENDING'))
                 self.assertFalse(document.ai_eligible)
-                self.assertEqual(document.content_text, '')
-        self.assertFalse(LogEntry.objects.filter(action_flag=CHANGE).exists())
+                self.assertEqual(document.content_text, self.text)
+                self.assertEqual(document.metadata['usage_terms']['status'], status)
+                self.assertTrue(document.ai_reprocessing_required)
+        self.assertEqual(LogEntry.objects.filter(action_flag=CHANGE).count(), 3)
 
     def test_correcting_terms_reuses_candidate_and_then_allows_existing_approval(self):
         self.upload(terms_status='unverified', terms_checked_on='')
@@ -289,21 +291,21 @@ class AdminTxtImportTests(TestCase):
         self.approve(revision)
         self.assertEqual(SourceDocument.objects.get().review_status, 'APPROVED')
 
-    def test_unverified_with_check_date_shows_block_reason_and_correction_link(self):
+    def test_unverified_with_check_date_is_informational_and_does_not_block_approval(self):
         response = self.upload(terms_status='unverified')
         self.assertEqual(response.status_code, 302)
         revision = SourceRevision.objects.get()
         detail_url = reverse('admin:sources_sourcerevision_change', args=[revision.pk])
         correction_url = f'{self.url}?revision={revision.pk}'
         detail = self.client.get(detail_url)
-        self.assertContains(detail, '승인 차단: TERMS_UNCONFIRMED')
-        self.assertContains(detail, '미확인 — 승인 차단')
+        self.assertNotContains(detail, '승인 차단')
+        self.assertContains(detail, '미확인')
         self.assertContains(detail, correction_url)
         self.assertContains(detail, '확인일을 입력해도 AI 이용조건 확인 상태는 자동으로 바뀌지 않습니다')
-        self.assertContains(self.client.get(self.revisions_url), '미확인 — 승인 차단')
+        self.assertContains(self.client.get(self.revisions_url), '미확인')
         response = self.approve(revision)
-        self.assertContains(response, correction_url)
-        self.assertEqual(SourceDocument.objects.get().review_status, 'PENDING_REVIEW')
+        self.assertContains(response, '검토 결과를 기록했습니다')
+        self.assertEqual(SourceDocument.objects.get().review_status, 'APPROVED')
 
     def test_correction_prefills_metadata_without_confirming_terms_or_modifying_rows(self):
         self.upload(terms_status='unverified')
@@ -342,11 +344,11 @@ class AdminTxtImportTests(TestCase):
         self.assertEqual((document.status, document.review_status), ('PENDING', 'APPROVED'))
         self.assertTrue(document.ai_reprocessing_required)
 
-    def test_prohibited_and_excluded_reasons_are_visible_before_approval(self):
+    def test_prohibited_and_excluded_labels_are_informational_and_do_not_block_approval(self):
         excluded = next(spec.url for spec in load_registry() if not spec.enabled)
         for status, url, label in (
-            ('prohibited', self.data['url'], '가공 금지 — 승인 차단'),
-            ('confirmed', excluded, '목록 제외 — 승인 차단'),
+            ('prohibited', self.data['url'], '가공 금지'),
+            ('confirmed', excluded, '수집 목록 제외 표시'),
         ):
             with self.subTest(status=status):
                 self.upload(terms_status=status, url=url)
@@ -354,7 +356,7 @@ class AdminTxtImportTests(TestCase):
                 self.assertContains(self.client.get(self.revisions_url), label)
                 self.approve(revision)
                 revision.refresh_from_db()
-                self.assertEqual(revision.review_status, 'PENDING_REVIEW')
+                self.assertEqual(revision.review_status, 'APPROVED')
 
     def test_invalid_correction_identifiers_are_not_found(self):
         for value in ('missing', '999999', '-1', '999999999999999999999999999999999'):
@@ -371,9 +373,11 @@ class AdminTxtImportTests(TestCase):
         ))
         self.client.force_login(self.staff)
         detail = self.client.get(reverse('admin:sources_sourcerevision_change', args=[revision.pk]))
-        self.assertContains(detail, '미확인 — 승인 차단')
+        self.assertContains(detail, '미확인')
         self.assertNotContains(detail, correction_url)
         self.assertNotContains(self.approve(revision), correction_url)
+        revision.refresh_from_db()
+        self.assertEqual(revision.review_status, 'APPROVED')
         self.assertEqual(self.client.get(correction_url).status_code, 403)
         response = self.client.post(correction_url, {**self.data, 'file': SimpleUploadedFile('official.txt', b'text')})
         self.assertEqual(response.status_code, 403)

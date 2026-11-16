@@ -336,15 +336,16 @@ class ManualImportTests(TestCase):
         self.assertEqual(self.pending().pk, revision.pk)
         self.approve()
 
-    def test_unverified_and_prohibited_terms_cannot_be_approved_or_activated(self):
+    def test_unverified_and_prohibited_terms_can_be_approved_without_automatic_activation(self):
         for status in ('unverified', 'prohibited'):
             with self.subTest(status=status):
                 document = self.run_import(terms_status=status, terms_checked_on=None)
-                with self.assertRaisesMessage(CollectionError, 'TERMS_UNCONFIRMED'):
-                    review_revision(self.pending().pk, self.admin, approve=True)
+                review_revision(self.pending().pk, self.admin, approve=True)
                 document.refresh_from_db()
-                self.assertEqual((document.status, document.review_status), ('PENDING', 'PENDING_REVIEW'))
-                self.assertFalse(_targets().exists())
+                self.assertEqual((document.status, document.review_status), ('PENDING', 'APPROVED'))
+                self.assertEqual(document.metadata['usage_terms']['status'], status)
+                self.assertTrue(document.ai_reprocessing_required)
+                self.assertTrue(_targets().filter(pk=document.pk).exists())
                 self.assertEqual(self.results(), [])
 
     def test_confirmed_terms_reimport_updates_same_pending_candidate(self):
@@ -356,15 +357,17 @@ class ManualImportTests(TestCase):
         self.assertEqual((document.status, document.review_status), ('PENDING', 'APPROVED'))
         self.assertTrue(document.ai_reprocessing_required)
 
-    def test_disabled_registry_notice_stays_blocked_even_if_importer_claims_permission(self):
+    def test_disabled_registry_notice_can_be_manually_approved(self):
         disabled = next(item for item in load_registry() if not item.enabled and 'pds_no=' in item.url)
         document = self.run_import(url=disabled.url)
-        with self.assertRaisesMessage(CollectionError, 'SOURCE_DISABLED'):
-            review_revision(self.pending().pk, self.admin, approve=True)
+        review_revision(self.pending().pk, self.admin, approve=True)
+        document.refresh_from_db()
         self.assertEqual(document.status, 'PENDING')
-        self.assertFalse(_targets().exists())
+        self.assertEqual(document.review_status, 'APPROVED')
+        self.assertTrue(document.metadata['usage_terms']['registry_excluded'])
+        self.assertTrue(_targets().filter(pk=document.pk).exists())
 
-    def test_automatic_refresh_cannot_remove_manual_usage_gate(self):
+    def test_automatic_refresh_of_manual_document_can_be_approved_without_terms(self):
         document = self.run_import(terms_status='unverified', terms_checked_on=None)
         target = SourceRefreshTarget.objects.create(provider='html', source_url=self.url, document=document)
         record = OfficialRecord(
@@ -374,10 +377,11 @@ class ManualImportTests(TestCase):
         with patch('sources.services.refresh_service.fetch_record', return_value=record):
             self.assertEqual(refresh_target(target, Mock()).outcome, 'candidate')
         candidate = SourceRevision.objects.get(content_hash=record.content_hash)
-        with self.assertRaisesMessage(CollectionError, 'TERMS_UNCONFIRMED'):
-            review_revision(candidate.pk, self.admin, approve=True)
+        review_revision(candidate.pk, self.admin, approve=True)
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.review_status, 'APPROVED')
 
-    def test_automatic_refresh_preserves_manual_policy_on_previously_automatic_document(self):
+    def test_automatic_refresh_preserves_manual_provenance_on_previously_automatic_document(self):
         document = SourceDocument.objects.create(
             source_url=self.url, title='기존 자동 자료', agency='법무부', region='전국', category='출입국·체류',
             content_text=self.text, content_hash=hashlib.sha256(self.text.encode('utf-8')).hexdigest(),
@@ -396,14 +400,15 @@ class ManualImportTests(TestCase):
             self.assertEqual(refresh_target(target, Mock()).outcome, 'unchanged')
         candidate = self.pending()
         self.assertEqual(candidate.pk, manual.pk)
-        with self.assertRaisesMessage(CollectionError, 'TERMS_UNCONFIRMED'):
-            review_revision(candidate.pk, self.admin, approve=True)
+        review_revision(candidate.pk, self.admin, approve=True)
         self.assertEqual(candidate.metadata['metadata']['manual_import'], trace)
         self.assertEqual(candidate.metadata['metadata']['usage_terms']['status'], 'unverified')
         self.assertEqual(candidate.metadata['metadata']['upstream'], 'changed')
         self.assertEqual(candidate.metadata['title'], '자동 수집 제목 정정')
+        document.refresh_from_db()
+        self.assertEqual(document.review_status, 'APPROVED')
 
-    def test_disabled_notice_url_variants_cannot_bypass_exclusion(self):
+    def test_disabled_notice_url_variants_record_exclusion_without_blocking_approval(self):
         disabled = next(item for item in load_registry() if not item.enabled and 'pds_no=' in item.url)
         parts = urlsplit(disabled.url)
         pairs = parse_qsl(parts.query)
@@ -419,10 +424,10 @@ class ManualImportTests(TestCase):
                 document = self.run_import(url=url)
                 candidate = document.revisions.get(review_status='PENDING_REVIEW')
                 self.assertTrue(candidate.metadata['metadata']['usage_terms']['registry_excluded'])
-                with self.assertRaisesMessage(CollectionError, 'SOURCE_DISABLED'):
-                    review_revision(candidate.pk, self.admin, approve=True)
+                review_revision(candidate.pk, self.admin, approve=True)
                 document.refresh_from_db()
                 self.assertEqual(document.status, 'PENDING')
+                self.assertEqual(document.review_status, 'APPROVED')
 
     def test_exclusion_identity_keeps_other_official_pages_available(self):
         self.assertFalse(is_registry_excluded('https://www.asan.go.kr/main/cms/?no=93&utm_source=manual'))
@@ -487,14 +492,9 @@ class ManualImportTests(TestCase):
         self.assertEqual((document.status, document.review_status), ('PENDING', 'APPROVED'))
         self.assertTrue(document.ai_reprocessing_required)
 
-    def test_admin_blocks_unverified_approval_and_forced_active_before_indexing(self):
+    def test_admin_allows_unverified_approval_but_requires_indexing_before_activation(self):
         document = self.run_import(terms_status='unverified', terms_checked_on=None)
         self.client.force_login(self.admin)
-        self.client.post(reverse('admin:sources_sourcerevision_changelist'), {
-            'action': 'approve_candidates', '_selected_action': [self.pending().pk],
-        })
-        document.refresh_from_db()
-        self.assertEqual(document.review_status, 'PENDING_REVIEW')
         data = {
             'title': document.title, 'agency': document.agency, 'region': document.region,
             'category': document.category, 'published_at': '', 'status': 'ACTIVE',
@@ -503,8 +503,12 @@ class ManualImportTests(TestCase):
         url = reverse('admin:sources_sourcedocument_change', args=[document.pk])
         response = self.client.post(url, data)
         self.assertContains(response, 'TXT는 변경 후보의 관리자 승인 전')
-        self.run_import()
-        document = self.approve()
+        self.client.post(reverse('admin:sources_sourcerevision_changelist'), {
+            'action': 'approve_candidates', '_selected_action': [self.pending().pk],
+        })
+        document.refresh_from_db()
+        self.assertEqual(document.review_status, 'APPROVED')
+        self.assertEqual(document.metadata['usage_terms']['status'], 'unverified')
         response = self.client.post(url, {**data, 'expected_version': document.version})
         self.assertContains(response, 'AI 재처리가 끝날 때까지')
         document.refresh_from_db()
