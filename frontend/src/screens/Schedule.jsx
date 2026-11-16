@@ -454,8 +454,9 @@ export function ScheduleDetail({ scheduleId }) {
       .catch((err) => {
         if (!(err instanceof StaleSessionError) && tokenStore.session() === session) setLoadError('일정을 불러오지 못했어요.')
       })
+    // 사용자 확인이 늦게 끝나도(알림으로 바로 연 경우 등) 확인된 뒤 다시 불러온다
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleId])
+  }, [scheduleId, data.user?.id])
 
   if (!s) {
     return (
