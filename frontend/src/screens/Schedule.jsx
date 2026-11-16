@@ -443,20 +443,22 @@ export function ScheduleDetail({ scheduleId }) {
   useEffect(() => {
     if (s || serverId == null) return
     // 요청 도중 로그아웃·계정 전환이 있으면 응답을 버린다 (다른 계정 일정으로 저장되지 않게)
+    // 저장된 사용자가 지금 로그인 세션과 같은 계정으로 확인된 경우에만 불러온다 (App의 계정 확인과 같은 기준)
     const session = tokenStore.session()
-    const ownerId = data.user?.id
+    const marker = tokenStore.marker()
+    const ownerId = marker && data.user?.session === marker ? data.user.id : null
     if (ownerId == null) return
     getSchedule(serverId, session)
       .then((item) => {
         if (tokenStore.session() !== session) return
-        update((d) => (d.user?.id === ownerId ? { schedules: mergeServerSchedules(d.schedules, [item], { ownerId, complete: false }) } : {}))
+        update((d) => (d.user?.id === ownerId && d.user?.session === marker ? { schedules: mergeServerSchedules(d.schedules, [item], { ownerId, complete: false }) } : {}))
       })
       .catch((err) => {
         if (!(err instanceof StaleSessionError) && tokenStore.session() === session) setLoadError('일정을 불러오지 못했어요.')
       })
     // 사용자 확인이 늦게 끝나도(알림으로 바로 연 경우 등) 확인된 뒤 다시 불러온다
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleId, data.user?.id])
+  }, [scheduleId, data.user?.id, data.user?.session])
 
   if (!s) {
     return (
