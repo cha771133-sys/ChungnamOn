@@ -152,7 +152,7 @@ class OpenAPITests(APISimpleTestCase):
         self.assertEqual(set(result['properties']), {
             'documentId', 'docType', 'title', 'originalText', 'translatedText',
             'summary', 'terms', 'deadlines', 'requiredDocs', 'agency', 'amount', 'paymentMethods',
-            'verification', 'maskedCount', 'lowConfidence',
+            'verification', 'maskedCount', 'lowConfidence', 'callScript',
         })
         pending = self.dereference(responses['409']['content']['application/json']['schema'])
         self.assertEqual(set(pending['properties']), {'detail', 'status', 'step', 'failReason'})
