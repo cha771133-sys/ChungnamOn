@@ -7,6 +7,8 @@
 Django 모델은 함수 안에서 가져온다 (Django 없이 ai 모듈을 import할 수 있게).
 """
 import logging
+import re
+from dataclasses import replace
 
 from . import prompts
 from .llm import get_llm
@@ -17,6 +19,8 @@ log = logging.getLogger(__name__)
 
 VERIFY_LIMIT = 10           # verify()가 돌려주는 관련 공식 자료 최대 개수
 VERIFY_CHUNK_FACTOR = 4     # 자료 10개를 채우려고 청크는 넉넉히 검색
+VERIFY_CHUNKS_PER_SOURCE = 3  # 자료 하나에서 LLM에 넘기는 청크 최대 개수
+VERIFY_MAX_CHUNKS = 12        # LLM에 넘기는 청크 전체 상한 (프롬프트 길이 제한)
 VERIFY_STATUSES = ("MATCHED", "MISMATCH", "UNVERIFIED")
 SUGGESTION_LIMIT, SUGGESTION_MAX_CHARS = 5, 200
 
@@ -108,7 +112,7 @@ def _official_documents(ids):
         review_status=SourceDocument.ReviewStatus.APPROVED, ai_reprocessing_required=False,
         source_url__isnull=False,
     ).only("id", "title", "source_url", "collected_at", "published_at", "status", "review_status",
-           "ai_reprocessing_required")
+           "ai_reprocessing_required", "content_hash")
     out = {}
     for d in docs:
         if not d.ai_eligible:
@@ -121,18 +125,85 @@ def _official_documents(ids):
     return out
 
 
-def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchResult, object]]:
-    """해석 결과와 관련된 공식 자료. 자료(SourceDocument)당 점수가 가장 높은 청크 하나씩, 관련도 순 최대 limit개.
+def _literal_needles(doc: dict) -> list[str]:
+    """청크에 글자 그대로 있는지 찾을 문서 값: 연락처 번호, 금액 숫자(예: "35,000원" → "35,000").
 
-    doc은 normalize_document()를 거친 dict. 반환: [(청크 검색 결과, SourceDocument), ...]
+    너무 짧은 값(숫자 4자리 미만)은 아무 데나 걸려서 뺀다.
+    """
+    values = [str((doc.get("agency") or {}).get("phone") or "").strip()]
+    amount = re.search(r"\d[\d,.]*\d|\d", str(doc.get("amount") or ""))
+    values.append(amount.group(0) if amount else "")
+    return [v for v in dict.fromkeys(values) if len(re.sub(r"\D", "", v)) >= 4]
+
+
+def _literal_chunks(official: dict, needles: list[str]) -> dict[int, list[tuple[int, str]]]:
+    """승인·ACTIVE 자료(official) 안의 현재 청크 중 문서 값이 글자 그대로 들어 있는 것. {자료 id: [(청크 id, 본문)]}"""
+    if not official or not needles:
+        return {}
+    from django.db.models import Q
+
+    from sources.models import SourceChunk
+
+    current = Q()
+    for d in official.values():  # 현재 승인 본문으로 만든 청크만 (DbRetriever 검색 대상과 같은 조건)
+        if d.content_hash:
+            current |= Q(source_document_id=d.pk, source_content_hash=d.content_hash)
+    if not current:
+        return {}
+    has_value = Q()
+    for v in needles:
+        has_value |= Q(chunk_text__contains=v)
+    out: dict[int, list[tuple[int, str]]] = {}
+    rows = (SourceChunk.objects.filter(current & has_value).exclude(source_content_hash="")
+            .order_by("source_document_id", "chunk_order").values_list("source_document_id", "id", "chunk_text"))
+    for doc_id, chunk_id, text in rows:
+        out.setdefault(doc_id, []).append((chunk_id, text))
+    return out
+
+
+def related_sources(doc: dict, limit: int = VERIFY_LIMIT) -> list[tuple[SearchResult, object]]:
+    """해석 결과와 관련된 공식 자료. 관련도(자료의 최고 점수 청크) 순 최대 limit개.
+
+    자료마다 LLM에 넘길 청크를 최대 VERIFY_CHUNKS_PER_SOURCE개까지 모아 한 결과로 합친다 (출처 s번호는 자료 단위).
+      1. 그 자료의 최고 점수 청크
+      2. 문서 값(연락처 번호·금액)이 글자 그대로 들어 있는 같은 자료의 청크 (점수가 기준 미만이어도)
+      3. 나머지 AI_MIN_SCORE 이상 청크 (점수 순)
+    다른 자료의 청크는 추가하지 않는다. 전체 청크는 VERIFY_MAX_CHUNKS개까지 (모든 자료의 1번을 먼저 채움).
+
+    doc은 normalize_document()를 거친 dict. 반환: [(합친 검색 결과, SourceDocument), ...]
+      합친 결과의 chunk_id·score는 최고 점수 청크 값, text는 고른 청크들을 원문 순서로 이은 것.
     """
     hits = search(_verify_query(doc), regions=regions_for(doc), top_k=limit * VERIFY_CHUNK_FACTOR)
-    best: dict[int, SearchResult] = {}
+    by_doc: dict[int, list[SearchResult]] = {}
     for h in hits:  # 점수 내림차순
-        if h.source_document_id is not None and h.source_document_id not in best:
-            best[h.source_document_id] = h
-    official = _official_documents(list(best))
-    return [(h, official[i]) for i, h in best.items() if i in official][:limit]
+        if h.source_document_id is not None:
+            by_doc.setdefault(h.source_document_id, []).append(h)
+    official = _official_documents(list(by_doc))
+    order = [i for i in by_doc if i in official][:limit]
+    literal = _literal_chunks({i: official[i] for i in order}, _literal_needles(doc))
+
+    # 자료별 후보 (우선순위 순, 중복 없이): [(청크 id, 본문)]
+    picks: dict[int, list[tuple[int, str]]] = {}
+    for i in order:
+        ranked = by_doc[i]
+        candidates = [(ranked[0].chunk_id, ranked[0].text), *literal.get(i, []),
+                      *((h.chunk_id, h.text) for h in ranked[1:])]
+        picks[i] = list(dict(candidates).items())[:VERIFY_CHUNKS_PER_SOURCE]
+
+    # 전체 상한: 라운드마다 자료 순서대로 하나씩 (모든 자료가 최고 점수 청크는 먼저 갖게)
+    chosen: dict[int, list[tuple[int, str]]] = {i: [] for i in order}
+    total = 0
+    for rank in range(VERIFY_CHUNKS_PER_SOURCE):
+        for i in order:
+            if rank < len(picks[i]) and total < VERIFY_MAX_CHUNKS:
+                chosen[i].append(picks[i][rank])
+                total += 1
+
+    out = []
+    for i in order:
+        text = "\n\n…\n\n".join(t for _, t in sorted(chosen[i]))  # 청크 id 순 = 원문 순서
+        out.append((replace(by_doc[i][0], text=text), official[i]))
+    return out
 
 
 # C1 항목 (key, label). 문서에 값이 없는 항목은 결과에서 뺀다

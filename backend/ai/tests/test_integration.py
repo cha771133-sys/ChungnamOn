@@ -559,6 +559,99 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         for d in excluded:
             self.assertNotIn(d.pk, doc_ids)
 
+    # ---- 자료당 여러 청크 (연락처가 점수 낮은 청크에만 있던 문제) ----
+    def chunk(self, doc, text, order):
+        from sources.models import SourceChunk
+
+        return SourceChunk.objects.create(source_document=doc, chunk_text=text, chunk_order=order,
+                                          embedding=[0.0], source_content_hash=doc.content_hash)
+
+    @staticmethod
+    def hit(chunk, score):
+        import datetime
+
+        from ai.chatbot.retriever import SearchResult
+
+        d = chunk.source_document
+        return SearchResult(chunk.pk, chunk.chunk_text, score, d.source_url, d.title, d.agency, d.region,
+                            None, datetime.date(2026, 11, 16), d.pk)
+
+    def verify_prompt(self, hits, result=None):
+        """search를 hits로 바꿔 verify를 돌리고 LLM에 간 user 메시지와 결과를 돌려준다."""
+        from ai.chatbot import verify_interpretation
+
+        llm = {"items": []}
+        with mock.patch("ai.chatbot.integration.search", return_value=hits), \
+                mock.patch("ai.chatbot.llm.MockLLM.complete_json", return_value=llm) as call:
+            out = verify_interpretation(C1_RESULT if result is None else result)
+        return call.call_args.args[1][-1]["content"], out
+
+    def test_contact_in_low_score_chunk_reaches_llm(self):
+        """연락처 번호가 검색 점수 낮은(결과에 없는) 청크에만 있어도 같은 자료 안이면 LLM 입력에 들어감."""
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요: 납부 안내", 0)
+        mid = self.chunk(a, "A 납부 방법 설명", 1)
+        low = self.chunk(a, "A 문의처 041-000-0000 (세무과)", 2)   # 검색 결과에 없음
+        prompt, out = self.verify_prompt([self.hit(best, 0.8), self.hit(mid, 0.6)])
+        self.assertIn("041-000-0000 (세무과)", prompt)
+        for c in (best, mid, low):
+            self.assertIn(c.chunk_text, prompt)
+        self.assertLess(prompt.index("A 개요"), prompt.index("A 문의처"))  # 원문 순서로 이음
+        self.assertEqual([s["sourceDocumentId"] for s in out["sources"]], [a.pk])  # 출처는 자료 단위 s1 하나
+        self.assertEqual(prompt.count("<s1 |"), 1)
+        self.assertNotIn("<s2", prompt)
+
+    def test_amount_digits_chunk_also_added(self):
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요", 0)
+        fee = self.chunk(a, "A 수수료 6,250 원", 1)
+        prompt, _ = self.verify_prompt([self.hit(best, 0.8)])
+        self.assertIn(fee.chunk_text, prompt)
+
+    def test_at_most_three_chunks_per_source_value_chunk_first(self):
+        a = self.source("a", title="자료 A", index=False)
+        chunks = [self.chunk(a, f"A 본문 {i}번 청크", i) for i in range(5)]
+        phone = self.chunk(a, "A 연락처 041-000-0000", 5)
+        hits = [self.hit(c, 0.9 - i * 0.05) for i, c in enumerate(chunks)]
+        prompt, _ = self.verify_prompt(hits)
+        # 최고 점수 + 값 청크 + 다음 점수 청크 = 3개. 나머지는 빠짐
+        self.assertEqual([c.chunk_text in prompt for c in chunks], [True, True, False, False, False])
+        self.assertIn(phone.chunk_text, prompt)
+
+    def test_value_chunks_of_other_or_ineligible_sources_not_added(self):
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요", 0)
+        other = self.source("other", title="자료 B", index=False)          # 승인·ACTIVE지만 검색 결과에 없음
+        self.chunk(other, "B 연락처 041-000-0000", 0)
+        pending = self.source("pending", title="자료 C", status="PENDING", index=False)  # ACTIVE 아님
+        p = self.chunk(pending, "C 연락처 041-000-0000", 0)
+        old = self.chunk(a, "A 옛 본문 041-000-0000", 1)
+        old.source_content_hash = "old-hash"                                # 이전 본문 청크
+        old.save(update_fields=["source_content_hash"])
+        prompt, out = self.verify_prompt([self.hit(best, 0.8), self.hit(p, 0.7)])
+        for text in ("B 연락처", "C 연락처", "A 옛 본문"):
+            self.assertNotIn(text, prompt)
+        self.assertEqual([s["sourceDocumentId"] for s in out["sources"]], [a.pk])
+
+    def test_total_chunk_cap_keeps_best_chunk_of_every_source(self):
+        from ai.chatbot.integration import VERIFY_MAX_CHUNKS, related_sources
+        from ai.chatbot.service import normalize_document
+
+        hits, bests = [], []
+        for n in range(6):
+            d = self.source(f"d{n}", title=f"자료 {n}", index=False)
+            cs = [self.chunk(d, f"자료{n} 청크{i}", i) for i in range(3)]
+            bests.append(cs[0].chunk_text)
+            hits += [self.hit(c, 0.9 - n * 0.01 - i * 0.1) for i, c in enumerate(cs)]
+        hits.sort(key=lambda h: -h.score)
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            related = related_sources(normalize_document(C1_RESULT))
+        self.assertEqual(len(related), 6)
+        texts = "\n".join(r.text for r, _ in related)
+        self.assertEqual(texts.count("청크"), VERIFY_MAX_CHUNKS)  # 6×3=18개 중 12개
+        for b in bests:
+            self.assertIn(b, texts)
+
     def test_items_without_document_value_are_excluded(self):
         self.source("a")
         # 지금 더미 interpret처럼 amount·payment_methods가 없으면 → 2개만
