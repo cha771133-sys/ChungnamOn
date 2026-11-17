@@ -340,20 +340,22 @@ export async function releasePushForLogout(): Promise<void> {
       deleteDevice(saved.deviceId, session).catch(() => {}),
       LOGOUT_WAIT_MS,
     )
-  if (messagingPromise) await unregisterInQueue(session)
+  // 로그아웃은 몇 초만 기다린다. 해제 작업은 순서 체인에 남아 나중에라도 끝까지 실행된다
+  if (messagingPromise) await withTimeout(unregisterInQueue(session), LOGOUT_WAIT_MS)
 }
 
 /**
  * FCM 등록 해제를 등록과 같은 순서 체인에 넣는다. 해제가 끝나기 전에 다시 로그인해도 새 등록은 해제 뒤에 실행된다.
- * SDK 로딩과 해제는 각각 몇 초만 기다린다 (체인이 멈추지 않게).
+ * 체인 안에서는 실제 해제가 끝날 때까지 기다린다 (시간 제한으로 먼저 넘어가면, 늦게 끝난 해제가 새 등록을 지울 수 있음).
+ * 기다리는 시간 제한은 부르는 쪽(로그아웃)에서 둔다.
  */
 function unregisterInQueue(session: number): Promise<void> {
   const pending = messagingPromise
   return enqueue(async () => {
     if (!pending) return
-    const fcm = await withTimeout(pending.catch(() => null), LOGOUT_WAIT_MS)
-    // 기다리는 사이 다른 계정으로 로그인했으면 그 계정의 등록을 지우지 않는다
-    if (fcm && tokenStore.session() === session) await withTimeout(fcm.sdk.unregister(fcm.messaging).catch(() => {}), LOGOUT_WAIT_MS)
+    const fcm = await pending.catch(() => null)
+    // 차례가 오기 전에 다른 계정으로 로그인했으면 그 계정의 등록을 지우지 않는다
+    if (fcm && tokenStore.session() === session) await fcm.sdk.unregister(fcm.messaging).catch(() => {})
   })
 }
 
