@@ -98,18 +98,20 @@ def stage_official_record(record, started_at, checked_at, *, document_id=None):
         raise CollectionError('IDENTITY_CONFLICT', '기존 출처 URL과 제공자 식별자가 충돌합니다.')
     if document.observed_started_at and document.observed_started_at > started_at:
         return 'skipped', document
-    if not is_manual_metadata(metadata['metadata']):
+    is_manual = is_manual_metadata(metadata['metadata'])
+    pending = document.revisions.filter(
+        base_version=document.version, review_status='PENDING_REVIEW',
+        metadata__metadata__has_key='manual_import',
+    ).order_by('-collected_at', '-pk').first()
+    if not is_manual:
         # 같은 본문 후보 유무보다 먼저 적용한다. 최신 미검토 수동 정정이 승인 기록보다 우선한다.
-        pending = document.revisions.filter(
-            base_version=document.version, review_status='PENDING_REVIEW',
-            metadata__metadata__has_key='manual_import',
-        ).order_by('-collected_at', '-pk').first()
         previous = pending.metadata['metadata'] if pending else document.metadata
         previous_hash = pending.content_hash if pending else document.content_hash
         metadata = {**metadata, 'metadata': inherit_manual_terms(metadata['metadata'], previous, previous_hash)}
     digest = record.content_hash
     unchanged = document.content_hash == digest and document.content_text == record.content_text and document_snapshot(document) == metadata
-    needs_review = not unchanged or document.review_status != 'APPROVED'
+    # 승인본으로 되돌린 수동 입력도 대기 후보에 반영해 다음 자동 수집의 상속 기준을 정정한다.
+    needs_review = not unchanged or document.review_status != 'APPROVED' or (is_manual and pending is not None)
     if needs_review:
         revision, revision_created = SourceRevision.objects.get_or_create(
             document=document, content_hash=digest, base_version=document.version,
