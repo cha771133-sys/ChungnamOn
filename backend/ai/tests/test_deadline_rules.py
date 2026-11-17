@@ -296,6 +296,21 @@ class JudgeTests(unittest.TestCase):
         start = text.index("입국한")
         self.assertEqual(dr.rule_kind_at(text, start, text.index("신청")), "입국일")
 
+    def test_real_gov24_registration_source_2a_matches(self):
+        """실제 데모 공식자료(Railway SourceDocument #2, 정부24 외국인등록) 원문 일부로 2A 판정 → MATCHED.
+
+        원문 줄바꿈 그대로. 규칙이 든 문장(앞 제목 줄들이 마침표 없이 이어짐)에 금지어·단서 없음.
+        """
+        real = ("수수료\n35,000원\n기본정보\n제공 내용\n이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 "
+                "외국인이 입국한 날부터 90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 "
+                "신청하여야 하는 민원입니다.")
+        original_2a = "외국인등록 안내\n입국일\n2026년 10월 5일\n신청 기한\n2027년 1월 3일까지"
+        for quote in ("외국인이 입국한 날부터 90일 이내에", "입국한 날부터 90일 이내", real):
+            with self.subTest(quote=quote[:20]):
+                j = dr.judge(rule(quote=quote), real, original_2a, DEADLINES)
+                self.assertEqual((j.status, j.official_value),
+                                 ("MATCHED", "입국일(2026-10-05)부터 90일 이내 → 2027-01-03"))
+
     def test_words_after_quote_in_same_sentence(self):
         """인용 범위 밖이어도 규칙이 든 문장 끝까지(괄호 안 포함) 금지어·단서를 검사 (CodeRabbit). 다음 문장은 제외."""
         short = "입국한 날부터 90일 이내"
