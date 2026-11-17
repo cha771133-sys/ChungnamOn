@@ -35,7 +35,12 @@ UNSUPPORTED_RE = re.compile(r"전까지|전에|이전|경과\s*후|지난\s*후|
 DATE_RE = re.compile(
     r"(?<!\d)(\d{4})\s*(?:년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일|[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2}))(?!\d)"
 )
-MAX_LABEL_GAP = 20  # 기준일 이름 뒤 몇 글자 안의 날짜만 그 기준일로 본다
+# 기준일 이름과 날짜 사이에 허용하는 것: 공백·콜론만 (다른 필드명·"/"·"미상" 등이 끼면 그 기준일 날짜로 안 봄)
+LABEL_SEP_RE = re.compile(r"[ \t:：]*")
+# 인용문의 기준 표현: "입국한 날부터 90일", "고지일로부터 1개월" → "부터" 앞부분
+BASE_PHRASE_RE = re.compile(r"(\S(?:[^,.;]*?\S)?)\s*(?:로부터|으로부터|부터)\s*\d{1,4}\s*(?:개월|일|주|달|년)")
+# 기준 이름에서 핵심 낱말을 남길 때 떼는 끝말 (입국일 → 입국, 체류지 변경일 → 체류지·변경)
+BASE_SUFFIX_RE = re.compile(r"(?:한\s*날|일자|날짜|일|날)$")
 
 
 @dataclass
@@ -96,14 +101,39 @@ def _squeeze(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
+def _base_core(name: str) -> list[str]:
+    """기준 이름의 핵심 낱말 (2글자 이상). "입국일" → ["입국"], "체류지 변경일" → ["체류지", "변경"]."""
+    words = [BASE_SUFFIX_RE.sub("", w) for w in re.split(r"\s+", name.strip()) if w]
+    return [w for w in words if len(w) >= 2]
+
+
+def quote_base_matches(rule: Rule) -> bool:
+    """인용문 '~부터' 앞 기준 표현이 rule.base(또는 baseLabels 중 하나)와 같은 기준인지.
+
+    핵심 낱말이 모두 기준 표현 안에 있어야 한다.
+    예) base=입국일: "입국한 날부터 90일" ✓, "체류지를 변경한 날부터 14일" ✗
+    """
+    m = BASE_PHRASE_RE.search(rule.quote)
+    if not m:
+        return False
+    phrase = _squeeze(m.group(1))[-20:]  # 기준 표현은 '부터' 바로 앞 몇 글자
+    for name in (rule.base, *rule.labels):
+        core = _base_core(name)
+        if core and all(w in phrase for w in core):
+            return True
+    return False
+
+
 def quote_supports_rule(rule: Rule, source_text: str) -> bool:
-    """인용문이 자료 본문에 실제로 있고, '기준부터 N단위 이내' 모양이며, 숫자·단위가 rule과 같은지."""
+    """인용문이 자료 본문에 실제로 있고, '기준부터 N단위 이내' 모양이며, 숫자·단위·기준이 rule과 같은지."""
     if not rule.quote or _squeeze(rule.quote) not in _squeeze(source_text):
         return False
     if UNSUPPORTED_RE.search(rule.quote):
         return False
     periods = [(int(n), UNIT_WORDS[u]) for n, u in PERIOD_RE.findall(rule.quote)]
-    return periods == [(rule.amount, rule.unit)]  # 기간 표현이 정확히 하나이고 rule과 같아야 함
+    if periods != [(rule.amount, rule.unit)]:  # 기간 표현이 정확히 하나이고 rule과 같아야 함
+        return False
+    return quote_base_matches(rule)
 
 
 def _date(y, m, d) -> date | None:
@@ -118,17 +148,19 @@ def parse_date(text: str) -> date | None:
     return _date(m[1], m[2] or m[4], m[3] or m[5]) if m else None
 
 
-def _date_near_start(text: str, gap: int = MAX_LABEL_GAP) -> date | None:
-    """text 앞쪽 gap자 안에서 시작하는 날짜."""
-    d = DATE_RE.search(text[:gap + 20])
-    return _date(d[1], d[2] or d[4], d[3] or d[5]) if d and d.start() <= gap else None
+def _date_at_start(text: str) -> date | None:
+    """text 맨 앞(공백·콜론 뒤)의 날짜. 사이에 다른 글자가 있으면 None."""
+    start = LABEL_SEP_RE.match(text).end()
+    d = DATE_RE.match(text, start)
+    return _date(d[1], d[2] or d[4], d[3] or d[5]) if d else None
 
 
 def find_base_date(original_text: str, labels: list[str]) -> date | None:
-    """원문에서 기준일 이름 바로 뒤(MAX_LABEL_GAP자 안)의 날짜. 서로 다른 날짜가 여럿이면 None.
+    """원문에서 기준일 이름 바로 뒤(공백·콜론만 사이에 허용)의 날짜. 서로 다른 날짜가 여럿이면 None.
 
     - 같은 줄: "입국일 2026년 10월 5일", "입국한 날: 2026.10.05"
-    - 다음 줄: 이름만 있는 줄 다음 줄 맨 앞의 날짜 (OCR이 표의 칸을 줄로 나눈 경우: "입국일\\n2026년 10월 5일")
+    - 다음 줄: 이름(+공백·콜론)만 있는 줄 다음 줄 맨 앞의 날짜 (OCR이 표의 칸을 줄로 나눈 경우: "입국일\\n2026년 10월 5일")
+    - 안 씀: "입국일: 미상 / 발급일: 2026-10-05" (사이에 다른 값·필드명이 있음)
     """
     lines = (original_text or "").splitlines()
     found = set()
@@ -136,9 +168,9 @@ def find_base_date(original_text: str, labels: list[str]) -> date | None:
         for label in labels:
             for m in re.finditer(re.escape(label), line):
                 rest = line[m.end():]
-                value = _date_near_start(rest)
-                if value is None and not re.sub(r"[\s:：\-–—·.()\[\]]", "", rest) and n + 1 < len(lines):
-                    value = _date_near_start(lines[n + 1].strip(), gap=0)  # 이름만 있는 줄 → 다음 줄 맨 앞 날짜
+                value = _date_at_start(rest)
+                if value is None and LABEL_SEP_RE.fullmatch(rest) and n + 1 < len(lines):
+                    value = _date_at_start(lines[n + 1].strip())  # 이름만 있는 줄 → 다음 줄 맨 앞 날짜
                 if value:
                     found.add(value)
     return found.pop() if len(found) == 1 else None
@@ -173,15 +205,18 @@ def _maybe_holiday_extension(end: date, doc_date: date) -> bool:
 
 
 def pick_document_deadline(deadlines, applies_to: str) -> date | None:
-    """비교할 문서 기한. 하나뿐이면 그것, 여러 개면 label이 applies_to와 같은 것 하나."""
-    rows = [(_text(d.get("label")), parse_date(_text(d.get("date"))) or _iso(d.get("date")))
-            for d in deadlines or [] if isinstance(d, dict)]
-    rows = [(label, value) for label, value in rows if value]
-    if len(rows) == 1:
-        return rows[0][1]
+    """비교할 문서 기한.
+
+    원래 기한 목록에서 label이 applies_to와 같은 행을 먼저 고르고, 그 행의 날짜를 해석 못 하면 None
+    (다른 기한으로 대체하지 않음). 같은 label 행이 없을 때는 기한이 하나뿐이면 그 행.
+    """
+    rows = [(_text(d.get("label")), d.get("date")) for d in deadlines or [] if isinstance(d, dict)]
     key = _squeeze(applies_to)
-    matched = {value for label, value in rows if key and _squeeze(label) == key}
-    return matched.pop() if len(matched) == 1 else None
+    chosen = [raw for label, raw in rows if key and _squeeze(label) == key]
+    if not chosen:
+        chosen = [raw for _, raw in rows] if len(rows) == 1 else []
+    values = {parse_date(_text(raw)) or _iso(raw) for raw in chosen}
+    return values.pop() if len(values) == 1 and None not in values else None
 
 
 def _iso(value) -> date | None:

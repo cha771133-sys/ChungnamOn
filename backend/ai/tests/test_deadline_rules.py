@@ -73,6 +73,45 @@ class ParseTests(unittest.TestCase):
                 self.assertIsNone(rule(**bad))
         self.assertIsNone(dr.parse_rule("90일", {"s1"}))
 
+    def test_base_date_only_right_after_label(self):
+        """이름과 날짜 사이엔 공백·콜론만 (CodeRabbit). 다른 값·필드명이 끼면 그 기준일 날짜로 안 봄."""
+        for text in ("입국일: 미상 / 발급일: 2026-10-05", "입국일 미상, 발급일 2026.10.05",
+                     "입국일 / 2026-10-05", "입국일(예정) 2026-10-05"):
+            with self.subTest(text=text):
+                self.assertIsNone(dr.find_base_date(text, ["입국일"]))
+        self.assertEqual(dr.find_base_date("입국일:2026-10-05", ["입국일"]), date(2026, 10, 5))
+        self.assertEqual(dr.find_base_date("입국일 ：\n2026년 10월 5일", ["입국일"]), date(2026, 10, 5))
+        self.assertIsNone(dr.find_base_date("입국일 -\n2026년 10월 5일", ["입국일"]))   # 이름 줄에 다른 기호
+
+    def test_quote_base_must_be_rule_base(self):
+        """인용문 '~부터' 앞 기준이 rule.base와 같아야 함 (CodeRabbit)."""
+        self.assertTrue(dr.quote_base_matches(rule()))
+        moved = "체류지를 변경한 날부터 14일 이내에"
+        wrong = rule(amount=14, quote=moved)                       # base=입국일인데 체류지 변경 기준
+        self.assertFalse(dr.quote_base_matches(wrong))
+        self.assertFalse(dr.quote_supports_rule(wrong, moved))
+        self.assertEqual(dr.judge(wrong, moved, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        ok = rule(base="체류지 변경일", baseLabels=["전입일"], amount=14, quote=moved)
+        self.assertTrue(dr.quote_base_matches(ok))
+        self.assertTrue(dr.quote_base_matches(rule(base="고지일", baseLabels=[], amount=1, unit="month",
+                                                   quote="고지일로부터 1개월 이내에")))
+        self.assertFalse(dr.quote_base_matches(rule(quote="90일 이내에 신청")))  # '~부터' 기준이 없음
+
+    def test_document_deadline_by_applies_to_without_fallback(self):
+        """appliesTo 행을 먼저 고르고, 그 날짜를 못 읽으면 None. 다른 기한으로 대체 안 함 (CodeRabbit)."""
+        rows = [{"label": "신청 기한", "date": "미정"}, {"label": "납부 기한", "date": "2027-01-03"}]
+        self.assertIsNone(dr.pick_document_deadline(rows, "신청 기한"))
+        self.assertEqual(self.judge_status(rows), "UNVERIFIED")
+        self.assertEqual(dr.pick_document_deadline(rows, "납부 기한"), date(2027, 1, 3))
+        self.assertIsNone(dr.pick_document_deadline([{"label": "신청 기한", "date": "미정"}], "신청 기한"))
+        self.assertEqual(dr.pick_document_deadline([{"label": "기한", "date": "2027-01-03"}], "신청 기한"),
+                         date(2027, 1, 3))                              # 기한이 하나뿐이면 그것
+        self.assertIsNone(dr.pick_document_deadline(rows, ""))          # 여러 개인데 appliesTo 없음
+
+    @staticmethod
+    def judge_status(deadlines):
+        return dr.judge(rule(), SOURCE, ORIGINAL, deadlines).status
+
     def test_quote_must_be_in_source_and_supported(self):
         self.assertTrue(dr.quote_supports_rule(rule(), SOURCE))
         self.assertFalse(dr.quote_supports_rule(rule(quote="입국한 날부터 30일 이내에"), SOURCE))  # 자료에 없음

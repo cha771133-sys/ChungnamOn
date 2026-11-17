@@ -783,6 +783,28 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         item, _, _ = self.deadline_item(self.registration(original=original))
         self.assertEqual(item["status"], "MATCHED")
 
+    def test_relative_deadline_does_not_override_whole_deadline_item(self):
+        """상대 기한 결과는 그 기한 하나에만 해당 (CodeRabbit): MISMATCH 유지, 기한 여러 개면 MATCHED로 안 올림."""
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        two = {**self.registration(), "deadlines": [{"label": "신청 기한", "date": "2027-01-03"},
+                                                   {"label": "납부 기한", "date": "2026-12-01"}]}
+        rule = {"base": "입국일", "baseLabels": ["입국일"], "amount": 90, "unit": "day",
+                "appliesTo": "신청 기한", "quote": "입국한 날부터 90일 이내에", "sourceId": "s1"}
+        # 신청 기한은 계산상 일치, 납부 기한은 LLM이 공식 자료와 다르다고 판정 → MISMATCH 유지
+        llm = {"items": [{"key": "DEADLINE", "status": "MISMATCH", "officialValue": "납부 기한 2026-12-31",
+                          "reason": "납부 기한이 다름", "sourceIds": ["s1"], "rule": rule}]}
+        (item,) = [i for i in self.verify(two, llm)["items"] if i["key"] == "DEADLINE"]
+        self.assertEqual((item["status"], item["officialValue"]), ("MISMATCH", "납부 기한 2026-12-31"))
+        # 다른 기한이 확인 안 됐으면 신청 기한이 일치해도 UNVERIFIED (근거는 reason에)
+        item, _, _ = self.deadline_item(two, rule)
+        self.assertEqual((item["status"], item["officialValue"], item["sourceIds"]), ("UNVERIFIED", None, []))
+        self.assertIn("2027-01-03", item["reason"])
+        self.assertIn("다른 기한은 공식 자료로 확인하지 못했어요", item["reason"])
+        # 신청 기한이 계산과 다르면 MISMATCH
+        bad = {**two, "deadlines": [{"label": "신청 기한", "date": "2027-02-01"}, two["deadlines"][1]]}
+        item, _, _ = self.deadline_item(bad, rule)
+        self.assertEqual(item["status"], "MISMATCH")
+
     def test_relative_deadline_changed_document_mismatch(self):
         self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
         item, out, _ = self.deadline_item(self.registration("2027-01-20"))
