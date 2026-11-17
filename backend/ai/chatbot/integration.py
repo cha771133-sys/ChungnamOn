@@ -320,6 +320,36 @@ def _judge_item(key, label, doc_value, raw: dict | None, valid_ids: set[str]) ->
     return _item(key, label, doc_value, status, official_value, reason, ids)
 
 
+def _judge_relative_deadline(item: dict, raw, doc: dict, source_texts: dict[str, str]) -> dict | None:
+    """DEADLINE에 LLM이 상대 기한 규칙(rule)을 냈으면 코드가 계산해서 판정 (deadline_rules). 규칙이 없으면 None.
+
+    계산 결과는 규칙이 가리키는 기한 하나에만 해당하므로 DEADLINE 항목 전체를 함부로 올리지 않는다.
+      - 기존 판정(LLM)이 MISMATCH면 그대로
+      - 문서 기한이 여러 개면 계산이 MATCHED여도 UNVERIFIED (다른 기한은 확인 못 함)
+      - 그 밖에는 계산 결과 (기한 하나 + MATCHED일 때만 MATCHED)
+    로그에는 원문·날짜를 남기지 않는다.
+    """
+    from . import deadline_rules
+
+    rule = deadline_rules.parse_rule(raw.get("rule") if isinstance(raw, dict) else None, set(source_texts))
+    if rule is None:
+        return None
+    j = deadline_rules.judge(rule, source_texts[rule.source_id], doc.get("original_text") or "",
+                             doc.get("deadlines"))
+    log.info("verify 상대 기한 판정: %s (단위 %s)", j.status, rule.unit)
+
+    # 상대 기한 결과는 그 기한 하나에만 해당 → DEADLINE 항목 전체를 함부로 올리지 않음
+    if item["status"] == "MISMATCH":
+        return item  # 다른 근거로 이미 불일치면 그대로
+    deadline_count = sum(1 for d in doc.get("deadlines") or [] if isinstance(d, dict) and _text(d.get("date")))
+    if j.status == "MATCHED" and deadline_count > 1:
+        # 다른 기한은 확인하지 못했으니 MATCHED로 올리지 않음 (근거는 reason에)
+        return _item(item["key"], item["label"], item["docValue"],
+                     reason=f"{j.reason} 다른 기한은 공식 자료로 확인하지 못했어요."[:VALUE_MAX_CHARS])
+    return _item(item["key"], item["label"], item["docValue"], j.status, j.official_value,
+                 j.reason[:VALUE_MAX_CHARS], j.source_ids)
+
+
 def _unverified_result(values, reason: str) -> dict:
     items = [_item(key, label, value, reason=reason) for key, label, value in values]
     return {"overall": "UNVERIFIED", "status": "UNVERIFIED", "items": items, "sources": []}
@@ -390,6 +420,12 @@ def _verify(result: dict, limit: int) -> dict:
     for entry in entries if isinstance(entries, list) else []:
         if isinstance(entry, dict):
             by_key.setdefault(_text(entry.get("key")).upper(), entry)
-    items = [_judge_item(key, label, value, by_key.get(key), set(source_ids)) for key, label, value in values]
+    source_texts = {s["id"]: h.text for s, (h, _) in zip(sources, related)}
+    items = []
+    for key, label, value in values:
+        item = _judge_item(key, label, value, by_key.get(key), set(source_ids))
+        if key == "DEADLINE":
+            item = _judge_relative_deadline(item, by_key.get(key), doc, source_texts) or item
+        items.append(item)
     overall = _overall(items)
     return {"overall": overall, "status": overall, "items": items, "sources": sources}

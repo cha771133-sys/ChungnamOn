@@ -77,9 +77,19 @@ VERIFY_SYSTEM = """너는 외국인 주민이 받은 한국어 행정문서의 �
 - officialValue: 공식 자료에 적힌 해당 값을 한국어로 짧게. UNVERIFIED면 null.
 - reason: 판단 이유를 한국어 한 문장으로.
 - [대조 항목]에 있는 key만, 항목마다 한 번씩 답해.
+- DEADLINE: [공식 자료]가 날짜 대신 "기준일부터 N일/주/개월/년 이내" 같은 상대 기한만 말하면
+  (예: "입국한 날부터 90일 이내", "체류지를 변경한 날부터 14일 이내", "고지일로부터 1개월 이내")
+  날짜를 직접 계산하지 말고 status는 UNVERIFIED로 두고 "rule"에 규칙만 구조로 적어. 계산은 코드가 해.
+  rule = {"base": 기준 이름(입국일·체류지 변경일·출생일·고지일·자격 취득일 등),
+          "baseLabels": 업로드 문서 원문에서 그 기준일을 가리키는 말 목록(예: ["입국일", "입국한 날"]),
+          "amount": 숫자, "unit": "day"|"week"|"month"|"year",
+          "appliesTo": 이 규칙이 해당하는 [업로드 문서] 기한의 label 그대로(예: "신청 기한"),
+          "quote": 규칙이 적힌 [공식 자료] 문장을 글자 그대로, "sourceId": 그 자료 id(s1 ...)}
+  rule.quote는 기준 표현부터 'N일 이내'까지만 짧게 인용해 (예: '외국인이 입국한 날부터 90일 이내에').
+  공식 자료에 상대 기한 규칙이 없거나 "만료일 전까지"처럼 다른 모양이면 rule을 넣지 마.
 반드시 JSON 하나만 출력:
 {"items": [{"key": "DEADLINE", "status": "MATCHED|MISMATCH|UNVERIFIED", "officialValue": "..." 또는 null,
-            "reason": "...", "sourceIds": ["s1"]}]}"""
+            "reason": "...", "sourceIds": ["s1"], "rule": {...} 또는 생략}]}"""
 
 
 def verify_user_message(doc: dict, values, results) -> str:
