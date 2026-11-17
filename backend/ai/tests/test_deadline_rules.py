@@ -91,10 +91,10 @@ class ParseTests(unittest.TestCase):
         self.assertFalse(dr.quote_base_matches(wrong))
         self.assertFalse(dr.quote_supports_rule(wrong, moved))
         self.assertEqual(dr.judge(wrong, moved, ORIGINAL, DEADLINES).status, "UNVERIFIED")
-        ok = rule(base="체류지 변경일", baseLabels=["전입일"], amount=14, quote=moved)
+        ok = rule(base="체류지 변경일", baseLabels=["체류지를 변경한 날"], amount=14, quote=moved)
         self.assertTrue(dr.quote_base_matches(ok))
-        self.assertTrue(dr.quote_base_matches(rule(base="고지일", baseLabels=[], amount=1, unit="month",
-                                                   quote="고지일로부터 1개월 이내에")))
+        self.assertFalse(dr.quote_base_matches(rule(base="고지일", baseLabels=[], amount=1, unit="month",
+                                                    quote="고지일로부터 1개월 이내에")))  # 지원하지 않는 기준
         self.assertFalse(dr.quote_base_matches(rule(quote="90일 이내에 신청")))  # '~부터' 기준이 없음
 
     def test_base_kind_decided_by_code_table(self):
@@ -106,17 +106,19 @@ class ParseTests(unittest.TestCase):
         original = "안내\n입국일 2026년 10월 5일\n신청 기한 2026년 10월 19일까지"
         j = dr.judge(sneaky, moved, original, [{"label": "신청 기한", "date": "2026-10-19"}])
         self.assertEqual(j.status, "UNVERIFIED")
-        # 인용 기준(체류지 변경)과 같은 이름만 주면 계산하되, 날짜는 표의 이름(전입일 등)으로만 찾음
-        honest = rule(base="체류지 변경일", baseLabels=["전입일"], amount=14, quote=moved)
+        # 인용 기준(체류지 변경)과 같은 이름만 주면 계산하되, 날짜는 표의 이름으로만 찾음
+        honest = rule(base="체류지 변경일", baseLabels=["체류지를 변경한 날"], amount=14, quote=moved)
         self.assertEqual(dr.base_kind(honest), "체류지 변경일")
         self.assertEqual(dr.judge(honest, moved, original, [{"label": "신청 기한", "date": "2026-10-19"}]).status,
                          "UNVERIFIED")  # 문서엔 입국일뿐 → 체류지 변경일 없음
-        with_move = "안내\n전입일 2026.10.05\n신청 기한 2026년 10월 19일까지"
+        with_move = "안내\n체류지 변경일 2026.10.05\n신청 기한 2026년 10월 19일까지"
         self.assertEqual(dr.judge(honest, moved, with_move, [{"label": "신청 기한", "date": "2026-10-19"}]).status,
                          "MATCHED")
         # 표에 없는 기준 표현, 표에 없는 LLM 이름 → UNVERIFIED
         self.assertIsNone(dr.quote_base_kind("계약을 체결한 날부터 30일 이내"))
         self.assertIsNone(dr.base_kind(rule(baseLabels=["입국 예정일"])))
+        self.assertIsNone(dr.base_kind(rule(baseLabels=["입국일자"])))       # 표의 이름만 (입국일, 입국한 날)
+        self.assertIsNone(dr.base_kind(honest.__class__(**{**honest.__dict__, "labels": ["전입일"]})))
         # 기준 표현 전체가 표와 정확히 같아야 함: 앞에 다른 말이 붙으면 UNVERIFIED (CodeRabbit)
         for quote in ("재입국한 날부터 90일 이내", "최초 입국한 날부터 90일 이내", "다시 입국한 날부터 90일 이내",
                       "외국인이 다시 입국한 날부터 90일 이내", "재입국일부터 90일 이내", "입국하는 날부터 90일 이내"):
@@ -133,12 +135,21 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(dr.judge(rule(quote=gov24), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
         # "로부터 90일을 초과하여"의 '부터'만 있고 '이내'가 없으면 기준 표현 없음
         self.assertIsNone(dr.quote_base_kind("입국한 날로부터 90일을 초과하여 체류"))
-        # 표현별 종류
-        for quote, kind in (("입국한 날부터 90일 이내", "입국일"), ("고지일로부터 1개월 이내", "고지일"),
-                            ("고지를 받은 날부터 30일 이내", "고지일"), ("전입한 날부터 14일 이내", "체류지 변경일"),
-                            ("자격을 취득한 날부터 3개월 이내", "자격 취득일"), ("출생한 날부터 90일 이내", "출생일")):
+        # 지원 기준은 입국일·체류지 변경일 두 가지만 (표현도 정확히 일치)
+        for quote, kind in (("입국한 날부터 90일 이내", "입국일"), ("입국일부터 90일 이내", "입국일"),
+                            ("체류지를 변경한 날부터 14일 이내", "체류지 변경일"),
+                            ("체류지 변경일부터 14일 이내", "체류지 변경일")):
             with self.subTest(quote=quote):
                 self.assertEqual(dr.quote_base_kind(quote), kind)
+        # 표에서 뺀 기준(고지 수령일/발송일처럼 같은 말이 여러 날일 수 있음)은 UNVERIFIED (CodeRabbit)
+        for quote in ("고지일로부터 1개월 이내", "고지를 받은 날부터 30일 이내", "고지한 날부터 30일 이내",
+                      "고지서를 받은 날부터 60일 이내", "전입한 날부터 14일 이내", "자격을 취득한 날부터 3개월 이내",
+                      "출생한 날부터 90일 이내", "입국한 일부터 90일 이내"):
+            with self.subTest(unsupported=quote):
+                self.assertIsNone(dr.quote_base_kind(quote))
+                j = dr.judge(rule(quote=quote), quote, ORIGINAL, DEADLINES)
+                self.assertEqual(j.status, "UNVERIFIED")
+                self.assertIn(f"공식 기준: {quote}", j.reason)
 
     def test_document_deadline_by_applies_to_without_fallback(self):
         """appliesTo 행을 먼저 고르고, 그 날짜를 못 읽으면 None. 다른 기한으로 대체 안 함 (CodeRabbit)."""
@@ -200,30 +211,42 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(dr._eul("출생 시기"), "출생 시기를")
         self.assertIn("공식 기준: 입국한 날부터 90일 이내에", j.reason)
 
-    def test_other_bases_and_units(self):
+    def test_supported_bases_and_units(self):
+        """지원 기준(입국일·체류지 변경일)은 일·주·개월·년 모두 계산."""
         cases = [
-            ("체류지 변경일", ["체류지 변경일", "전입일"], 14, "day", "체류지를 변경한 날부터 14일 이내에",
-             "전입일 2026.11.02", "2026-11-16"),
-            ("고지일", ["고지일", "고지한 날"], 1, "month", "고지일로부터 1개월 이내에",
-             "고지일 2027년 1월 31일", "2027-02-28"),
-            ("자격 취득일", ["자격 취득일", "자격취득일"], 3, "month", "자격 취득일부터 3개월 이내",
-             "자격취득일: 2026-08-31", "2026-11-30"),
-            ("출생일", ["출생일", "출생한 날"], 1, "year", "출생한 날부터 1년 이내",
-             "출생일 2028.02.29", "2029-02-28"),
+            ("체류지 변경일", ["체류지 변경일"], 14, "day", "체류지를 변경한 날부터 14일 이내에",
+             "체류지 변경일 2026.11.02", "2026-11-16"),
+            ("체류지 변경일", ["체류지를 변경한 날"], 2, "week", "체류지를 변경한 날부터 2주 이내에",
+             "체류지를 변경한 날: 2026-11-02", "2026-11-16"),
+            ("입국일", ["입국일"], 1, "month", "입국한 날부터 1개월 이내에", "입국일 2027년 1월 31일", "2027-02-28"),
+            ("입국일", ["입국한 날"], 1, "year", "입국일부터 1년 이내", "입국일 2028.02.29", "2029-02-28"),
         ]
         for base, labels, n, unit, quote, line, due in cases:
-            with self.subTest(base=base):
+            with self.subTest(base=base, unit=unit):
                 r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": n, "unit": unit,
                                    "appliesTo": "신고 기한", "quote": quote, "sourceId": "s1"}, {"s1"})
                 j = dr.judge(r, f"안내\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
                              [{"label": "신고 기한", "date": due}])
                 self.assertEqual(j.status, "MATCHED", j.reason)
 
-    def test_masked_birth_date_is_unverified(self):
-        r = dr.parse_rule({"base": "출생일", "baseLabels": ["출생일", "생년월일"], "amount": 90, "unit": "day",
-                           "appliesTo": "신청 기한", "quote": "출생한 날부터 90일 이내", "sourceId": "s1"}, {"s1"})
-        j = dr.judge(r, "출생한 날부터 90일 이내 신청", "생년월일: ******-*******\n신청 기한 2027-01-03", DEADLINES)
-        self.assertEqual(j.status, "UNVERIFIED")
+    def test_unsupported_bases_are_unverified(self):
+        """고지일·출생일·자격 취득일 등은 지원하지 않음: 문서에 날짜가 있어도 UNVERIFIED, reason에 공식 기준."""
+        cases = [
+            ("고지일", ["고지일"], "고지일로부터 1개월 이내에", "고지일 2027년 1월 31일", "2027-02-28"),
+            ("고지일", ["고지를 받은 날"], "고지를 받은 날부터 30일 이내", "고지를 받은 날 2026.10.05", "2026-11-04"),
+            ("고지일", ["고지한 날"], "고지한 날부터 30일 이내", "고지한 날 2026.10.05", "2026-11-04"),
+            ("자격 취득일", ["자격 취득일"], "자격 취득일부터 3개월 이내", "자격 취득일: 2026-08-31", "2026-11-30"),
+            ("출생일", ["출생일"], "출생한 날부터 1년 이내", "출생일 2028.02.29", "2029-02-28"),
+            ("출생일", ["생년월일"], "출생한 날부터 90일 이내", "생년월일: ******-*******", "2027-01-03"),
+        ]
+        for base, labels, quote, line, due in cases:
+            with self.subTest(quote=quote):
+                r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": 1, "unit": "day",
+                                   "appliesTo": "신고 기한", "quote": quote, "sourceId": "s1"}, {"s1"})
+                j = dr.judge(r, f"안내\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
+                             [{"label": "신고 기한", "date": due}])
+                self.assertEqual((j.status, j.official_value), ("UNVERIFIED", None))
+                self.assertIn(f"공식 기준: {quote}", j.reason)
 
     def test_deadline_choice_with_several_deadlines(self):
         two = [{"label": "신청 기한", "date": "2027-01-03"}, {"label": "납부 기한", "date": "2026-12-31"}]
