@@ -40,6 +40,7 @@ _TABLE_LABELS = (
     r'가입자', r'신청인(?:\s*정보)?', r'출금\s*(?:은행|계좌)', r'환급\s*(?:은행|계좌)', r'계좌\s*번호', r'가상\s*계좌',
     r'과세\s*연도', r'세\s*목', r'세\s*액', r'납부\s*기한', r'고지\s*월', r'신청일', r'발행일', r'전자\s*납부\s*번호',
     r'고지서\s*번호', r'합계\s*금액', r'수신(?:인|자)?', r'받는\s*(?:사람|분)', r'대상자',
+    r'(?:영문|한글)\s*(?:성\s*명|이\s*름|명)', r'(?:성\s*명|이\s*름)\s*\((?:영문|한글)\)',
 )
 _TABLE_LABEL_LINE = re.compile(rf'^{_BULLET}(?:{"|".join(_TABLE_LABELS)})[ \t]*[:：]?[ \t]*$')
 
@@ -85,6 +86,15 @@ REGION_PREFIX = re.compile(rf'^[ \t]*(?P<keep>{_REGION})(?=[ \t,]|$)(?P<rest>.*)
 DETAIL_LINE = re.compile(
     r'^[ \t]*(?:[가-힣0-9]+(?:읍|면|동|리|로|길)(?=[ \t\d,]|$)|\d+(?:-\d+)?(?:번지|동|호|층)(?=[ \t,]|$))'
 )
+# 건물 이름으로 시작하는 상세주소 줄: "가상아파트 101동 1001호", "견본빌라 302호", "행복오피스텔 5층 501호".
+# 줄 전체가 "건물 이름(세 낱말까지) + 동·호·층 숫자"여야 한다. 뒤에 다른 말이 이어지는 줄은 주소가 아니다:
+# "제출기한 2026년 8월 31일 (본관 1층)", "시청 본관 2층 세무과로 방문해 주시기 바랍니다."
+BUILDING_LINE = re.compile(
+    r'^[ \t]*(?:(?!\d+[ \t]*[년월일원])[가-힣A-Za-z0-9·()\-]+[ \t]+){0,3}'
+    # OCR이 띄어쓰기를 빼면 건물 이름과 숫자가 붙는다: "견본빌라302호"
+    r'(?:[가-힣A-Za-z·]+)?'
+    r'(?:(?:제|지하|B)?\d+(?:-\d+)?[ \t]*(?:동|호|층)[ \t,]*)+$'
+)
 # 라벨 없이 줄 안에 나온 주소: 시·군·구 + 읍·면·동·도로명 + 숫자
 ADDRESS_IN_LINE = re.compile(
     rf'(?:(?<=[ \t:：(])|^)(?P<keep>{_REGION})[ \t]+(?P<rest>{_DETAIL_START}[^\n]*\d[^\n]*)$'
@@ -122,7 +132,9 @@ PHONE_LABEL = re.compile(
 # 라벨 뒤의 이름과 괄호 안 영문 이름까지 값 전체를 가린다.
 NAME_LABEL = re.compile(
     rf'^(?P<label>{_BULLET}(?:납세자|납부자|가입자|신청인|성\s*명|이\s*름'
-    rf'|(?P<recipient>수신(?:인|자)?|받는\s*(?:사람|분)|대상자))(?:[ \t]*(?:성명|이름))?)'
+    # 영문명·한글명처럼 이름을 따로 적는 칸: "영문명: HONG GILDONG", "성명(영문): HONG GILDONG"
+    rf'|(?:영문|한글)\s*(?:성\s*명|이\s*름|명)'
+    rf'|(?P<recipient>수신(?:인|자)?|받는\s*(?:사람|분)|대상자))(?:[ \t]*(?:성명|이름))?(?:[ \t]*\((?:영문|한글)\))?)'
     rf'(?P<sep>[ \t]*[:：][ \t]*|[ \t]+|[ \t]*$)(?P<value>.*)$'
 )
 # 받는 사람 라벨(수신·받는 사람·대상자) 뒤에는 사람이 아니라 기관이나 직위가 올 수 있다(예: "수신: 아산시청",
@@ -194,8 +206,14 @@ INLINE_NEXT_LABEL = re.compile(
 # 같은 줄에 이어진 다음 항목의 라벨(예: "… 납부기한: 2026년 8월 31일", "… 세액: 6,250원").
 # 값을 가릴 때 이 라벨 앞에서 멈춰 뒤의 기한·금액을 남긴다. 이름 조각("반 안")을 라벨로 오해하지 않도록
 # 라벨 낱말은 두 글자 이상이고, 두 낱말 라벨은 앞 낱말이 아래 목록일 때만 인정한다(예: "납부 기한:").
-_TWO_WORD_LABEL_HEADS = '납부|출금|환급|신청|납기|고지|휴대|외국인|주민|여권|과세|합계|전자|문의|담당|발행|처리'
-NEXT_FIELD_LABEL = re.compile(rf'[ \t]+(?=(?:(?:{_TWO_WORD_LABEL_HEADS})[ \t]+)?[가-힣]{{2,10}}[ \t]*[:：])')
+# 영문·한글은 이름 칸의 앞 낱말이다("영문 성명:", "한글 이름:"). NAME_LABEL이 아는 이름표는 여기서도 나눠야
+# 앞 이름에 "한글"이 붙어 기억되지 않는다. "성명(영문):"처럼 괄호가 붙은 이름표도 나눈다.
+_TWO_WORD_LABEL_HEADS = '납부|출금|환급|신청|납기|고지|휴대|외국인|주민|여권|과세|합계|전자|문의|담당|발행|처리|영문|한글'
+NEXT_FIELD_LABEL = re.compile(
+    rf'[ \t]+(?=(?:(?:{_TWO_WORD_LABEL_HEADS})[ \t]+)?[가-힣]{{2,10}}(?:[ \t]*\((?:영문|한글)\))?[ \t]*[:：])'
+)
+# 가리는 규칙이 없는 개인 항목. 이름 다음 줄에서 이런 항목이 이어지면 그 줄을 통째로 가린다(_mask_names 참고).
+_UNMASKED_PERSONAL_FIELD = re.compile(r'(?:이메일|전자\s*우편|e-?mail|생년월일|국적)[ \t]*[:：]', re.IGNORECASE)
 # 라벨 뒤에 이름이 아니라 이런 단어가 오면 표 머리글로 본다(예: "신청인 정보").
 NOT_NAME_WORDS = ('정보', '성명', '이름', '서명', '구분', '현황', '내역', '본인', '확인', '번호', '주소', '연락처')
 # 문장 끝. 이름이 "다"·"요"로 끝날 수 있어 한 글자 어미는 넣지 않는다.
@@ -252,6 +270,28 @@ def _labeled_lines(lines, label_pattern, mask_value, mask_next=None):
 
 def _digit_count(text):
     return sum(char.isdigit() for char in text)
+
+
+def _split_at_first_mark(value):
+    """값을 (첫 가림 표시 앞부분, 가림 표시부터 끝까지)로 나눈다. 앞부분 끝의 띄어쓰기는 뒤로 넘긴다.
+
+    "홍길동 [전화번호 가림]"처럼 이름 뒤에 붙은 번호가 먼저 가려진 값에서 이름만 꺼낼 때 쓴다.
+    가림 표시가 없으면 뒤는 빈 문자열이다.
+    """
+    positions = [value.find(mark) for mark in _ALL_MARKS if mark in value]
+    if not positions:
+        return value, ''
+    head = value[:min(positions)]
+    return head.rstrip(), value[len(head.rstrip()):]
+
+
+# 가려진 번호 뒤에 괄호로 적힌 영문 이름: "홍길동 [전화번호 가림] (HONG GILDONG)"
+_PAREN_LATIN_NAME = re.compile(r"[ \t]*\(\s*([A-Za-z][A-Za-z .,'\-]{1,60}?)\s*\)")
+
+
+def _take_latin_names(marked):
+    """가림 표시 뒤에 남은 글자에서 괄호 안 영문 이름을 뺀다. (남은 글자, 찾은 영문 이름 목록)"""
+    return _PAREN_LATIN_NAME.sub('', marked), [match.group(1) for match in _PAREN_LATIN_NAME.finditer(marked)]
 
 
 def _split_at_next_field(value):
@@ -342,11 +382,15 @@ def _mask_address_value(value, *, require_address_form):
     return ADDRESS_MARK, 1, False
 
 
-def _mask_detail_lines(lines, start):
-    """start 줄부터 상세주소 모양의 줄을 다음 필드 전까지 가린다. 하나라도 가렸으면 True."""
+def _mask_detail_lines(lines, start, building_only=False):
+    """start 줄부터 상세주소 모양의 줄을 다음 필드 전까지 가린다. 하나라도 가렸으면 True.
+
+    building_only: 줄 전체가 동·호·층 숫자(건물 이름 포함)인 줄만 가린다. 주소 이름표 없이 찾은 주소 뒤에서 쓴다.
+    """
     index = start
-    while (index < len(lines) and DETAIL_LINE.match(lines[index]) and ADDRESS_MARK not in lines[index]
-           and not _is_table_label(lines[index])):
+    while (index < len(lines)
+           and (BUILDING_LINE.match(lines[index]) or (not building_only and DETAIL_LINE.match(lines[index])))
+           and ADDRESS_MARK not in lines[index] and not _is_table_label(lines[index])):
         lines[index] = ADDRESS_MARK
         index += 1
     return index > start
@@ -407,6 +451,10 @@ def mask_addresses(lines):
             rest, rest_count = _mask_other_fields(rest)
             lines[index] = line[:match.start('rest')] + ADDRESS_MARK + rest
             count += 1 + rest_count
+            # 이름표 없는 주소도 다음 줄로 이어질 수 있다("견본빌라 302호"). 같은 주소라 개수는 늘리지 않는다.
+            # 이름표가 없어 근거가 약하므로 줄 전체가 동·호·층 모양일 때만 가린다.
+            if not rest.strip():
+                _mask_detail_lines(lines, index + 1, building_only=True)
     return count
 
 
@@ -606,38 +654,68 @@ def mask_names(lines):
             # 이름을 가리지 않는 경우에도 뒤 항목은 가린다.
             rest, rest_count = _mask_other_fields(rest)
             count += rest_count
-            # 이름 자체가 이미 가려졌는지만 본다. 뒤에 이어진 다른 항목의 가림 표시는 상관없다.
-            if not name.strip() or any(mark in name for mark in _ALL_MARKS) \
-                    or (not has_colon and not _looks_like_name(name)):
-                lines[index] = line[:match.start('value')] + name + rest
+            # 이름 뒤에 붙은 번호가 먼저 가려졌으면("홍길동 [전화번호 가림]") 가림 표시 앞부분만 이름으로 본다.
+            # 앞부분이 비어 있으면 이름이 이미 가려진 것이다.
+            name, marked = _split_at_first_mark(name)
+            if not name.strip() or (not has_colon and not _looks_like_name(name)):
+                lines[index] = line[:match.start('value')] + name + marked + rest
                 continue
+            # 가려진 번호 뒤에 괄호로 적힌 영문 이름도 이름이다. 이름을 가릴 때 함께 빼고 다른 곳에서도 가린다.
+            cleaned, latin_names = _take_latin_names(marked)
             if recipient:
-                # 기관·직위는 남기고 이름만 가린다.
+                # 기관·직위는 남기고 이름만 가린다. 가린 이름이 없으면(기관) 뒤의 글자도 그대로 둔다.
                 new_name, masked, names = _mask_recipient_value(name)
-                lines[index] = line[:match.start('value')] + new_name + rest
-                found.extend(names)
+                lines[index] = line[:match.start('value')] + new_name + (cleaned if masked else marked) + rest
+                found.extend(names + latin_names if masked else names)
                 count += masked
                 continue
-            found.append(name)
-            lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
+            found.extend([name, *latin_names])
+            lines[index] = match.group('label') + match.group('sep') + NAME_MARK + cleaned + rest
             count += 1
             continue
         following = _next_value_index(lines, index)
         if following is None:
             continue
-        candidate = lines[following]
-        # 다른 가림 표시나 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
-        if any(mark in candidate for mark in _ALL_MARKS) or any(char.isdigit() for char in candidate):
+        # 같은 줄에 다른 항목이 이어지면("홍길동 연락처: …") 이름은 그 앞에서 끝난다. 같은 줄의 값과 같은 기준이다.
+        value, rest = _split_at_next_field(lines[following])
+        # 이름 뒤에 붙은 번호가 먼저 가려졌으면 가림 표시 앞부분만 이름으로 본다.
+        candidate, marked = _split_at_first_mark(value)
+        # 앞부분이 비었으면 이미 가려진 것이고, 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
+        if not candidate.strip() or any(char.isdigit() for char in candidate):
             continue
+        cleaned, latin_names = _take_latin_names(marked)
+        dropped = bool(_UNMASKED_PERSONAL_FIELD.search(rest))
+        if dropped:
+            # 뒤 항목이 이메일·생년월일·국적이면 가릴 규칙이 없다. 남기면 개인정보가 새므로 이름과 함께 줄 전체를 가린다.
+            # 버리기 전에 규칙을 돌려, 뒤 항목 안의 이름(영문명 등)이 문서 전체에서 가려지도록 수집해 둔다.
+            # 규칙은 글의 맨 앞 이름표만 보므로 항목마다 따로 돌린다("이메일: … 영문명: …"의 영문명도 수집).
+            # 수집은 mask_names()가 _found_names에 한다. 돌려받은 글자는 쓰지 않는다.
+            remaining = rest
+            while remaining.strip():
+                _mask_other_fields(remaining)
+                _, remaining = _split_at_next_field(remaining.strip())
+            cleaned, rest, rest_count = '', '', 0
+        else:
+            # 뒤에 남기는 항목도 다른 규칙으로 가린다.
+            rest, rest_count = _mask_other_fields(rest)
+            count += rest_count
+            cleaned += rest
         if recipient:
             new_line, masked, names = _mask_recipient_value(candidate)
             if masked:
-                lines[following] = new_line
-                found.extend(names)
+                lines[following] = new_line + cleaned
+                found.extend(names + latin_names)
                 count += masked
+            elif dropped:
+                # 받는 사람이 기관이라 이름은 그대로 두고, 버린 뒤 항목 자리에 가림 표시를 남긴다.
+                lines[following] = f'{candidate.rstrip()} {NAME_MARK}'
+                count += 1
+            elif rest_count:
+                # 받는 사람이 기관이라 이름은 그대로 두고, 뒤 항목에서 가린 것만 반영한다.
+                lines[following] = candidate + marked + rest
             continue
-        found.append(candidate)
-        lines[following] = NAME_MARK
+        found.extend([candidate, *latin_names])
+        lines[following] = NAME_MARK + cleaned
         count += 1
 
     # 뒤 항목 안에서 찾은 이름도 문서 전체에서 가릴 수 있게 mask_text()로 넘긴다.

@@ -69,8 +69,8 @@ NOTICE_PAGE = page(
 )
 
 
-# 마스킹 결과는 기본값(MASK_MODE=dummy) 기준이다. 로컬 .env의 OCR_MODE=clova에 막히지 않게 고정한다.
-@override_settings(OCR_MODE='dummy')
+# 마스킹 결과는 더미 마스킹(MASK_MODE=dummy) 기준이다. 로컬 .env의 OCR_MODE·MASK_MODE 값에 따라 달라지지 않게 고정한다.
+@override_settings(OCR_MODE='dummy', MASK_MODE='dummy')
 class BuildTextTests(SimpleTestCase):
     def test_restores_lines_from_line_break(self):
         images = [page(field('납부기한:'), field('2026년'), field('8월', line_break=True), field('세액', line_break=True))]

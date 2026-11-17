@@ -339,6 +339,41 @@ class InterpretDeadlineTests(SimpleTestCase):
                 with self.assertLogs(interpret_module.logger, 'WARNING'):
                     self.assertEqual(self.deadlines(wrong, text=text), [])
 
+    def test_range_crossing_new_year_ends_in_next_year(self):
+        """끝 날짜의 연도를 줄인 기간이 해를 넘기면(12월~1월) 끝 날짜는 다음 해다."""
+        for text in ('신청기간 2026.12.16.~1.3.', '신청기간 2026. 12. 16. ~ 1. 3.', '신청기간 2026-12-16 ~ 1.3.'):
+            with self.subTest(text=text):
+                right = [{'label': '신청 기한', 'date': '2027-01-03', 'kind': 'other'}]
+                wrong = [{'label': '신청 기한', 'date': '2026-01-03', 'kind': 'other'}]
+
+                self.assertEqual(self.deadlines(right, text=text), [{'label': '신청 기한', 'date': '2027-01-03'}])
+                with self.assertLogs(interpret_module.logger, 'WARNING'):
+                    self.assertEqual(self.deadlines(wrong, text=text), [])
+
+    def test_other_range_forms_crossing_new_year(self):
+        """한글 표기 기간과 양쪽 모두 연도가 없는 기간도 해를 넘기면 끝 날짜는 다음 해다(CodeRabbit)."""
+        for text in (
+            '신청기간 2026년 12월 16일 ~ 1월 3일', '신청기간 2026년 12월 16일부터 ~ 1월 3일까지',
+            '2026년도 안내\n신청기간 12.16.~1.3.', '2026년도 안내\n신청기간 12월 16일 ~ 1월 3일',
+        ):
+            with self.subTest(text=text):
+                right = [{'label': '신청 기한', 'date': '2027-01-03', 'kind': 'other'}]
+                wrong = [{'label': '신청 기한', 'date': '2026-01-03', 'kind': 'other'}]
+
+                self.assertEqual(self.deadlines(right, text=text), [{'label': '신청 기한', 'date': '2027-01-03'}])
+                with self.assertLogs(interpret_module.logger, 'WARNING'):
+                    self.assertEqual(self.deadlines(wrong, text=text), [])
+
+    def test_korean_range_within_year_uses_start_year(self):
+        # 다른 연도가 함께 적힌 문서에서 끝 날짜가 그 연도와 짝지어지지 않는다.
+        text = '2025년도 안내\n납부기간 2026년 8월 16일 ~ 8월 31일'
+        right = [{'label': '납부 기한', 'date': '2026-08-31', 'kind': 'payment'}]
+        wrong = [{'label': '납부 기한', 'date': '2025-08-31', 'kind': 'payment'}]
+
+        self.assertEqual(len(self.deadlines(right, text=text)), 1)
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(self.deadlines(wrong, text=text), [])
+
     def test_dotted_numbers_outside_range_are_not_dates(self):
         items = [{'label': '제출 기한', 'date': '2026-03-05', 'kind': 'other'}]
 
@@ -447,6 +482,61 @@ class InterpretMissingValueTests(SimpleTestCase):
             with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING') as logs:
                 self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
                 self.assertNotIn(amount, ''.join(logs.output))
+
+    def test_amount_with_different_unit_is_emptied(self):
+        # 숫자가 같아도 배율 단위(만·천·억)가 원문과 다르면 다른 금액이다.
+        for amount in ('11,000만원', '11,000 만 원', '11,000천원', '11,000억원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+
+    def test_amount_with_larger_or_unknown_unit_is_emptied(self):
+        # 조·천억처럼 더 큰 단위와 모르는 단위도 원문과 다르면 비운다(CodeRabbit).
+        for amount in ('11,000조원', '11,000천억원', '11,000달러'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 1천원')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '1천원'}, text=text)['amount'], '1천원')
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(run({**TAX_PAYLOAD, 'amount': '1천억원'}, text=text)['amount'], '')
+
+    def test_amount_is_not_confirmed_by_date_or_phone_numbers(self):
+        # 날짜(8월, 10일, 31일)와 전화번호(041, 537, 3001, 5)의 숫자로는 금액이 확인되지 않는다(CodeRabbit).
+        for amount in ('8원', '10원', '31원', '2026원', '537원', '3001원', '5원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 3만원\n신청일 2026년 3월 10일')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3만원'}, text=text)['amount'], '3만원')
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3원'}, text=text)['amount'], '')
+
+    def test_decimal_amount_is_kept_and_compared_as_one_number(self):
+        # 1.5만원의 1을 날짜 숫자로 보고 빼면 같은 금액이 비워진다(CodeRabbit). 소수는 한 숫자로 읽는다.
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 1.5만원')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '1.5만원'}, text=text)['amount'], '1.5만원')
+        for amount in ('15만원', '2.5만원', '1.5억원', '5만원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount}, text=text)['amount'], '')
+
+    def test_quantity_with_multiplier_does_not_confirm_amount(self):
+        # 1.5만명·3천개 같은 수량은 금액이 아니다. 그 숫자로 금액이 확인되지 않는다(CodeRabbit).
+        # 띄어 쓴 수량(4천 개, 5만 명)도 같다.
+        text = TAX_NOTICE + '\n모집 인원 1.5만명\n배부 수량 3천개\n참가자 2만명\n배부 수량 4천 개\n대상 5만 명'
+        for amount in ('1.5원', '1.5만원', '3원', '3천원', '2원', '2만원', '4원', '4천원', '5원', '5만원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount}, text=text)['amount'], '')
+        self.assertEqual(run(TAX_PAYLOAD, text=text)['amount'], '11,000원')
+
+    def test_amount_without_won_in_document_is_kept(self):
+        # 원문에 "원"이 없이 숫자만 적힌 금액 칸도 금액으로 본다.
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 11,000')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '11,000원'}, text=text)['amount'], '11,000원')
+
+    def test_amount_with_unit_written_in_document_is_kept(self):
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 3만 5천 원')
+
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3만 5천 원'}, text=text)['amount'], '3만 5천 원')
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3천 5만 원'}, text=text)['amount'], '')
 
     def test_amount_without_number_must_be_written_in_document(self):
         # 금액이 적힌 문서에서 AI가 "무료"라고 지어내면 비운다.
