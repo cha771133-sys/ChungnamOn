@@ -46,6 +46,15 @@ LAW_NAME_PATTERN = re.compile(
 )
 # CLOVA가 PDF 페이지 수 제한(10쪽)을 넘은 요청을 거부할 때 응답 본문에 넣는 code 값.
 CLOVA_PAGE_LIMIT_CODE = '0011'
+# 기울여 찍은 사진의 줄 순서를 좌표로 다시 맞추는 기준. 단어 상자의 기울기가 이 각도(도) 이상일 때만 한다.
+# 실제로 재 본 값: 0도(견본 PDF·PNG, 정면 사진)는 순서가 맞고, 10.5도부터 어긋나기 시작해 14.9도에서는
+# "입국일"과 날짜가 떨어지고 29.1도에서는 "주소"와 주소 값이 떨어졌다. 정면 사진도 단어 하나하나는 ±5도쯤
+# 흔들리지만 전체의 중앙값은 0도로 나온다.
+SKEW_REORDER_DEGREES = 5.0
+# 기울기를 잴 때 필요한 단어 상자의 최소 개수. 상자가 너무 적으면 한두 개의 오차에 각도가 좌우된다.
+SKEW_MIN_BOXES = 5
+# 세로 위치의 차이가 글자 높이의 이 배수 안이면 같은 행으로 본다.
+SKEW_ROW_GAP_RATIO = 0.5
 
 # 숫자 6자리와 7자리. 공백으로 쪼개지거나 하이픈이 없어도 찾는다.
 # 하이픈 없는 13자리 숫자도 등록번호로 본다(누락보다 과잉 마스킹, F1-4). 다만 고지번호처럼 이름표로 보아
@@ -160,7 +169,80 @@ def _split_lines(fields):
             line = []
     if line:
         lines.append(line)
-    return lines
+    return _reorder_skewed_lines(lines)
+
+
+def _box(field):
+    """단어 상자의 네 꼭짓점 [(x, y), …]. 좌표가 없거나 모양이 다르면 None."""
+    poly = field.get('boundingPoly')
+    vertices = poly.get('vertices') if isinstance(poly, dict) else None
+    if not isinstance(vertices, list) or len(vertices) != 4:
+        return None
+    points = []
+    for vertex in vertices:
+        if not isinstance(vertex, dict):
+            return None
+        x, y = vertex.get('x'), vertex.get('y')
+        for value in (x, y):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                return None
+        points.append((float(x), float(y)))
+    return points
+
+
+def _skew_degrees(boxes):
+    """단어 상자 윗변들의 기울기(도). 한 장이 통째로 돌아간 각도를 본다. 잴 수 없으면 None.
+
+    짧은 상자는 각도가 부정확하므로 길이로 무게를 둔 평균 방향을 먼저 구하고, 그 방향을 기준으로 한 중앙값을 쓴다.
+    평균 방향을 기준으로 삼는 것은 180도 근처(뒤집힌 사진)에서 각도가 -180과 180으로 갈리지 않게 하려는 것이다.
+    """
+    edges = [(x1 - x0, y1 - y0) for (x0, y0), (x1, y1), _, _ in boxes]
+    edges = [(dx, dy) for dx, dy in edges if math.hypot(dx, dy) >= 1]
+    if len(edges) < SKEW_MIN_BOXES:
+        return None
+    mean = math.degrees(math.atan2(sum(dy for _, dy in edges), sum(dx for dx, _ in edges)))
+    offsets = sorted((math.degrees(math.atan2(dy, dx)) - mean + 180) % 360 - 180 for dx, dy in edges)
+    middle = len(offsets) // 2
+    median = offsets[middle] if len(offsets) % 2 else (offsets[middle - 1] + offsets[middle]) / 2
+    return mean + median
+
+
+def _reorder_skewed_lines(lines):
+    """기울여 찍은 사진에서 줄 순서를 좌표로 다시 맞춘다. 줄 안의 단어 묶음은 그대로 두고 순서만 바꾼다.
+
+    사진이 돌아가 있으면 CLOVA가 주는 줄 순서가 어긋나 이름표와 값이 떨어진다(10도쯤부터 시작해 30도에서는
+    "주소"와 주소 값 사이에 다른 줄들이 낀다). 그러면 마스킹과 기한 계산이 값을 찾지 못한다.
+    기울기가 SKEW_REORDER_DEGREES 미만이거나 좌표 없는 단어가 하나라도 있으면 CLOVA가 준 순서를 그대로 쓴다.
+    """
+    boxed = [[_box(field) for field in line] for line in lines]
+    # 좌표가 없거나 모양이 다른 단어가 하나라도 있으면 그 줄을 어디에 둘지 믿을 수 없다. 그대로 둔다.
+    if len(lines) < 2 or not all(box for boxes in boxed for box in boxes):
+        return lines
+    angle = _skew_degrees([box for boxes in boxed for box in boxes])
+    if angle is None or abs(angle) < SKEW_REORDER_DEGREES:
+        return lines
+
+    # 기울기를 되돌린 좌표에서 줄마다 세로 위치(단어 중심의 평균), 가로 위치(가장 왼쪽), 글자 높이를 구한다.
+    cos, sin = math.cos(math.radians(-angle)), math.sin(math.radians(-angle))
+    placed, heights = [], []
+    for line, boxes in zip(lines, boxed):
+        centers = [(sum(x for x, _ in box) / 4, sum(y for _, y in box) / 4) for box in boxes]
+        rotated = [(x * cos - y * sin, x * sin + y * cos) for x, y in centers]
+        placed.append((sum(y for _, y in rotated) / len(rotated), min(x for x, _ in rotated), line))
+        heights.extend(math.hypot(box[3][0] - box[0][0], box[3][1] - box[0][1]) for box in boxes)
+    heights.sort()
+    row_gap = heights[len(heights) // 2] * SKEW_ROW_GAP_RATIO
+
+    # 위에서 아래로 훑으며 세로 위치가 가까운 줄을 같은 행으로 묶고, 행 안에서는 왼쪽부터 놓는다.
+    placed.sort(key=lambda item: item[0])
+    rows, row = [], []
+    for item in placed:
+        if row and item[0] - sum(other[0] for other in row) / len(row) > row_gap:
+            rows.append(row)
+            row = []
+        row.append(item)
+    rows.append(row)
+    return [line for row in rows for _, _, line in sorted(row, key=lambda item: item[1])]
 
 
 def _line_text(line):
