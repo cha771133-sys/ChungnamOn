@@ -516,6 +516,23 @@ class NameTests(SimpleTestCase):
                 self.assertEqual(result['masked_text'], '성명\n[이름 가림]\n[이름 가림] 귀하')
                 self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
 
+    def test_names_in_dropped_fields_are_still_masked_elsewhere(self):
+        """줄 전체를 가릴 때 버리는 뒤 항목 안의 이름(영문명)도 다른 곳에서 가린다(CodeRabbit)."""
+        text = '성명\n홍길동 영문명: HONG GILDONG 이메일: gildong@example.com\nHONG GILDONG 귀하'
+        result = mask_personal_info(text)
+
+        self.assertEqual(result['masked_text'], '성명\n[이름 가림]\n[이름 가림] 귀하')
+        self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
+    def test_agency_recipient_with_unmasked_personal_field_drops_the_field(self):
+        """받는 사람이 기관이어도 뒤에 이어진 영문명·이메일은 남기지 않는다(CodeRabbit)."""
+        text = '수신\n아산시장 영문명: HONG GILDONG 이메일: gildong@example.com'
+        result = mask_personal_info(text)
+
+        self.assertEqual(result['masked_text'], '수신\n아산시장 [이름 가림]')
+        self.assertEqual(result['masked_count'], 1)
+        self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
     def test_agency_recipient_on_next_line_keeps_name_and_masks_other_field(self):
         text = '수신\n아산시장 연락처: 010-1234-5678'
 

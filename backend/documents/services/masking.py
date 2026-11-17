@@ -684,8 +684,12 @@ def mask_names(lines):
         if not candidate.strip() or any(char.isdigit() for char in candidate):
             continue
         cleaned, latin_names = _take_latin_names(marked)
-        if _UNMASKED_PERSONAL_FIELD.search(rest):
+        dropped = bool(_UNMASKED_PERSONAL_FIELD.search(rest))
+        if dropped:
             # 뒤 항목이 이메일·생년월일·국적이면 가릴 규칙이 없다. 남기면 개인정보가 새므로 이름과 함께 줄 전체를 가린다.
+            # 버리기 전에 규칙을 한 번 돌려, 뒤 항목 안의 이름(영문명 등)이 문서 전체에서 가려지도록 수집해 둔다.
+            # 수집은 mask_names()가 _found_names에 한다. 돌려받은 글자는 쓰지 않는다.
+            _mask_other_fields(rest)
             cleaned, rest, rest_count = '', '', 0
         else:
             # 뒤에 남기는 항목도 다른 규칙으로 가린다.
@@ -698,6 +702,10 @@ def mask_names(lines):
                 lines[following] = new_line + cleaned
                 found.extend(names + latin_names)
                 count += masked
+            elif dropped:
+                # 받는 사람이 기관이라 이름은 그대로 두고, 버린 뒤 항목 자리에 가림 표시를 남긴다.
+                lines[following] = f'{candidate.rstrip()} {NAME_MARK}'
+                count += 1
             elif rest_count:
                 # 받는 사람이 기관이라 이름은 그대로 두고, 뒤 항목에서 가린 것만 반영한다.
                 lines[following] = candidate + marked + rest
