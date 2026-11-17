@@ -783,6 +783,35 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         item, _, _ = self.deadline_item(self.registration(original=original))
         self.assertEqual(item["status"], "MATCHED")
 
+    def test_relative_deadline_2a_with_gov24_wording_and_reentry_guards(self):
+        """2A + 정부24 원문 표현은 MATCHED, 재입국 표현·재입국일만 있는 문서는 UNVERIFIED (CodeRabbit)."""
+        gov24 = ("# 외국인등록\n이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이 입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 하는 민원입니다.\n"
+                 "다시 한국에 입국한 날부터 90일 이내에 신고하는 경우도 있습니다.")
+        self.source("gov24", title="외국인등록", region="전국", text=gov24)
+        rule = {"base": "입국일", "baseLabels": ["입국일", "입국한 날"], "amount": 90, "unit": "day",
+                "appliesTo": "신청 기한", "quote": "외국인이 입국한 날부터 90일 이내에", "sourceId": "s1"}
+        original = "외국인등록 안내\n입국일\n2026년 10월 5일\n신청 기한\n2027년 1월 3일까지"
+        item, _, logs = self.deadline_item(self.registration(original=original), rule)
+        self.assertEqual((item["status"], item["officialValue"]),
+                         ("MATCHED", "입국일(2026-10-05)부터 90일 이내 → 2027-01-03"))
+        for secret in ("2026-10-05", "2027-01-03", "입국일\n"):
+            self.assertNotIn(secret, logs)
+        # LLM이 정부24 문장 전체를 인용해도 MATCHED (긴 표현 '외국인이 입국한 날'은 낱말 시작이면 인정)
+        whole = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이 입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        item, _, _ = self.deadline_item(self.registration(original=original), {**rule, "quote": whole})
+        self.assertEqual(item["status"], "MATCHED")
+        # 공식 인용이 재입국 표현이면 UNVERIFIED
+        for quote in ("다시 한국에 입국한 날부터 90일 이내에", "다시 한국에 외국인이 입국한 날부터 90일 이내에"):
+            item, _, _ = self.deadline_item(self.registration(original=original), {**rule, "quote": quote})
+            self.assertEqual(item["status"], "UNVERIFIED")
+        # 문서에 재입국일만 있으면 UNVERIFIED, 둘 다 있으면 입국일 날짜로 MATCHED
+        item, _, _ = self.deadline_item(self.registration(original="재입국일 2026-10-05\n신청 기한 2027-01-03"), rule)
+        self.assertEqual(item["status"], "UNVERIFIED")
+        item, _, _ = self.deadline_item(self.registration(original="재입국일 2026-11-20\n입국일 2026-10-05"), rule)
+        self.assertEqual(item["status"], "MATCHED")
+
     def test_relative_deadline_does_not_override_whole_deadline_item(self):
         """상대 기한 결과는 그 기한 하나에만 해당 (CodeRabbit): MISMATCH 유지, 기한 여러 개면 MATCHED로 안 올림."""
         self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)

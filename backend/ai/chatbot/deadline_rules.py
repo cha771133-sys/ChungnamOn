@@ -42,10 +42,21 @@ LABEL_SEP_RE = re.compile(r"[ \t:：]*")
 BASE_PHRASE_RE = re.compile(
     r"(.*?)(?:으로부터|로부터|부터)\s*\d{1,4}\s*(?:개월|일|주|달|년)\s*(?:이내|안에|내에|까지)", re.S
 )
-# 기준 표현은 앞 말과 여기서 끊긴다: 문장부호, 또는 이 끝말로 끝나는 낱말 (주제 조사·앞 절의 어미)
-# 예) "이 민원은 | 입국한 날", "체류하게 될 | 외국인이 입국한 날", "귀하는 | 입국한 날"
-PHRASE_BREAK_RE = re.compile(r"[,.;:()「」『』\"'“”‘’·]")
-BOUNDARY_ENDINGS = ("은", "는", "될", "할", "므로", "니까", "고", "며", "서", "면", "에", "에게", "때")
+# 기준 표현이 속한 구절은 인용문 시작이나 문장부호에서 시작한다. 구절 전체가 표의 표현과 정확히 같아야 한다.
+# 앞에 한글 낱말이 붙으면(이 민원은·다시 한국에·체류하게 될 …) 경계로 보지 않는다 (애매하면 UNVERIFIED).
+PHRASE_BREAK_RE = re.compile(r"[,.;:()「」『』\"'“”‘’·\[\]<>]")
+# 주어가 들어 있는 긴 표현: 앞에 다른 말이 있어도 '낱말 시작'(구절 시작·공백 뒤)이면 인정.
+# 짧은 표현(입국한 날·입국일·체류지를 변경한 날 …)은 구절 전체가 정확히 같아야 한다.
+# 예) "…체류하게 될 외국인이 입국한 날부터 90일 이내에"(정부24 원문 문장 전체) → 입국일
+LONG_PHRASES = {"입국일": [("외국인이", "입국한", "날")]}
+LONG_PHRASE_RES = {
+    kind: [re.compile(r"(?:^|(?<=\s))" + r"\s*".join(map(re.escape, words)) + r"\s*$") for words in phrases]
+    for kind, phrases in LONG_PHRASES.items()
+}
+# 구절에 이 말이 있으면 다른 입국(재입국 등)일 수 있어 규칙을 쓰지 않는다 (긴 표현·짧은 표현 모두)
+REENTRY_WORDS = ("다시", "재입국", "재차", "새로", "재입")
+# 문서 원문에서 기준일 이름 바로 앞에 오면 안 되는 글자 (한글·영문·숫자: "재입국일"의 '입국일' 등)
+LABEL_PREFIX_BLOCK = r"(?<![가-힣A-Za-z0-9])"
 # 기준일 종류는 LLM 값이 아니라 이 고정 표로 코드가 정한다.
 # 종류: (공식 자료 인용문의 "~부터" 앞 표현들, 업로드 문서에서 날짜를 찾을 이름들, LLM base/baseLabels로 허용하는 이름들)
 # 비교는 공백을 뺀 글자로 한다. 표에 없는 기준 표현이면 계산하지 않는다 (UNVERIFIED).
@@ -126,24 +137,25 @@ def _squeeze(text: str) -> str:
 def quote_base_kind(quote: str) -> str | None:
     """인용문 '~부터/~로부터' 앞 기준 표현으로 기준일 종류를 정한다 (BASE_KINDS 고정 표). 표에 없으면 None.
 
-    기준 표현 = '부터' 바로 앞 낱말들 중, 앞 말과 끊기는 곳(문장부호·BOUNDARY_ENDINGS 낱말·인용문 시작)부터의 전부.
-    그 표현 전체(공백 무시)가 표의 표현과 정확히 같아야 한다. 앞에 다른 말이 붙으면 표에 없는 표현으로 본다.
-    예) "이 민원은 입국한 날부터 90일 이내" → 입국일 ("민원은"에서 끊김)
-        "재입국한 날부터 90일 이내", "최초 입국한 날부터 …", "다시 입국한 날부터 …" → None
+    기준 구절 = '부터' 앞에서 인용문 시작이나 마지막 문장부호 뒤부터의 전부.
+    그 구절 전체(공백 무시)가 표의 표현과 정확히 같아야 한다. 앞에 한글 낱말이 하나라도 붙으면 인정하지 않는다.
+    구절에 "다시·재입국·재차·새로" 같은 말이 있으면 다른 입국일 수 있어 None.
+    예) "외국인이 입국한 날부터 90일 이내에" → 입국일, "입국한 날로부터 90일 이내" → 입국일
+        "다시 한국에 입국한 날부터 …", "재입국한 날부터 …", "최초 입국한 날부터 …", "이 민원은 입국한 날부터 …" → None
     """
     m = BASE_PHRASE_RE.search(quote or "")
     if not m:
         return None
-    prefix = PHRASE_BREAK_RE.split(m.group(1))[-1]   # 마지막 문장부호 뒤
-    words = prefix.split()
-    phrase_to_kind = {p: kind for kind, (phrases, _, _) in BASE_KINDS.items() for p in phrases}
-    # '부터' 앞 낱말 묶음 중 표와 정확히 같은 가장 긴 것을 고르고, 그 바로 앞이 끊기는 곳이어야 인정
-    for start in range(len(words)):
-        kind = phrase_to_kind.get("".join(words[start:]))
-        if kind:
-            before = words[start - 1] if start else ""
-            return kind if not before or before.endswith(BOUNDARY_ENDINGS) else None
-    return None
+    raw_clause = PHRASE_BREAK_RE.split(m.group(1))[-1].strip()   # 마지막 문장부호 뒤 ~ '부터' 앞
+    clause = _squeeze(raw_clause)
+    if any(word in clause for word in REENTRY_WORDS):
+        return None
+    exact = {p: kind for kind, (phrases, _, _) in BASE_KINDS.items() for p in phrases}.get(clause)
+    if exact:
+        return exact
+    # 긴 표현(주어 포함)은 구절 끝에 낱말 시작으로 붙어 있으면 인정 ("재외국인이 입국한 날"은 아님)
+    kinds = {kind for kind, patterns in LONG_PHRASE_RES.items() if any(p.search(raw_clause) for p in patterns)}
+    return kinds.pop() if len(kinds) == 1 else None
 
 
 def base_kind(rule: Rule) -> str | None:
@@ -199,12 +211,13 @@ def find_base_date(original_text: str, labels: list[str]) -> date | None:
     - 같은 줄: "입국일 2026년 10월 5일", "입국한 날: 2026.10.05"
     - 다음 줄: 이름(+공백·콜론)만 있는 줄 다음 줄 맨 앞의 날짜 (OCR이 표의 칸을 줄로 나눈 경우: "입국일\\n2026년 10월 5일")
     - 안 씀: "입국일: 미상 / 발급일: 2026-10-05" (사이에 다른 값·필드명이 있음)
+    - 안 씀: "재입국일 2026-10-05" (이름 바로 앞이 줄 시작·공백·문장부호가 아님 → 다른 이름)
     """
     lines = (original_text or "").splitlines()
     found = set()
     for n, line in enumerate(lines):
         for label in labels:
-            for m in re.finditer(re.escape(label), line):
+            for m in re.finditer(LABEL_PREFIX_BLOCK + re.escape(label), line):
                 rest = line[m.end():]
                 value = _date_at_start(rest)
                 if value is None and LABEL_SEP_RE.fullmatch(rest) and n + 1 < len(lines):

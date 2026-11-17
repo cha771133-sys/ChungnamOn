@@ -73,6 +73,21 @@ class ParseTests(unittest.TestCase):
                 self.assertIsNone(rule(**bad))
         self.assertIsNone(dr.parse_rule("90일", {"s1"}))
 
+    def test_label_must_start_at_word_boundary(self):
+        """'재입국일'의 '입국일'처럼 이름 바로 앞이 한글이면 그 이름이 아님 (CodeRabbit)."""
+        self.assertIsNone(dr.find_base_date("재입국일 2026-10-05", ["입국일", "입국한 날"]))
+        self.assertIsNone(dr.find_base_date("재입국한 날: 2026.10.05", ["입국일", "입국한 날"]))
+        self.assertIsNone(dr.find_base_date("재입국일\n2026년 10월 5일", ["입국일"]))
+        # 둘 다 있으면 '입국일' 날짜만
+        both = "재입국일 2026-12-01\n입국일 2026-10-05"
+        self.assertEqual(dr.find_base_date(both, ["입국일", "입국한 날"]), date(2026, 10, 5))
+        self.assertEqual(dr.find_base_date("(입국일) 2026-10-05", ["입국일"]), None)  # 괄호 뒤 다른 글자
+        self.assertEqual(dr.find_base_date("·입국일 2026-10-05", ["입국일"]), date(2026, 10, 5))
+        # 판정: 재입국일만 있으면 UNVERIFIED, 둘 다 있으면 입국일로 MATCHED
+        self.assertEqual(dr.judge(rule(), SOURCE, "재입국일 2026-10-05\n신청 기한 2027-01-03", DEADLINES).status,
+                         "UNVERIFIED")
+        self.assertEqual(dr.judge(rule(), SOURCE, both, DEADLINES).status, "MATCHED")
+
     def test_base_date_only_right_after_label(self):
         """이름과 날짜 사이엔 공백·콜론만 (CodeRabbit). 다른 값·필드명이 끼면 그 기준일 날짜로 안 봄."""
         for text in ("입국일: 미상 / 발급일: 2026-10-05", "입국일 미상, 발급일 2026.10.05",
@@ -125,14 +140,29 @@ class ParseTests(unittest.TestCase):
             with self.subTest(quote=quote):
                 self.assertIsNone(dr.quote_base_kind(quote))
                 self.assertEqual(dr.judge(rule(quote=quote), quote, ORIGINAL, DEADLINES).status, "UNVERIFIED")
-        # 앞 절·주제와 끊기는 표현, 정부24 원문 표현("외국인이 입국한 날")은 인정
+        # 정부24 원문 표현("외국인이 입국한 날")처럼 구절 전체가 표와 같으면 인정 (인용문 시작·문장부호 뒤)
         gov24 = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 "
                  "외국인이 입국한 날부터 90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
-        for quote in ("이 민원은 입국한 날부터 90일 이내", "귀하는 입국한 날부터 90일 이내", gov24,
-                      "체류하게 될 외국인이 입국한 날부터 90일 이내에", "입국한 날로부터 90일 이내"):
+        for quote in ("외국인이 입국한 날부터 90일 이내에", "입국한 날로부터 90일 이내", "안내: 입국한 날부터 90일 이내",
+                      "(입국일부터 90일 이내)"):
             with self.subTest(quote=quote):
                 self.assertEqual(dr.quote_base_kind(quote), "입국일")
+        quote_2a = "외국인이 입국한 날부터 90일 이내에"
+        self.assertEqual(dr.judge(rule(quote=quote_2a), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
+        # 긴 표현("외국인이 입국한 날")은 앞에 다른 말이 있어도 낱말 시작이면 인정 → 정부24 문장 전체도 입국일
+        for quote in (gov24, "체류하게 될 외국인이 입국한 날부터 90일 이내에"):
+            with self.subTest(long=quote):
+                self.assertEqual(dr.quote_base_kind(quote), "입국일")
         self.assertEqual(dr.judge(rule(quote=gov24), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
+        # 짧은 표현 앞에 한글 낱말이 붙거나, 금지어가 있거나, 긴 표현이 한글에 붙으면 UNVERIFIED
+        for quote in ("다시 한국에 입국한 날부터 90일 이내", "이 민원은 입국한 날부터 90일 이내",
+                      "귀하는 입국한 날부터 90일 이내", "재차 입국한 날부터 90일 이내", "새로 입국한 날부터 90일 이내",
+                      "한국에, 다시 입국한 날부터 90일 이내", "다시 한국에 외국인이 입국한 날부터 90일 이내",
+                      "재외국인이 입국한 날부터 90일 이내", "재입국한 외국인이 입국한 날부터 90일 이내"):
+            with self.subTest(blocked=quote):
+                self.assertIsNone(dr.quote_base_kind(quote))
+        reentry = "다시 한국에 입국한 날부터 90일 이내"
+        self.assertEqual(dr.judge(rule(quote=reentry), reentry, ORIGINAL, DEADLINES).status, "UNVERIFIED")
         # "로부터 90일을 초과하여"의 '부터'만 있고 '이내'가 없으면 기준 표현 없음
         self.assertIsNone(dr.quote_base_kind("입국한 날로부터 90일을 초과하여 체류"))
         # 지원 기준은 입국일·체류지 변경일 두 가지만 (표현도 정확히 일치)
@@ -259,6 +289,7 @@ class PromptTests(unittest.TestCase):
         from ai.chatbot import prompts
 
         for phrase in ('"rule"', "baseLabels", "appliesTo", "날짜를 직접 계산하지 말고", "글자 그대로",
+                       "기준 표현부터 'N일 이내'까지만 짧게", "'외국인이 입국한 날부터 90일 이내에'",
                        '"day"|"week"|"month"|"year"'):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, prompts.VERIFY_SYSTEM)
