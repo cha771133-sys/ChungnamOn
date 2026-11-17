@@ -463,6 +463,37 @@ class ManualImportTests(TestCase):
         self.assertEqual(document.content_text, self.text)
         self.assertEqual(document.metadata['usage_terms']['status'], 'unverified')
 
+    def test_manual_reversion_to_approved_terms_updates_pending_and_next_automatic_candidate(self):
+        """승인 A와 같은 입력으로 정정을 되돌려도 이전 confirmed 후보가 상속되지 않는다."""
+        self.run_import(terms_status='unverified', terms_checked_on=None)
+        document = self.approve()
+        approved = (document.content_text, document.metadata, document.version, document.reviewed_at)
+        self.run_import()
+        manual = self.pending()
+        previous_checked_at = manual.collected_at
+        self.assertEqual(manual.metadata['metadata']['usage_terms']['status'], 'confirmed')
+
+        self.run_import(terms_status='unverified', terms_checked_on=None)
+        manual.refresh_from_db()
+        self.assertEqual(self.pending().pk, manual.pk)
+        self.assertEqual(manual.metadata['metadata'], document.metadata)
+        self.assertGreater(manual.collected_at, previous_checked_at)
+
+        for body in ('자동 B', '자동 C'):
+            record = OfficialRecord(
+                provider='html', external_id='', source_url=self.url, title=body, agency='법무부',
+                region='전국', category='출입국·체류', content_text=body,
+                metadata={'usage_terms': {'status': 'confirmed'}},
+            )
+            now = timezone.now()
+            stage_official_record(record, now, now)
+            candidate = document.revisions.get(content_hash=record.content_hash)
+            self.assertEqual(candidate.metadata['metadata']['usage_terms'], document.metadata['usage_terms'])
+            self.assertEqual(candidate.metadata['metadata']['manual_import'], document.metadata['manual_import'])
+
+        document.refresh_from_db()
+        self.assertEqual((document.content_text, document.metadata, document.version, document.reviewed_at), approved)
+
     def test_disabled_notice_url_variants_record_exclusion_without_blocking_approval(self):
         disabled = next(item for item in load_registry() if not item.enabled and 'pds_no=' in item.url)
         parts = urlsplit(disabled.url)
