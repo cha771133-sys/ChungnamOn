@@ -344,29 +344,30 @@ export async function releasePushForLogout(): Promise<void> {
   setStatus(pushConfigured ? 'off' : 'unconfigured')
   const saved = readSaved()
   writeSaved(null)
+  // FCM 해제를 가장 먼저 대기열에 넣는다. 이후 다른 계정이 로그인해 등록해도 그 등록은 이 해제 뒤에 실행된다
+  const unregistering = messagingPromise ? unregisterInQueue() : Promise.resolve()
   if (saved && tokenStore.getRefresh())
     await withTimeout(
       deleteDevice(saved.deviceId, session).catch(() => {}),
       LOGOUT_WAIT_MS,
     )
   // 로그아웃은 몇 초만 기다린다. 해제 작업은 순서 체인에 남아 나중에라도 끝까지 실행된다
-  if (messagingPromise) await withTimeout(unregisterInQueue(session), LOGOUT_WAIT_MS)
+  await withTimeout(unregistering, LOGOUT_WAIT_MS)
 }
 
 /**
- * FCM 등록 해제를 등록과 같은 순서 체인에 넣는다. 해제가 끝나기 전에 다시 로그인해도 새 등록은 해제 뒤에 실행된다.
- * 체인 안에서는 실제 해제가 끝날 때까지 기다린다 (시간 제한으로 먼저 넘어가면, 늦게 끝난 해제가 새 등록을 지울 수 있음).
- * 기다리는 시간 제한은 부르는 쪽(로그아웃)에서 둔다.
+ * FCM 등록 해제를 등록과 같은 순서 체인에 넣는다 (로그아웃·세션 만료 때 가장 먼저 호출).
+ * - 해제는 새 로그인 여부와 상관없이 항상 실행한다. 이전 계정의 FID를 지워야, 로그아웃 중 끝난 기기 등록이 서버에 남아도
+ *   이전 계정 알림이 이 브라우저로 오지 않는다.
+ * - 새 계정의 등록은 이 해제보다 늦게 대기열에 들어가므로 해제가 끝난 뒤 새 FID로 실행된다 (새 등록을 지우지 않음).
+ * - 체인 안에서는 실제 해제가 끝날 때까지 기다리고, 기다리는 시간 제한은 부르는 쪽(로그아웃)에서 둔다.
  */
-function unregisterInQueue(session: number): Promise<void> {
+function unregisterInQueue(): Promise<void> {
   const pending = messagingPromise
   return enqueue(async () => {
     if (!pending) return
     const fcm = await pending.catch(() => null)
-    // 차례가 오기 전에 다른 계정으로 새로 로그인했으면 그 계정이 이 등록을 이어 쓰므로 지우지 않는다.
-    // 로그아웃만 된 경우(세션 번호는 바뀌었지만 토큰이 없음)에는 예약한 해제를 그대로 실행한다
-    const reloggedIn = tokenStore.session() !== session && Boolean(tokenStore.getRefresh())
-    if (fcm && !reloggedIn) await fcm.sdk.unregister(fcm.messaging).catch(() => {})
+    if (fcm) await fcm.sdk.unregister(fcm.messaging).catch(() => {})
   })
 }
 
@@ -380,7 +381,7 @@ export function forgetPush(): void {
   writeSaved(null)
   setStatus(pushConfigured ? 'off' : 'unconfigured')
   // 서버에서는 해제할 수 없지만, FCM 등록을 지워 이 브라우저로 이전 계정 알림이 더 오지 않게 한다
-  if (messagingPromise) void unregisterInQueue(tokenStore.session())
+  if (messagingPromise) void unregisterInQueue()
 }
 
 /** 서비스 워커가 알림 문구를 안내 언어로 보여주도록 알려준다. */
