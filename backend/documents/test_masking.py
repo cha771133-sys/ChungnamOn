@@ -524,6 +524,14 @@ class NameTests(SimpleTestCase):
         self.assertEqual(result['masked_text'], '성명\n[이름 가림]\n[이름 가림] 귀하')
         self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
 
+    def test_names_in_later_dropped_fields_are_masked_elsewhere(self):
+        """버리는 뒤 항목에서 이름 칸이 이메일 뒤에 있어도 그 이름을 다른 곳에서 가린다(CodeRabbit)."""
+        text = '성명\n홍길동 이메일: gildong@example.com 영문명: HONG GILDONG\nHONG GILDONG 귀하'
+        result = mask_personal_info(text)
+
+        self.assertEqual(result['masked_text'], '성명\n[이름 가림]\n[이름 가림] 귀하')
+        self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
     def test_agency_recipient_with_unmasked_personal_field_drops_the_field(self):
         """받는 사람이 기관이어도 뒤에 이어진 영문명·이메일은 남기지 않는다(CodeRabbit)."""
         text = '수신\n아산시장 영문명: HONG GILDONG 이메일: gildong@example.com'

@@ -687,9 +687,13 @@ def mask_names(lines):
         dropped = bool(_UNMASKED_PERSONAL_FIELD.search(rest))
         if dropped:
             # 뒤 항목이 이메일·생년월일·국적이면 가릴 규칙이 없다. 남기면 개인정보가 새므로 이름과 함께 줄 전체를 가린다.
-            # 버리기 전에 규칙을 한 번 돌려, 뒤 항목 안의 이름(영문명 등)이 문서 전체에서 가려지도록 수집해 둔다.
+            # 버리기 전에 규칙을 돌려, 뒤 항목 안의 이름(영문명 등)이 문서 전체에서 가려지도록 수집해 둔다.
+            # 규칙은 글의 맨 앞 이름표만 보므로 항목마다 따로 돌린다("이메일: … 영문명: …"의 영문명도 수집).
             # 수집은 mask_names()가 _found_names에 한다. 돌려받은 글자는 쓰지 않는다.
-            _mask_other_fields(rest)
+            remaining = rest
+            while remaining.strip():
+                _mask_other_fields(remaining)
+                _, remaining = _split_at_next_field(remaining.strip())
             cleaned, rest, rest_count = '', '', 0
         else:
             # 뒤에 남기는 항목도 다른 규칙으로 가린다.
