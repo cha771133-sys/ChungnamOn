@@ -1719,6 +1719,48 @@ ol {
   border-left: 5px solid var(--teal);
   box-shadow: var(--shadow);
 }
+.summary.has-mismatch {
+  border-left-color: var(--amber);
+}
+.summary-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 12px 12px 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--amber-soft);
+  color: #6d4000;
+  text-align: left;
+}
+.summary-alert > svg:first-child {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.summary-alert > span {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  font-size: 14.5px;
+  line-height: 1.45;
+}
+.summary-alert strong {
+  font-size: 15.5px;
+}
+.summary-alert .chev {
+  flex-shrink: 0;
+  align-self: center;
+}
+.fact-mismatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #8a5200;
+}
 .summary ul {
   display: grid;
   gap: 8px;

@@ -593,4 +593,16 @@ export const UI = {
     en: "Notifications are on, but this device won't get them yet. Check Settings.",
     vi: 'Thông báo đang bật nhưng thiết bị này chưa nhận được. Hãy xem Cài đặt.',
   },
+  '공식 자료와 다른 내용이 있어요: {v0}': {
+    en: 'Some details differ from official sources: {v0}',
+    vi: 'Có nội dung khác với nguồn chính thức: {v0}',
+  },
+  '아래 내용을 그대로 믿지 말고, 담당기관에 확인하세요.': {
+    en: "Don't rely on the details below as they are. Check with the agency in charge.",
+    vi: 'Đừng tin ngay nội dung bên dưới. Hãy hỏi lại cơ quan phụ trách.',
+  },
+  '공식 자료와 달라요': {
+    en: 'Differs from official source',
+    vi: 'Khác nguồn chính thức',
+  },
 }
