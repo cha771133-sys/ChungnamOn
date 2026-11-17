@@ -117,6 +117,22 @@ class ParseTests(unittest.TestCase):
         # 표에 없는 기준 표현, 표에 없는 LLM 이름 → UNVERIFIED
         self.assertIsNone(dr.quote_base_kind("계약을 체결한 날부터 30일 이내"))
         self.assertIsNone(dr.base_kind(rule(baseLabels=["입국 예정일"])))
+        # 기준 표현 전체가 표와 정확히 같아야 함: 앞에 다른 말이 붙으면 UNVERIFIED (CodeRabbit)
+        for quote in ("재입국한 날부터 90일 이내", "최초 입국한 날부터 90일 이내", "다시 입국한 날부터 90일 이내",
+                      "외국인이 다시 입국한 날부터 90일 이내", "재입국일부터 90일 이내", "입국하는 날부터 90일 이내"):
+            with self.subTest(quote=quote):
+                self.assertIsNone(dr.quote_base_kind(quote))
+                self.assertEqual(dr.judge(rule(quote=quote), quote, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # 앞 절·주제와 끊기는 표현, 정부24 원문 표현("외국인이 입국한 날")은 인정
+        gov24 = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 "
+                 "외국인이 입국한 날부터 90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        for quote in ("이 민원은 입국한 날부터 90일 이내", "귀하는 입국한 날부터 90일 이내", gov24,
+                      "체류하게 될 외국인이 입국한 날부터 90일 이내에", "입국한 날로부터 90일 이내"):
+            with self.subTest(quote=quote):
+                self.assertEqual(dr.quote_base_kind(quote), "입국일")
+        self.assertEqual(dr.judge(rule(quote=gov24), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
+        # "로부터 90일을 초과하여"의 '부터'만 있고 '이내'가 없으면 기준 표현 없음
+        self.assertIsNone(dr.quote_base_kind("입국한 날로부터 90일을 초과하여 체류"))
         # 표현별 종류
         for quote, kind in (("입국한 날부터 90일 이내", "입국일"), ("고지일로부터 1개월 이내", "고지일"),
                             ("고지를 받은 날부터 30일 이내", "고지일"), ("전입한 날부터 14일 이내", "체류지 변경일"),

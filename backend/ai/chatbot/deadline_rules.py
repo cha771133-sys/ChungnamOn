@@ -37,14 +37,21 @@ DATE_RE = re.compile(
 )
 # 기준일 이름과 날짜 사이에 허용하는 것: 공백·콜론만 (다른 필드명·"/"·"미상" 등이 끼면 그 기준일 날짜로 안 봄)
 LABEL_SEP_RE = re.compile(r"[ \t:：]*")
-# 인용문의 기준 표현: "입국한 날부터 90일", "고지일로부터 1개월" → "부터" 앞부분
-BASE_PHRASE_RE = re.compile(r"(\S(?:[^,.;]*?\S)?)\s*(?:로부터|으로부터|부터)\s*\d{1,4}\s*(?:개월|일|주|달|년)")
+# 인용문의 기준 표현: "입국한 날부터 90일 이내", "고지일로부터 1개월 이내" → "부터" 앞부분
+# ('이내' 등이 붙은 기간 앞의 '부터'만. "입국한 날로부터 90일을 초과하여"의 '부터'는 아님)
+BASE_PHRASE_RE = re.compile(
+    r"(.*?)(?:으로부터|로부터|부터)\s*\d{1,4}\s*(?:개월|일|주|달|년)\s*(?:이내|안에|내에|까지)", re.S
+)
+# 기준 표현은 앞 말과 여기서 끊긴다: 문장부호, 또는 이 끝말로 끝나는 낱말 (주제 조사·앞 절의 어미)
+# 예) "이 민원은 | 입국한 날", "체류하게 될 | 외국인이 입국한 날", "귀하는 | 입국한 날"
+PHRASE_BREAK_RE = re.compile(r"[,.;:()「」『』\"'“”‘’·]")
+BOUNDARY_ENDINGS = ("은", "는", "될", "할", "므로", "니까", "고", "며", "서", "면", "에", "에게", "때")
 # 기준일 종류는 LLM 값이 아니라 이 고정 표로 코드가 정한다.
 # 종류: (공식 자료 인용문의 "~부터" 앞 표현들, 업로드 문서에서 날짜를 찾을 이름들, LLM base/baseLabels로 허용하는 이름들)
 # 비교는 공백을 뺀 글자로 한다. 표에 없는 기준 표현이면 계산하지 않는다 (UNVERIFIED).
 BASE_KINDS = {
     "입국일": (
-        ["입국한날", "입국일", "입국한일"],
+        ["입국한날", "입국일", "입국한일", "외국인이입국한날"],  # 마지막은 정부24 외국인등록 원문 표현
         ["입국일", "입국일자", "입국한 날"],
         ["입국일", "입국일자", "입국한 날", "입국 일자"],
     ),
@@ -130,16 +137,26 @@ def _squeeze(text: str) -> str:
 
 
 def quote_base_kind(quote: str) -> str | None:
-    """인용문 '~부터/~로부터' 앞 표현으로 기준일 종류를 정한다 (BASE_KINDS 고정 표). 표에 없으면 None.
+    """인용문 '~부터/~로부터' 앞 기준 표현으로 기준일 종류를 정한다 (BASE_KINDS 고정 표). 표에 없으면 None.
 
-    예) "입국한 날부터 90일 이내" → "입국일", "체류지를 변경한 날부터 14일 이내" → "체류지 변경일"
+    기준 표현 = '부터' 바로 앞 낱말들 중, 앞 말과 끊기는 곳(문장부호·BOUNDARY_ENDINGS 낱말·인용문 시작)부터의 전부.
+    그 표현 전체(공백 무시)가 표의 표현과 정확히 같아야 한다. 앞에 다른 말이 붙으면 표에 없는 표현으로 본다.
+    예) "이 민원은 입국한 날부터 90일 이내" → 입국일 ("민원은"에서 끊김)
+        "재입국한 날부터 90일 이내", "최초 입국한 날부터 …", "다시 입국한 날부터 …" → None
     """
     m = BASE_PHRASE_RE.search(quote or "")
     if not m:
         return None
-    phrase = re.sub(r"(?:으로|로)$", "", _squeeze(m.group(1)))  # "고지일로부터"의 '로'
-    kinds = [kind for kind, (phrases, _, _) in BASE_KINDS.items() if any(phrase.endswith(p) for p in phrases)]
-    return kinds[0] if len(kinds) == 1 else None
+    prefix = PHRASE_BREAK_RE.split(m.group(1))[-1]   # 마지막 문장부호 뒤
+    words = prefix.split()
+    phrase_to_kind = {p: kind for kind, (phrases, _, _) in BASE_KINDS.items() for p in phrases}
+    # '부터' 앞 낱말 묶음 중 표와 정확히 같은 가장 긴 것을 고르고, 그 바로 앞이 끊기는 곳이어야 인정
+    for start in range(len(words)):
+        kind = phrase_to_kind.get("".join(words[start:]))
+        if kind:
+            before = words[start - 1] if start else ""
+            return kind if not before or before.endswith(BOUNDARY_ENDINGS) else None
+    return None
 
 
 def base_kind(rule: Rule) -> str | None:
