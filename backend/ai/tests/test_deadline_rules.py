@@ -239,7 +239,26 @@ class JudgeTests(unittest.TestCase):
                 self.assertEqual(j.status, expected, j.reason)
         self.assertIsNone(dr.source_passages(short, "재입국한 날부터 90일 이내"))
         self.assertIsNone(dr.source_passages(short, "출국한 날부터 30일 이내"))      # 원문에 없음
-        self.assertEqual(dr.source_passages(short, "안내\n귀하는, 입국한 날부터 90일 이내"), [" 입국한 날부터 90일 이내"])
+        self.assertEqual(dr.source_passages(short, "안내\n귀하는, 입국한 날부터 90일 이내"), ["귀하는, 입국한 날부터 90일 이내"])
+
+    def test_reentry_word_before_punctuation_in_same_sentence(self):
+        """쉼표·괄호 앞 수식어도 같은 문장이면 금지어 검사 (CodeRabbit): '재입국 시, 외국인이 입국한 날부터' → UNVERIFIED."""
+        reentry = "재입국 시, 외국인이 입국한 날부터 90일 이내"
+        self.assertIsNone(dr.quote_base_kind(reentry))
+        self.assertEqual(dr.judge(rule(quote=reentry), reentry, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # LLM이 쉼표 뒤만 잘라 인용해도 원문 문장 기준으로 막힘
+        for quote in ("외국인이 입국한 날부터 90일 이내", "입국한 날부터 90일 이내"):
+            with self.subTest(quote=quote):
+                self.assertEqual(dr.judge(rule(quote=quote), reentry + "에 신고합니다.", ORIGINAL, DEADLINES).status,
+                                 "UNVERIFIED")
+        for source in ("(재입국의 경우) 입국한 날부터 90일 이내", "다시 오는 경우, 입국한 날부터 90일 이내"):
+            with self.subTest(source=source):
+                self.assertEqual(dr.judge(rule(quote="입국한 날부터 90일 이내"), source, ORIGINAL, DEADLINES).status,
+                                 "UNVERIFIED")
+        # 금지어가 앞 문장에 있으면 다른 문장이라 영향 없음
+        other_sentence = "재입국은 별도 절차입니다. 외국인이 입국한 날부터 90일 이내에 신청합니다."
+        self.assertEqual(dr.judge(rule(quote="외국인이 입국한 날부터 90일 이내에"), other_sentence, ORIGINAL,
+                                  DEADLINES).status, "MATCHED")
 
     def test_changed_deadline_mismatch(self):
         j = self.judge(deadlines=[{"label": "신청 기한", "date": "2027-01-20"}])
@@ -288,18 +307,25 @@ class JudgeTests(unittest.TestCase):
 
     def test_unsupported_bases_are_unverified(self):
         """고지일·출생일·자격 취득일 등은 지원하지 않음: 문서에 날짜가 있어도 UNVERIFIED, reason에 공식 기준."""
+        # 인용문마다 맞는 기간·단위를 줘서, 기간 불일치가 아니라 '지원하지 않는 기준' 때문에 UNVERIFIED인지 확인
         cases = [
-            ("고지일", ["고지일"], "고지일로부터 1개월 이내에", "고지일 2027년 1월 31일", "2027-02-28"),
-            ("고지일", ["고지를 받은 날"], "고지를 받은 날부터 30일 이내", "고지를 받은 날 2026.10.05", "2026-11-04"),
-            ("고지일", ["고지한 날"], "고지한 날부터 30일 이내", "고지한 날 2026.10.05", "2026-11-04"),
-            ("자격 취득일", ["자격 취득일"], "자격 취득일부터 3개월 이내", "자격 취득일: 2026-08-31", "2026-11-30"),
-            ("출생일", ["출생일"], "출생한 날부터 1년 이내", "출생일 2028.02.29", "2029-02-28"),
-            ("출생일", ["생년월일"], "출생한 날부터 90일 이내", "생년월일: ******-*******", "2027-01-03"),
+            ("고지일", ["고지일"], "고지일로부터 1개월 이내에", 1, "month", "고지일 2027년 1월 31일", "2027-02-28"),
+            ("고지일", ["고지를 받은 날"], "고지를 받은 날부터 30일 이내", 30, "day",
+             "고지를 받은 날 2026.10.05", "2026-11-04"),
+            ("고지일", ["고지한 날"], "고지한 날부터 30일 이내", 30, "day", "고지한 날 2026.10.05", "2026-11-04"),
+            ("자격 취득일", ["자격 취득일"], "자격 취득일부터 3개월 이내", 3, "month",
+             "자격 취득일: 2026-08-31", "2026-11-30"),
+            ("출생일", ["출생일"], "출생한 날부터 1년 이내", 1, "year", "출생일 2028.02.29", "2029-02-28"),
+            ("출생일", ["생년월일"], "출생한 날부터 90일 이내", 90, "day", "생년월일: ******-*******", "2027-01-03"),
         ]
-        for base, labels, quote, line, due in cases:
+        for base, labels, quote, amount, unit, line, due in cases:
             with self.subTest(quote=quote):
-                r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": 1, "unit": "day",
+                r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": amount, "unit": unit,
                                    "appliesTo": "신고 기한", "quote": quote, "sourceId": "s1"}, {"s1"})
+                # 기간·단위는 인용문과 같음 → 막히는 이유는 기준일 종류뿐
+                self.assertEqual([(int(n), dr.UNIT_WORDS[u]) for n, u in dr.PERIOD_RE.findall(quote)],
+                                 [(amount, unit)])
+                self.assertIsNone(dr.quote_base_kind(quote))
                 j = dr.judge(r, f"안내\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
                              [{"label": "신고 기한", "date": due}])
                 self.assertEqual((j.status, j.official_value), ("UNVERIFIED", None))

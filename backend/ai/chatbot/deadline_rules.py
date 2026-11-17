@@ -53,7 +53,10 @@ LONG_PHRASE_RES = {
     kind: [re.compile(r"(?:^|(?<=\s))" + r"\s*".join(map(re.escape, words)) + r"\s*$") for words in phrases]
     for kind, phrases in LONG_PHRASES.items()
 }
-# 구절에 이 말이 있으면 다른 입국(재입국 등)일 수 있어 규칙을 쓰지 않는다 (긴 표현·짧은 표현 모두)
+# 문장 경계 (마침표·물음표·느낌표·줄바꿈). 숫자 사이 마침표(2026.10.05)는 문장 끝이 아님
+SENTENCE_BREAK_RE = re.compile(r"(?<!\d)\.|\.(?!\d)|[!?。\n]")
+# 기준 표현이 든 문장(쉼표·괄호 앞 수식어 포함)에 이 말이 있으면 다른 입국(재입국 등)일 수 있어 규칙을 쓰지 않는다
+# 예) "재입국 시, 외국인이 입국한 날부터 90일 이내" → 쉼표 앞 '재입국'도 검사
 REENTRY_WORDS = ("다시", "재입국", "재차", "새로", "재입")
 # 문서 원문에서 기준일 이름 바로 앞에 오면 안 되는 글자 (한글·영문·숫자: "재입국일"의 '입국일' 등)
 LABEL_PREFIX_BLOCK = r"(?<![가-힣A-Za-z0-9])"
@@ -146,10 +149,11 @@ def quote_base_kind(quote: str) -> str | None:
     m = BASE_PHRASE_RE.search(quote or "")
     if not m:
         return None
-    raw_clause = PHRASE_BREAK_RE.split(m.group(1))[-1].strip()   # 마지막 문장부호 뒤 ~ '부터' 앞
-    clause = _squeeze(raw_clause)
-    if any(word in clause for word in REENTRY_WORDS):
+    sentence = SENTENCE_BREAK_RE.split(m.group(1))[-1]           # 문장 시작 ~ '부터' 앞 (쉼표 앞 수식어 포함)
+    if any(word in _squeeze(sentence) for word in REENTRY_WORDS):
         return None
+    raw_clause = PHRASE_BREAK_RE.split(sentence)[-1].strip()      # 마지막 문장부호 뒤 ~ '부터' 앞
+    clause = _squeeze(raw_clause)
     exact = {p: kind for kind, (phrases, _, _) in BASE_KINDS.items() for p in phrases}.get(clause)
     if exact:
         return exact
@@ -162,7 +166,8 @@ def source_passages(quote: str, source_text: str) -> list[str] | None:
     """공식 자료 원문에서 인용문이 나오는 모든 위치의 '원문 구절' (앞 문맥 + 인용 부분). 쓸 수 없으면 None.
 
     - 인용문은 공백을 무시하고 찾는다.
-    - 원문 구절 = 그 위치 앞쪽의 마지막 문장부호·줄바꿈 다음부터 인용 부분 끝까지.
+    - 원문 구절 = 그 위치가 든 문장의 시작(앞쪽 마지막 마침표·줄바꿈 다음)부터 인용 부분 끝까지.
+      쉼표·괄호 앞 수식어("재입국 시, …")까지 들어가야 금지어 검사가 된다.
       (LLM이 "재입국한 날부터"에서 "입국한 날부터"만 잘라 인용해도 원문 문맥으로 검사하려고)
     - 인용 위치 바로 앞 글자가 한글·영문·숫자면(예: "재" + "입국한 날") None.
     - 여러 번 나오면 모든 위치를 돌려주고, 하나라도 앞 글자 검사에 걸리면 None. 한 번도 없으면 None.
@@ -177,7 +182,7 @@ def source_passages(quote: str, source_text: str) -> list[str] | None:
         if start and re.match(r"[가-힣A-Za-z0-9]", source_text[start - 1]):
             return None
         before = source_text[:start]
-        cut = max([before.rfind("\n"), *(b.end() - 1 for b in PHRASE_BREAK_RE.finditer(before))])
+        cut = max([-1, *(b.end() - 1 for b in SENTENCE_BREAK_RE.finditer(before))])
         passages.append(before[cut + 1:] + m.group(0))
     return passages or None
 
