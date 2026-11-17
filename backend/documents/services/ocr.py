@@ -212,11 +212,11 @@ def _reorder_skewed_lines(lines):
 
     사진이 돌아가 있으면 CLOVA가 주는 줄 순서가 어긋나 이름표와 값이 떨어진다(10도쯤부터 시작해 30도에서는
     "주소"와 주소 값 사이에 다른 줄들이 낀다). 그러면 마스킹과 기한 계산이 값을 찾지 못한다.
-    기울기가 SKEW_REORDER_DEGREES 미만이거나 좌표가 모자라면 CLOVA가 준 순서를 그대로 쓴다.
+    기울기가 SKEW_REORDER_DEGREES 미만이거나 좌표 없는 단어가 하나라도 있으면 CLOVA가 준 순서를 그대로 쓴다.
     """
-    boxed = [[box for box in map(_box, line) if box] for line in lines]
-    # 좌표 없는 줄이 하나라도 있으면 그 줄을 어디에 둘지 알 수 없다.
-    if len(lines) < 2 or not all(boxed):
+    boxed = [[_box(field) for field in line] for line in lines]
+    # 좌표가 없거나 모양이 다른 단어가 하나라도 있으면 그 줄을 어디에 둘지 믿을 수 없다. 그대로 둔다.
+    if len(lines) < 2 or not all(box for boxes in boxed for box in boxes):
         return lines
     angle = _skew_degrees([box for boxes in boxed for box in boxes])
     if angle is None or abs(angle) < SKEW_REORDER_DEGREES:

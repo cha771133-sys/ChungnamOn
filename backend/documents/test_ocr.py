@@ -232,6 +232,17 @@ class SkewedLineOrderTests(SimpleTestCase):
 
         self.assertEqual(build_text(images), SCRAMBLED_TEXT)
 
+    def test_word_without_box_in_a_line_keeps_clova_order(self):
+        # 한 줄의 단어 가운데 일부만 좌표가 없어도 다시 맞추지 않는다(CodeRabbit).
+        fields = [
+            cell('주소', 0, 1, 30), cell('성명', 0, 0, 30), cell('홍길동', 1, 0, 30),
+            cell('연락처', 0, 2, 30), cell('041-000-0000', 1, 2, 30),
+            cell('아산시', 1, 1, 30, line_break=False), cell('가상로 1', 1.5, 1, 30),
+        ]
+        del fields[5]['boundingPoly']
+
+        self.assertEqual(build_text([page(*fields)]), '주소\n성명\n홍길동\n연락처\n041-000-0000\n아산시 가상로 1')
+
     def test_malformed_boxes_are_ignored(self):
         for broken in (
             None, 'box', {}, {'vertices': None}, {'vertices': [{'x': 1, 'y': 1}]},
