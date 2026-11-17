@@ -475,6 +475,22 @@ class NameTests(SimpleTestCase):
                 self.assertEqual(result['masked_count'], 3)
                 self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
 
+    def test_separate_english_name_field_is_masked(self):
+        """영문명처럼 이름을 따로 적는 칸도 이름이다. 이름 뒤에서 나뉜 항목이어도 가린다(CodeRabbit)."""
+        for text, expected in (
+            ('성명\n홍길동 영문명: HONG GILDONG', '성명\n[이름 가림] 영문명: [이름 가림]'),
+            ('성명: 홍길동 영문명: HONG GILDONG', '성명: [이름 가림] 영문명: [이름 가림]'),
+            ('성명: 홍길동\n영문명: HONG GILDONG', '성명: [이름 가림]\n영문명: [이름 가림]'),
+            ('성명\n홍길동\n영문 성명\nHONG GILDONG', '성명\n[이름 가림]\n영문 성명\n[이름 가림]'),
+            ('성명(한글): 홍길동\n성명(영문): HONG GILDONG', '성명(한글): [이름 가림]\n성명(영문): [이름 가림]'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(f'{text}\nHONG GILDONG 님, 홍길동 님께 안내드립니다.')
+
+                self.assertEqual(result['masked_text'], f'{expected}\n[이름 가림] 님, [이름 가림] 님께 안내드립니다.')
+                self.assertNotIn('HONG', result['masked_text'])
+                self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
     def test_agency_recipient_on_next_line_keeps_name_and_masks_other_field(self):
         text = '수신\n아산시장 연락처: 010-1234-5678'
 

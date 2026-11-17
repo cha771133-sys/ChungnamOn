@@ -519,8 +519,9 @@ class InterpretMissingValueTests(SimpleTestCase):
 
     def test_quantity_with_multiplier_does_not_confirm_amount(self):
         # 1.5만명·3천개 같은 수량은 금액이 아니다. 그 숫자로 금액이 확인되지 않는다(CodeRabbit).
-        text = TAX_NOTICE + '\n모집 인원 1.5만명\n배부 수량 3천개\n참가자 2만명'
-        for amount in ('1.5원', '1.5만원', '3원', '3천원', '2원', '2만원'):
+        # 띄어 쓴 수량(4천 개, 5만 명)도 같다.
+        text = TAX_NOTICE + '\n모집 인원 1.5만명\n배부 수량 3천개\n참가자 2만명\n배부 수량 4천 개\n대상 5만 명'
+        for amount in ('1.5원', '1.5만원', '3원', '3천원', '2원', '2만원', '4원', '4천원', '5원', '5만원'):
             with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
                 self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount}, text=text)['amount'], '')
         self.assertEqual(run(TAX_PAYLOAD, text=text)['amount'], '11,000원')

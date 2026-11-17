@@ -390,20 +390,24 @@ def _numbers_with_units(text, amounts_only=False):
         unit = multiplier.group(1) if multiplier else ''
         after = rest[multiplier.end():] if multiplier else rest
         is_money = after.lstrip(' \t').startswith('원')
+        not_amount = False
         if not multiplier:
             counter = COUNTER_UNIT.match(rest)
             attached = ATTACHED_HANGUL.match(rest)
             if attached and not attached.group().startswith('원'):
-                # 금액 단위가 아닌 낱말이 숫자에 붙어 있다. 원문에서는 이름표가 붙어 읽힌 것일 수 있어("11,000세액")
-                # 세는 말과 배율로 시작하는 수량(1만명, 3천개)만 금액이 아닌 것으로 본다.
+                # 금액 단위가 아닌 낱말이 숫자에 붙어 있다. 세는 말(3월, 2부)과, 배율 글자로 시작하지만 금액 단위가
+                # 아닌 수량(1만명, 3천개, 3천 개)은 금액이 아니다. 그 밖의 낱말은 원문에서 이름표가 붙어 읽힌 것일 수
+                # 있어("11,000세액") 금액일 수 있는 숫자로 둔다.
                 quantity = attached.group()[0] in '십백천만억조경'
+                not_amount = bool(counter) or quantity
                 unit = counter.group(1) if counter else (
                     attached.group() if quantity or not amounts_only else '')
-        if amounts_only and not is_money and (
+        if amounts_only and (not_amount or not is_money and (
             text[max(match.start() - 1, 0):match.start()] in CODE_BEFORE and match.start() > 0
             or rest[:1] in CODE_AFTER and rest[:1] != ''
             or re.match(r'\.\d', rest)
-        ):
+        )):
+            # 금액이 아닌 숫자는 원문의 금액 후보에 넣지 않는다. AI가 "3천원"을 내도 "3천 개"로는 확인되지 않는다.
             continue
         # 소수점은 남긴다. 1.5만원과 15만원은 다른 금액이다.
         pairs.add((re.sub(r'[^\d.]', '', match.group()), unit))
