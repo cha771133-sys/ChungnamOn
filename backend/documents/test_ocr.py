@@ -294,11 +294,12 @@ class SkewedLineOrderTests(SimpleTestCase):
             cells = [
                 cell('납부기한', 0, 0, angle), cell('2026년 8월 11일', 1, 0, angle, confidence=0.3),
                 cell('세액', 0, 1, angle), cell('6,250원', 1, 1, angle),
-                cell('발행일', 0, 2, angle), cell('2026년 8월 1일', 1, 2, angle),
+                cell('발행일', 0, 2, angle), cell('2026년 8월 1일', 1, 2, angle, confidence=0.1),
             ]
             return [page(*(cells[index] for index in order))]
 
-        # CLOVA가 준 순서에서는 "납부기한" 다음 줄이 "세액"이라 기한 날짜를 찾지 못한다.
+        # CLOVA가 준 순서에서는 "납부기한" 다음 줄이 "세액"이라 기한 날짜를 찾지 못한다. 그러면 모든 날짜로
+        # 대신 계산해 발행일의 0.1이 나온다. 순서를 다시 맞춰야 기한 날짜의 0.3이 나온다.
         self.assertEqual(calculate_confidence(notice(20, (0, 2, 3, 1, 4, 5))), 0.3)
         self.assertEqual(calculate_confidence(notice(0, (0, 1, 2, 3, 4, 5))), 0.3)
 
