@@ -97,6 +97,33 @@ class ParseTests(unittest.TestCase):
                                                    quote="고지일로부터 1개월 이내에")))
         self.assertFalse(dr.quote_base_matches(rule(quote="90일 이내에 신청")))  # '~부터' 기준이 없음
 
+    def test_base_kind_decided_by_code_table(self):
+        """기준일 종류는 인용문 표현 + 고정 표로 코드가 정함. LLM base·baseLabels로 바꿀 수 없음 (CodeRabbit)."""
+        moved = "체류지를 변경한 날부터 14일 이내"
+        # base=입국일인데 baseLabels에 체류지 변경일을 넣어 인용 검사를 통과시키려는 경우 → UNVERIFIED
+        sneaky = rule(base="입국일", baseLabels=["체류지 변경일"], amount=14, quote=moved)
+        self.assertIsNone(dr.base_kind(sneaky))
+        original = "안내\n입국일 2026년 10월 5일\n신청 기한 2026년 10월 19일까지"
+        j = dr.judge(sneaky, moved, original, [{"label": "신청 기한", "date": "2026-10-19"}])
+        self.assertEqual(j.status, "UNVERIFIED")
+        # 인용 기준(체류지 변경)과 같은 이름만 주면 계산하되, 날짜는 표의 이름(전입일 등)으로만 찾음
+        honest = rule(base="체류지 변경일", baseLabels=["전입일"], amount=14, quote=moved)
+        self.assertEqual(dr.base_kind(honest), "체류지 변경일")
+        self.assertEqual(dr.judge(honest, moved, original, [{"label": "신청 기한", "date": "2026-10-19"}]).status,
+                         "UNVERIFIED")  # 문서엔 입국일뿐 → 체류지 변경일 없음
+        with_move = "안내\n전입일 2026.10.05\n신청 기한 2026년 10월 19일까지"
+        self.assertEqual(dr.judge(honest, moved, with_move, [{"label": "신청 기한", "date": "2026-10-19"}]).status,
+                         "MATCHED")
+        # 표에 없는 기준 표현, 표에 없는 LLM 이름 → UNVERIFIED
+        self.assertIsNone(dr.quote_base_kind("계약을 체결한 날부터 30일 이내"))
+        self.assertIsNone(dr.base_kind(rule(baseLabels=["입국 예정일"])))
+        # 표현별 종류
+        for quote, kind in (("입국한 날부터 90일 이내", "입국일"), ("고지일로부터 1개월 이내", "고지일"),
+                            ("고지를 받은 날부터 30일 이내", "고지일"), ("전입한 날부터 14일 이내", "체류지 변경일"),
+                            ("자격을 취득한 날부터 3개월 이내", "자격 취득일"), ("출생한 날부터 90일 이내", "출생일")):
+            with self.subTest(quote=quote):
+                self.assertEqual(dr.quote_base_kind(quote), kind)
+
     def test_document_deadline_by_applies_to_without_fallback(self):
         """appliesTo 행을 먼저 고르고, 그 날짜를 못 읽으면 None. 다른 기한으로 대체 안 함 (CodeRabbit)."""
         rows = [{"label": "신청 기한", "date": "미정"}, {"label": "납부 기한", "date": "2027-01-03"}]

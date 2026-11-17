@@ -39,14 +39,42 @@ DATE_RE = re.compile(
 LABEL_SEP_RE = re.compile(r"[ \t:：]*")
 # 인용문의 기준 표현: "입국한 날부터 90일", "고지일로부터 1개월" → "부터" 앞부분
 BASE_PHRASE_RE = re.compile(r"(\S(?:[^,.;]*?\S)?)\s*(?:로부터|으로부터|부터)\s*\d{1,4}\s*(?:개월|일|주|달|년)")
-# 기준 이름에서 핵심 낱말을 남길 때 떼는 끝말 (입국일 → 입국, 체류지 변경일 → 체류지·변경)
-BASE_SUFFIX_RE = re.compile(r"(?:한\s*날|일자|날짜|일|날)$")
+# 기준일 종류는 LLM 값이 아니라 이 고정 표로 코드가 정한다.
+# 종류: (공식 자료 인용문의 "~부터" 앞 표현들, 업로드 문서에서 날짜를 찾을 이름들, LLM base/baseLabels로 허용하는 이름들)
+# 비교는 공백을 뺀 글자로 한다. 표에 없는 기준 표현이면 계산하지 않는다 (UNVERIFIED).
+BASE_KINDS = {
+    "입국일": (
+        ["입국한날", "입국일", "입국한일"],
+        ["입국일", "입국일자", "입국한 날"],
+        ["입국일", "입국일자", "입국한 날", "입국 일자"],
+    ),
+    "체류지 변경일": (
+        ["체류지를변경한날", "체류지변경일", "전입한날", "전입일"],
+        ["체류지 변경일", "체류지변경일", "전입일", "전입일자", "전입한 날"],
+        ["체류지 변경일", "체류지를 변경한 날", "전입일", "전입일자", "전입한 날"],
+    ),
+    "고지일": (
+        ["고지일", "고지를받은날", "고지받은날", "고지한날"],
+        ["고지일", "고지일자", "고지한 날"],
+        ["고지일", "고지일자", "고지를 받은 날", "고지받은 날", "고지한 날"],
+    ),
+    "자격 취득일": (
+        ["자격을취득한날", "자격취득일"],
+        ["자격 취득일", "자격취득일", "자격 취득 일자"],
+        ["자격 취득일", "자격취득일", "자격을 취득한 날"],
+    ),
+    "출생일": (
+        ["출생한날", "출생일"],
+        ["출생일", "출생일자", "생년월일"],
+        ["출생일", "출생한 날", "출생일자", "생년월일"],
+    ),
+}
 
 
 @dataclass
 class Rule:
-    base: str               # 기준 이름 (입국일, 체류지 변경일, 출생일, 고지일, 자격 취득일 …)
-    labels: list[str]       # 문서에서 찾을 이름 (입국일, 입국한 날 …)
+    base: str               # LLM이 낸 기준 이름. 검사용일 뿐, 기준일 종류는 BASE_KINDS로 코드가 정함
+    labels: list[str]       # LLM이 낸 기준일 이름들. 검사용 (문서 날짜 검색에는 BASE_KINDS 이름만 씀)
     amount: int
     unit: str               # day | week | month | year
     applies_to: str         # 어떤 문서 기한에 대한 규칙인지 (label)
@@ -101,27 +129,33 @@ def _squeeze(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
-def _base_core(name: str) -> list[str]:
-    """기준 이름의 핵심 낱말 (2글자 이상). "입국일" → ["입국"], "체류지 변경일" → ["체류지", "변경"]."""
-    words = [BASE_SUFFIX_RE.sub("", w) for w in re.split(r"\s+", name.strip()) if w]
-    return [w for w in words if len(w) >= 2]
+def quote_base_kind(quote: str) -> str | None:
+    """인용문 '~부터/~로부터' 앞 표현으로 기준일 종류를 정한다 (BASE_KINDS 고정 표). 표에 없으면 None.
+
+    예) "입국한 날부터 90일 이내" → "입국일", "체류지를 변경한 날부터 14일 이내" → "체류지 변경일"
+    """
+    m = BASE_PHRASE_RE.search(quote or "")
+    if not m:
+        return None
+    phrase = re.sub(r"(?:으로|로)$", "", _squeeze(m.group(1)))  # "고지일로부터"의 '로'
+    kinds = [kind for kind, (phrases, _, _) in BASE_KINDS.items() if any(phrase.endswith(p) for p in phrases)]
+    return kinds[0] if len(kinds) == 1 else None
+
+
+def base_kind(rule: Rule) -> str | None:
+    """코드가 정한 기준일 종류. LLM의 base·baseLabels가 모두 그 종류의 이름이어야 함 (아니면 None)."""
+    kind = quote_base_kind(rule.quote)
+    if kind is None:
+        return None
+    allowed = {_squeeze(name) for name in BASE_KINDS[kind][2]}
+    if any(_squeeze(name) not in allowed for name in (rule.base, *rule.labels)):
+        return None
+    return kind
 
 
 def quote_base_matches(rule: Rule) -> bool:
-    """인용문 '~부터' 앞 기준 표현이 rule.base(또는 baseLabels 중 하나)와 같은 기준인지.
-
-    핵심 낱말이 모두 기준 표현 안에 있어야 한다.
-    예) base=입국일: "입국한 날부터 90일" ✓, "체류지를 변경한 날부터 14일" ✗
-    """
-    m = BASE_PHRASE_RE.search(rule.quote)
-    if not m:
-        return False
-    phrase = _squeeze(m.group(1))[-20:]  # 기준 표현은 '부터' 바로 앞 몇 글자
-    for name in (rule.base, *rule.labels):
-        core = _base_core(name)
-        if core and all(w in phrase for w in core):
-            return True
-    return False
+    """인용문의 기준 표현이 표에 있고, LLM의 base·baseLabels가 그 기준과 같은지."""
+    return base_kind(rule) is not None
 
 
 def quote_supports_rule(rule: Rule, source_text: str) -> bool:
@@ -233,19 +267,21 @@ def judge(rule: Rule, source_text: str, original_text: str, deadlines) -> Judgem
 
     if not quote_supports_rule(rule, source_text):
         return unverified("공식 자료의 기한 기준을 계산할 수 있는 모양으로 확인하지 못했어요")
+    kind = base_kind(rule)  # 기준일 종류는 코드가 정함 (quote_supports_rule에서 이미 확인)
     doc_date = pick_document_deadline(deadlines, rule.applies_to)
     if doc_date is None:
         return unverified("공식 기준과 비교할 문서 기한을 하나로 정하지 못했어요")
-    base = find_base_date(original_text, rule.labels)
+    # 날짜는 표에 있는 그 기준일 이름으로만 찾음 (LLM의 base·baseLabels로 검색하지 않음)
+    base = find_base_date(original_text, BASE_KINDS[kind][1])
     if base is None:
-        return unverified(f"문서에서 {_eul(rule.base)} 찾지 못해 기한을 계산할 수 없어요")
+        return unverified(f"문서에서 {_eul(kind)} 찾지 못해 기한을 계산할 수 없어요")
 
     end = period_end(base, rule.amount, rule.unit)
-    official = f"{rule.base}({base.isoformat()})부터 {rule.amount}{UNITS[rule.unit]} 이내 → {end.isoformat()}"
+    official = f"{kind}({base.isoformat()})부터 {rule.amount}{UNITS[rule.unit]} 이내 → {end.isoformat()}"
     if doc_date == end:
         return Judgement("MATCHED", official, f"{official}로 문서 기한과 같아요.", [rule.source_id])
     if doc_date == end - timedelta(days=1):
-        return unverified(f"{official}인데 문서 기한은 하루 빨라요. {rule.base} 당일을 포함해 세면 같을 수 있어요")
+        return unverified(f"{official}인데 문서 기한은 하루 빨라요. {kind} 당일을 포함해 세면 같을 수 있어요")
     if _maybe_holiday_extension(end, doc_date):
         return unverified(f"{official}인데 그날이 주말이라 기한이 늦춰졌을 수 있어요")
     return Judgement("MISMATCH", official, f"{official}인데 문서 기한은 {doc_date.isoformat()}이에요.",
