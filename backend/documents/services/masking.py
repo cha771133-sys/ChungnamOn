@@ -86,8 +86,12 @@ DETAIL_LINE = re.compile(
     r'^[ \t]*(?:[가-힣0-9]+(?:읍|면|동|리|로|길)(?=[ \t\d,]|$)|\d+(?:-\d+)?(?:번지|동|호|층)(?=[ \t,]|$))'
 )
 # 건물 이름으로 시작하는 상세주소 줄: "가상아파트 101동 1001호", "견본빌라 302호", "행복오피스텔 5층 501호".
-# 동·호·층 숫자가 있어야 하고, 금액(…원)이나 다른 항목(콜론)이 있는 줄은 주소로 보지 않는다.
-BUILDING_LINE = re.compile(r'^(?![^\n]*(?:\d[ \t]*원|[:：]))[^\n]*?(?<!\d)\d+(?:-\d+)?[ \t]*(?:동|호|층)(?=[ \t,)]|$)')
+# 줄 전체가 "건물 이름(세 낱말까지) + 동·호·층 숫자"여야 한다. 뒤에 다른 말이 이어지는 줄은 주소가 아니다:
+# "제출기한 2026년 8월 31일 (본관 1층)", "시청 본관 2층 세무과로 방문해 주시기 바랍니다."
+BUILDING_LINE = re.compile(
+    r'^[ \t]*(?:(?!\d+[ \t]*[년월일원])[가-힣A-Za-z0-9·()\-]+[ \t]+){0,3}'
+    r'(?:(?:제|지하|B)?\d+(?:-\d+)?[ \t]*(?:동|호|층)[ \t,]*)+$'
+)
 # 라벨 없이 줄 안에 나온 주소: 시·군·구 + 읍·면·동·도로명 + 숫자
 ADDRESS_IN_LINE = re.compile(
     rf'(?:(?<=[ \t:：(])|^)(?P<keep>{_REGION})[ \t]+(?P<rest>{_DETAIL_START}[^\n]*\d[^\n]*)$'
@@ -268,6 +272,15 @@ def _split_at_first_mark(value):
         return value, ''
     head = value[:min(positions)]
     return head.rstrip(), value[len(head.rstrip()):]
+
+
+# 가려진 번호 뒤에 괄호로 적힌 영문 이름: "홍길동 [전화번호 가림] (HONG GILDONG)"
+_PAREN_LATIN_NAME = re.compile(r"[ \t]*\(\s*([A-Za-z][A-Za-z .,'\-]{1,60}?)\s*\)")
+
+
+def _take_latin_names(marked):
+    """가림 표시 뒤에 남은 글자에서 괄호 안 영문 이름을 뺀다. (남은 글자, 찾은 영문 이름 목록)"""
+    return _PAREN_LATIN_NAME.sub('', marked), [match.group(1) for match in _PAREN_LATIN_NAME.finditer(marked)]
 
 
 def _split_at_next_field(value):
@@ -625,19 +638,20 @@ def mask_names(lines):
             # 이름 뒤에 붙은 번호가 먼저 가려졌으면("홍길동 [전화번호 가림]") 가림 표시 앞부분만 이름으로 본다.
             # 앞부분이 비어 있으면 이름이 이미 가려진 것이다.
             name, marked = _split_at_first_mark(name)
-            rest = marked + rest
             if not name.strip() or (not has_colon and not _looks_like_name(name)):
-                lines[index] = line[:match.start('value')] + name + rest
+                lines[index] = line[:match.start('value')] + name + marked + rest
                 continue
+            # 가려진 번호 뒤에 괄호로 적힌 영문 이름도 이름이다. 이름을 가릴 때 함께 빼고 다른 곳에서도 가린다.
+            cleaned, latin_names = _take_latin_names(marked)
             if recipient:
-                # 기관·직위는 남기고 이름만 가린다.
+                # 기관·직위는 남기고 이름만 가린다. 가린 이름이 없으면(기관) 뒤의 글자도 그대로 둔다.
                 new_name, masked, names = _mask_recipient_value(name)
-                lines[index] = line[:match.start('value')] + new_name + rest
-                found.extend(names)
+                lines[index] = line[:match.start('value')] + new_name + (cleaned if masked else marked) + rest
+                found.extend(names + latin_names if masked else names)
                 count += masked
                 continue
-            found.append(name)
-            lines[index] = match.group('label') + match.group('sep') + NAME_MARK + rest
+            found.extend([name, *latin_names])
+            lines[index] = match.group('label') + match.group('sep') + NAME_MARK + cleaned + rest
             count += 1
             continue
         following = _next_value_index(lines, index)
@@ -648,15 +662,16 @@ def mask_names(lines):
         # 앞부분이 비었으면 이미 가려진 것이고, 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
         if not candidate.strip() or any(char.isdigit() for char in candidate):
             continue
+        cleaned, latin_names = _take_latin_names(marked)
         if recipient:
             new_line, masked, names = _mask_recipient_value(candidate)
             if masked:
-                lines[following] = new_line + marked
-                found.extend(names)
+                lines[following] = new_line + cleaned
+                found.extend(names + latin_names)
                 count += masked
             continue
-        found.append(candidate)
-        lines[following] = NAME_MARK + marked
+        found.extend([candidate, *latin_names])
+        lines[following] = NAME_MARK + cleaned
         count += 1
 
     # 뒤 항목 안에서 찾은 이름도 문서 전체에서 가릴 수 있게 mask_text()로 넘긴다.

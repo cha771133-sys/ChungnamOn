@@ -350,6 +350,30 @@ class InterpretDeadlineTests(SimpleTestCase):
                 with self.assertLogs(interpret_module.logger, 'WARNING'):
                     self.assertEqual(self.deadlines(wrong, text=text), [])
 
+    def test_other_range_forms_crossing_new_year(self):
+        """한글 표기 기간과 양쪽 모두 연도가 없는 기간도 해를 넘기면 끝 날짜는 다음 해다(CodeRabbit)."""
+        for text in (
+            '신청기간 2026년 12월 16일 ~ 1월 3일', '신청기간 2026년 12월 16일부터 ~ 1월 3일까지',
+            '2026년도 안내\n신청기간 12.16.~1.3.', '2026년도 안내\n신청기간 12월 16일 ~ 1월 3일',
+        ):
+            with self.subTest(text=text):
+                right = [{'label': '신청 기한', 'date': '2027-01-03', 'kind': 'other'}]
+                wrong = [{'label': '신청 기한', 'date': '2026-01-03', 'kind': 'other'}]
+
+                self.assertEqual(self.deadlines(right, text=text), [{'label': '신청 기한', 'date': '2027-01-03'}])
+                with self.assertLogs(interpret_module.logger, 'WARNING'):
+                    self.assertEqual(self.deadlines(wrong, text=text), [])
+
+    def test_korean_range_within_year_uses_start_year(self):
+        # 다른 연도가 함께 적힌 문서에서 끝 날짜가 그 연도와 짝지어지지 않는다.
+        text = '2025년도 안내\n납부기간 2026년 8월 16일 ~ 8월 31일'
+        right = [{'label': '납부 기한', 'date': '2026-08-31', 'kind': 'payment'}]
+        wrong = [{'label': '납부 기한', 'date': '2025-08-31', 'kind': 'payment'}]
+
+        self.assertEqual(len(self.deadlines(right, text=text)), 1)
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(self.deadlines(wrong, text=text), [])
+
     def test_dotted_numbers_outside_range_are_not_dates(self):
         items = [{'label': '제출 기한', 'date': '2026-03-05', 'kind': 'other'}]
 
@@ -464,6 +488,31 @@ class InterpretMissingValueTests(SimpleTestCase):
         for amount in ('11,000만원', '11,000 만 원', '11,000천원', '11,000억원'):
             with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
                 self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+
+    def test_amount_with_larger_or_unknown_unit_is_emptied(self):
+        # 조·천억처럼 더 큰 단위와 모르는 단위도 원문과 다르면 비운다(CodeRabbit).
+        for amount in ('11,000조원', '11,000천억원', '11,000달러'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 1천원')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '1천원'}, text=text)['amount'], '1천원')
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(run({**TAX_PAYLOAD, 'amount': '1천억원'}, text=text)['amount'], '')
+
+    def test_amount_is_not_confirmed_by_date_or_phone_numbers(self):
+        # 날짜(8월, 10일, 31일)와 전화번호(041, 537, 3001, 5)의 숫자로는 금액이 확인되지 않는다(CodeRabbit).
+        for amount in ('8원', '10원', '31원', '2026원', '537원', '3001원', '5원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 3만원\n신청일 2026년 3월 10일')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3만원'}, text=text)['amount'], '3만원')
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3원'}, text=text)['amount'], '')
+
+    def test_amount_without_won_in_document_is_kept(self):
+        # 원문에 "원"이 없이 숫자만 적힌 금액 칸도 금액으로 본다.
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 11,000')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '11,000원'}, text=text)['amount'], '11,000원')
 
     def test_amount_with_unit_written_in_document_is_kept(self):
         text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 3만 5천 원')

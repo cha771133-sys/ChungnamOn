@@ -392,7 +392,12 @@ class AddressTests(SimpleTestCase):
 
     def test_amount_or_other_field_line_after_address_is_not_detail(self):
         """동·호·층 숫자가 있어도 금액이나 다른 항목이 적힌 줄은 주소로 보지 않는다."""
-        for following in ('민원실 1층 수수료 3,000원', '문의: 시청 2층 세무과', '2026년 8월 31일'):
+        for following in (
+            '민원실 1층 수수료 3,000원', '문의: 시청 2층 세무과', '2026년 8월 31일',
+            # 층이 적힌 기한·안내 문장은 줄 전체가 주소 모양이 아니다(CodeRabbit).
+            '제출기한 2026년 8월 31일 (본관 1층)', '시청 본관 2층 세무과로 방문해 주시기 바랍니다.',
+            '접수 장소 시청 별관 3층 민원실',
+        ):
             with self.subTest(following=following):
                 text = f'주소: 충청남도 아산시 배방읍 가상로 123\n{following}'
 
@@ -417,6 +422,21 @@ class NameTests(SimpleTestCase):
                 self.assertEqual(result['masked_text'], f'{expected}\n[이름 가림] 님께 안내드립니다.')
                 # 번호 하나, 이름표 뒤의 이름 하나, 아래 줄에 다시 나온 이름 하나
                 self.assertEqual(result['masked_count'], 3)
+                self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
+    def test_latin_name_after_masked_number_is_masked(self):
+        """가려진 번호 뒤에 괄호로 적힌 영문 이름도 가리고, 다른 곳에 다시 나오면 함께 가린다."""
+        for text, expected in (
+            ('성명: 홍길동 010-1234-5678 (HONG GILDONG)', '성명: [이름 가림] [전화번호 가림]'),
+            ('성명: 홍길동 900101-5234567 (HONG GILDONG)', '성명: [이름 가림] ******-*******'),
+            ('납세자\n홍길동 010-1234-5678 (HONG GILDONG)', '납세자\n[이름 가림] [전화번호 가림]'),
+            ('수신: 홍길동 010-1234-5678 (HONG GILDONG)', '수신: [이름 가림] [전화번호 가림]'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(f'{text}\nHONG GILDONG 님께 안내드립니다.')
+
+                self.assertEqual(result['masked_text'], f'{expected}\n[이름 가림] 님께 안내드립니다.')
+                self.assertNotIn('HONG', result['masked_text'])
                 self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
 
     def test_agency_recipient_followed_by_masked_number_is_kept(self):
