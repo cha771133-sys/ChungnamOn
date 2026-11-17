@@ -206,8 +206,14 @@ INLINE_NEXT_LABEL = re.compile(
 # 같은 줄에 이어진 다음 항목의 라벨(예: "… 납부기한: 2026년 8월 31일", "… 세액: 6,250원").
 # 값을 가릴 때 이 라벨 앞에서 멈춰 뒤의 기한·금액을 남긴다. 이름 조각("반 안")을 라벨로 오해하지 않도록
 # 라벨 낱말은 두 글자 이상이고, 두 낱말 라벨은 앞 낱말이 아래 목록일 때만 인정한다(예: "납부 기한:").
-_TWO_WORD_LABEL_HEADS = '납부|출금|환급|신청|납기|고지|휴대|외국인|주민|여권|과세|합계|전자|문의|담당|발행|처리'
-NEXT_FIELD_LABEL = re.compile(rf'[ \t]+(?=(?:(?:{_TWO_WORD_LABEL_HEADS})[ \t]+)?[가-힣]{{2,10}}[ \t]*[:：])')
+# 영문·한글은 이름 칸의 앞 낱말이다("영문 성명:", "한글 이름:"). NAME_LABEL이 아는 이름표는 여기서도 나눠야
+# 앞 이름에 "한글"이 붙어 기억되지 않는다. "성명(영문):"처럼 괄호가 붙은 이름표도 나눈다.
+_TWO_WORD_LABEL_HEADS = '납부|출금|환급|신청|납기|고지|휴대|외국인|주민|여권|과세|합계|전자|문의|담당|발행|처리|영문|한글'
+NEXT_FIELD_LABEL = re.compile(
+    rf'[ \t]+(?=(?:(?:{_TWO_WORD_LABEL_HEADS})[ \t]+)?[가-힣]{{2,10}}(?:[ \t]*\((?:영문|한글)\))?[ \t]*[:：])'
+)
+# 가리는 규칙이 없는 개인 항목. 이름 다음 줄에서 이런 항목이 이어지면 그 줄을 통째로 가린다(_mask_names 참고).
+_UNMASKED_PERSONAL_FIELD = re.compile(r'(?:이메일|전자\s*우편|e-?mail|생년월일|국적)[ \t]*[:：]', re.IGNORECASE)
 # 라벨 뒤에 이름이 아니라 이런 단어가 오면 표 머리글로 본다(예: "신청인 정보").
 NOT_NAME_WORDS = ('정보', '성명', '이름', '서명', '구분', '현황', '내역', '본인', '확인', '번호', '주소', '연락처')
 # 문장 끝. 이름이 "다"·"요"로 끝날 수 있어 한 글자 어미는 넣지 않는다.
@@ -677,11 +683,15 @@ def mask_names(lines):
         # 앞부분이 비었으면 이미 가려진 것이고, 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
         if not candidate.strip() or any(char.isdigit() for char in candidate):
             continue
-        # 뒤에 남기는 항목도 다른 규칙으로 가린다.
-        rest, rest_count = _mask_other_fields(rest)
-        count += rest_count
         cleaned, latin_names = _take_latin_names(marked)
-        cleaned += rest
+        if _UNMASKED_PERSONAL_FIELD.search(rest):
+            # 뒤 항목이 이메일·생년월일·국적이면 가릴 규칙이 없다. 남기면 개인정보가 새므로 이름과 함께 줄 전체를 가린다.
+            cleaned, rest, rest_count = '', '', 0
+        else:
+            # 뒤에 남기는 항목도 다른 규칙으로 가린다.
+            rest, rest_count = _mask_other_fields(rest)
+            count += rest_count
+            cleaned += rest
         if recipient:
             new_line, masked, names = _mask_recipient_value(candidate)
             if masked:

@@ -491,6 +491,31 @@ class NameTests(SimpleTestCase):
                 self.assertNotIn('HONG', result['masked_text'])
                 self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
 
+    def test_two_name_fields_on_one_line_are_split(self):
+        """영문 성명과 한글 성명이 한 줄에 있어도 이름표에서 나눠 각각 가리고, 다시 나온 이름도 가린다(CodeRabbit)."""
+        for text, expected in (
+            ('영문 성명: HONG GILDONG 한글 성명: 홍길동', '영문 성명: [이름 가림] 한글 성명: [이름 가림]'),
+            ('한글 이름: 홍길동 영문 이름: HONG GILDONG', '한글 이름: [이름 가림] 영문 이름: [이름 가림]'),
+            ('성명(한글): 홍길동 성명(영문): HONG GILDONG', '성명(한글): [이름 가림] 성명(영문): [이름 가림]'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(f'{text}\nHONG GILDONG 님, 홍길동 님께 안내드립니다.')
+
+                self.assertEqual(result['masked_text'], f'{expected}\n[이름 가림] 님, [이름 가림] 님께 안내드립니다.')
+                self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
+    def test_name_on_next_line_followed_by_unmasked_personal_field_masks_whole_line(self):
+        """이름 다음 줄에 가릴 규칙이 없는 개인 항목(이메일·생년월일·국적)이 이어지면 줄 전체를 가린다."""
+        for following in (
+            '홍길동 이메일: gildong@example.com', '홍길동 생년월일: 1990년 1월 1일', '홍길동 국적: 베트남',
+            '홍길동 연락처: 010-1234-5678 이메일: gildong@example.com',
+        ):
+            with self.subTest(following=following):
+                result = mask_personal_info(f'성명\n{following}\n홍길동 귀하')
+
+                self.assertEqual(result['masked_text'], '성명\n[이름 가림]\n[이름 가림] 귀하')
+                self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
     def test_agency_recipient_on_next_line_keeps_name_and_masks_other_field(self):
         text = '수신\n아산시장 연락처: 010-1234-5678'
 
