@@ -328,6 +328,13 @@ class JudgeTests(unittest.TestCase):
         for source in blocked:
             with self.subTest(blocked=source):
                 self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # 숫자 뒤 마침표("2026. 10. 5.")는 문장 끝이 아님 → 괄호 안 날짜 뒤 단서도 같은 문장 (CodeRabbit)
+        for source in ("입국한 날부터 90일 이내에 신고해야 합니다(2026. 10. 5.부터 영업일 기준 적용).",
+                       "입국한 날부터 90일 이내에 신고해야 합니다(2026. 10. 5.부터 공휴일 제외).",
+                       "입국한 날부터 90일 이내에 신고합니다(2026.10.5. 이후 재입국자 포함).",
+                       "입국한 날부터 90일 이내에 신고합니다 1. 공휴일 제외 2. 기타"):
+            with self.subTest(number_dot=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
         # 금지어·단서가 다음 문장에만 있으면 영향 없음
         for source in ("입국한 날부터 90일 이내에 신고합니다. 재입국한 외국인은 별도로 안내합니다.",
                        "입국한 날부터 90일 이내에 신고합니다! 공휴일에는 방문할 수 없습니다.",
