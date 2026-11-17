@@ -158,32 +158,65 @@ def quote_base_kind(quote: str) -> str | None:
     return kinds.pop() if len(kinds) == 1 else None
 
 
-def base_kind(rule: Rule) -> str | None:
-    """코드가 정한 기준일 종류. LLM의 base·baseLabels가 모두 그 종류의 이름이어야 함 (아니면 None)."""
-    kind = quote_base_kind(rule.quote)
-    if kind is None:
+def source_passages(quote: str, source_text: str) -> list[str] | None:
+    """공식 자료 원문에서 인용문이 나오는 모든 위치의 '원문 구절' (앞 문맥 + 인용 부분). 쓸 수 없으면 None.
+
+    - 인용문은 공백을 무시하고 찾는다.
+    - 원문 구절 = 그 위치 앞쪽의 마지막 문장부호·줄바꿈 다음부터 인용 부분 끝까지.
+      (LLM이 "재입국한 날부터"에서 "입국한 날부터"만 잘라 인용해도 원문 문맥으로 검사하려고)
+    - 인용 위치 바로 앞 글자가 한글·영문·숫자면(예: "재" + "입국한 날") None.
+    - 여러 번 나오면 모든 위치를 돌려주고, 하나라도 앞 글자 검사에 걸리면 None. 한 번도 없으면 None.
+    """
+    key = _squeeze(quote)
+    if not key or not source_text:
         return None
+    pattern = re.compile(r"\s*".join(map(re.escape, key)))
+    passages = []
+    for m in pattern.finditer(source_text):
+        start = m.start()
+        if start and re.match(r"[가-힣A-Za-z0-9]", source_text[start - 1]):
+            return None
+        before = source_text[:start]
+        cut = max([before.rfind("\n"), *(b.end() - 1 for b in PHRASE_BREAK_RE.finditer(before))])
+        passages.append(before[cut + 1:] + m.group(0))
+    return passages or None
+
+
+def base_kind(rule: Rule, source_text: str | None = None) -> str | None:
+    """코드가 정한 기준일 종류. LLM의 base·baseLabels가 모두 그 종류의 이름이어야 함 (아니면 None).
+
+    source_text를 주면 인용문이 아니라 공식 원문 구절(source_passages)로 판단한다.
+    인용문이 원문에 여러 번 나오면 모든 위치가 같은 종류여야 한다.
+    """
+    passages = [rule.quote] if source_text is None else source_passages(rule.quote, source_text)
+    if not passages:
+        return None
+    kinds = {quote_base_kind(p) for p in passages}
+    if len(kinds) != 1 or None in kinds:
+        return None
+    kind = kinds.pop()
     allowed = {_squeeze(name) for name in BASE_KINDS[kind][2]}
     if any(_squeeze(name) not in allowed for name in (rule.base, *rule.labels)):
         return None
     return kind
 
 
-def quote_base_matches(rule: Rule) -> bool:
-    """인용문의 기준 표현이 표에 있고, LLM의 base·baseLabels가 그 기준과 같은지."""
-    return base_kind(rule) is not None
+def quote_base_matches(rule: Rule, source_text: str | None = None) -> bool:
+    """기준 표현(원문 구절 또는 인용문)이 표에 있고, LLM의 base·baseLabels가 그 기준과 같은지."""
+    return base_kind(rule, source_text) is not None
 
 
 def quote_supports_rule(rule: Rule, source_text: str) -> bool:
-    """인용문이 자료 본문에 실제로 있고, '기준부터 N단위 이내' 모양이며, 숫자·단위·기준이 rule과 같은지."""
-    if not rule.quote or _squeeze(rule.quote) not in _squeeze(source_text):
+    """인용문이 자료 원문에 있고, '기준부터 N단위 이내' 모양이며, 숫자·단위가 rule과 같고,
+    원문 구절 기준으로 기준일 종류가 정해지는지 (경계·긴 표현·금지어 검사는 원문 구절로)."""
+    if not rule.quote or not source_passages(rule.quote, source_text):
         return False
     if UNSUPPORTED_RE.search(rule.quote):
         return False
     periods = [(int(n), UNIT_WORDS[u]) for n, u in PERIOD_RE.findall(rule.quote)]
     if periods != [(rule.amount, rule.unit)]:  # 기간 표현이 정확히 하나이고 rule과 같아야 함
         return False
-    return quote_base_matches(rule)
+    return quote_base_matches(rule, source_text)
 
 
 def _date(y, m, d) -> date | None:
@@ -284,7 +317,7 @@ def judge(rule: Rule, source_text: str, original_text: str, deadlines) -> Judgem
 
     if not quote_supports_rule(rule, source_text):
         return unverified("공식 자료의 기한 기준을 계산할 수 있는 모양으로 확인하지 못했어요")
-    kind = base_kind(rule)  # 기준일 종류는 코드가 정함 (quote_supports_rule에서 이미 확인)
+    kind = base_kind(rule, source_text)  # 기준일 종류는 코드가 원문 구절로 정함 (quote_supports_rule에서 이미 확인)
     doc_date = pick_document_deadline(deadlines, rule.applies_to)
     if doc_date is None:
         return unverified("공식 기준과 비교할 문서 기한을 하나로 정하지 못했어요")

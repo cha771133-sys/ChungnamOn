@@ -4,7 +4,8 @@ from datetime import date
 
 from ai.chatbot import deadline_rules as dr
 
-SOURCE = "외국인등록\n이 민원은 입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
+# 공식 원문 구절 기준으로 검사하므로, 기준 표현이 구절 시작에 오는 문장 ("이 민원은 입국한 날부터"는 UNVERIFIED)
+SOURCE = "외국인등록\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
 ORIGINAL = "외국인등록 안내\n성명 [이름 가림]\n입국일 2026년 10월 5일\n신청 기한 2027년 1월 3일까지\n2026년 11월 10일"
 DEADLINES = [{"label": "신청 기한", "date": "2027-01-03"}]
 
@@ -213,6 +214,32 @@ class JudgeTests(unittest.TestCase):
         j = self.judge()
         self.assertEqual((j.status, j.source_ids), ("MATCHED", ["s1"]))
         self.assertEqual(j.official_value, "입국일(2026-10-05)부터 90일 이내 → 2027-01-03")
+
+    def test_quote_checked_in_official_source_context(self):
+        """인용문만 보지 않고 공식 원문에서 그 위치의 앞 문맥까지 붙인 '원문 구절'로 검사 (CodeRabbit)."""
+        short = "입국한 날부터 90일 이내"
+        gov24 = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이 입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        cases = [
+            ("원문 재입국 + 짧게 잘라 인용", "재입국한 날부터 90일 이내에 신고해야 합니다.", short, "UNVERIFIED"),
+            ("원문 다시 한국에 + 잘라 인용", "다시 한국에 입국한 날부터 90일 이내에 신고해야 합니다.", short, "UNVERIFIED"),
+            ("원문 정부24 + 짧게 인용", gov24, short, "MATCHED"),
+            ("원문 정부24 + 문장 전체 인용", gov24, gov24, "MATCHED"),
+            ("원문 이 민원은 + 잘라 인용", "이 민원은 입국한 날부터 90일 이내에 신청합니다.", short, "UNVERIFIED"),
+            # 여러 번 나오면 모든 위치가 통과해야 함
+            ("두 번, 둘 다 통과", "입국한 날부터 90일 이내에 신청.\n입국한 날부터 90일 이내에 방문.", short, "MATCHED"),
+            ("두 번, 하나는 재입국", "입국한 날부터 90일 이내에 신청.\n재입국한 날부터 90일 이내에 신고.", short,
+             "UNVERIFIED"),
+            ("두 번, 하나는 다시", "입국한 날부터 90일 이내에 신청. 다시 한국에 입국한 날부터 90일 이내에 신고.", short,
+             "UNVERIFIED"),
+        ]
+        for name, source, quote, expected in cases:
+            with self.subTest(name):
+                j = dr.judge(rule(quote=quote), source, ORIGINAL, DEADLINES)
+                self.assertEqual(j.status, expected, j.reason)
+        self.assertIsNone(dr.source_passages(short, "재입국한 날부터 90일 이내"))
+        self.assertIsNone(dr.source_passages(short, "출국한 날부터 30일 이내"))      # 원문에 없음
+        self.assertEqual(dr.source_passages(short, "안내\n귀하는, 입국한 날부터 90일 이내"), [" 입국한 날부터 90일 이내"])
 
     def test_changed_deadline_mismatch(self):
         j = self.judge(deadlines=[{"label": "신청 기한", "date": "2027-01-20"}])
