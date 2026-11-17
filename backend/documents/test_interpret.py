@@ -517,6 +517,14 @@ class InterpretMissingValueTests(SimpleTestCase):
             with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
                 self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount}, text=text)['amount'], '')
 
+    def test_quantity_with_multiplier_does_not_confirm_amount(self):
+        # 1.5만명·3천개 같은 수량은 금액이 아니다. 그 숫자로 금액이 확인되지 않는다(CodeRabbit).
+        text = TAX_NOTICE + '\n모집 인원 1.5만명\n배부 수량 3천개\n참가자 2만명'
+        for amount in ('1.5원', '1.5만원', '3원', '3천원', '2원', '2만원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount}, text=text)['amount'], '')
+        self.assertEqual(run(TAX_PAYLOAD, text=text)['amount'], '11,000원')
+
     def test_amount_without_won_in_document_is_kept(self):
         # 원문에 "원"이 없이 숫자만 적힌 금액 칸도 금액으로 본다.
         text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 11,000')

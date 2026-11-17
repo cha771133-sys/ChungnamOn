@@ -373,10 +373,14 @@ def _mask_address_value(value, *, require_address_form):
     return ADDRESS_MARK, 1, False
 
 
-def _mask_detail_lines(lines, start):
-    """start 줄부터 상세주소 모양의 줄을 다음 필드 전까지 가린다. 하나라도 가렸으면 True."""
+def _mask_detail_lines(lines, start, building_only=False):
+    """start 줄부터 상세주소 모양의 줄을 다음 필드 전까지 가린다. 하나라도 가렸으면 True.
+
+    building_only: 줄 전체가 동·호·층 숫자(건물 이름 포함)인 줄만 가린다. 주소 이름표 없이 찾은 주소 뒤에서 쓴다.
+    """
     index = start
-    while (index < len(lines) and (DETAIL_LINE.match(lines[index]) or BUILDING_LINE.match(lines[index]))
+    while (index < len(lines)
+           and (BUILDING_LINE.match(lines[index]) or (not building_only and DETAIL_LINE.match(lines[index])))
            and ADDRESS_MARK not in lines[index] and not _is_table_label(lines[index])):
         lines[index] = ADDRESS_MARK
         index += 1
@@ -438,6 +442,10 @@ def mask_addresses(lines):
             rest, rest_count = _mask_other_fields(rest)
             lines[index] = line[:match.start('rest')] + ADDRESS_MARK + rest
             count += 1 + rest_count
+            # 이름표 없는 주소도 다음 줄로 이어질 수 있다("견본빌라 302호"). 같은 주소라 개수는 늘리지 않는다.
+            # 이름표가 없어 근거가 약하므로 줄 전체가 동·호·층 모양일 때만 가린다.
+            if not rest.strip():
+                _mask_detail_lines(lines, index + 1, building_only=True)
     return count
 
 
@@ -659,18 +667,27 @@ def mask_names(lines):
         following = _next_value_index(lines, index)
         if following is None:
             continue
-        # 이름 뒤에 붙은 번호가 먼저 가려졌으면 가림 표시 앞부분만 이름으로 본다(같은 줄의 값과 같은 기준).
-        candidate, marked = _split_at_first_mark(lines[following])
+        # 같은 줄에 다른 항목이 이어지면("홍길동 연락처: …") 이름은 그 앞에서 끝난다. 같은 줄의 값과 같은 기준이다.
+        value, rest = _split_at_next_field(lines[following])
+        # 이름 뒤에 붙은 번호가 먼저 가려졌으면 가림 표시 앞부분만 이름으로 본다.
+        candidate, marked = _split_at_first_mark(value)
         # 앞부분이 비었으면 이미 가려진 것이고, 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
         if not candidate.strip() or any(char.isdigit() for char in candidate):
             continue
+        # 뒤에 남기는 항목도 다른 규칙으로 가린다.
+        rest, rest_count = _mask_other_fields(rest)
+        count += rest_count
         cleaned, latin_names = _take_latin_names(marked)
+        cleaned += rest
         if recipient:
             new_line, masked, names = _mask_recipient_value(candidate)
             if masked:
                 lines[following] = new_line + cleaned
                 found.extend(names + latin_names)
                 count += masked
+            elif rest_count:
+                # 받는 사람이 기관이라 이름은 그대로 두고, 뒤 항목에서 가린 것만 반영한다.
+                lines[following] = candidate + marked + rest
             continue
         found.extend([candidate, *latin_names])
         lines[following] = NAME_MARK + cleaned

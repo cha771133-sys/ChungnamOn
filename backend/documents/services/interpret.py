@@ -217,7 +217,9 @@ NUMBER = re.compile(r'(?<![\d,])\d{1,3}(?:,\s?\d{3})+(?!\d)|(?<![\d,])\d+(?!,?\d
 # 금액을 대조할 때 읽는 숫자 하나. NUMBER와 같고, 1.5만원·1.5원처럼 단위나 "원" 앞의 소수는 한 숫자로 읽는다.
 # 날짜(2026.8.31.)와 길이(3.5cm)의 점은 소수로 읽지 않는다.
 AMOUNT_NUMBER = re.compile(
-    r'(?<![\d,])(?:\d{1,3}(?:,\s?\d{3})+(?!\d)|\d+(?!,?\d))(?:\.\d+(?=[ \t]*(?:[십백천만억조경]|원)))?'
+    r'(?<![\d,])(?:\d{1,3}(?:,\s?\d{3})+(?!\d)|\d+(?!,?\d))'
+    # 배율 뒤에 다른 낱말이 붙은 수량(1.5만명)은 금액이 아니라 소수로 읽지 않는다.
+    r'(?:\.\d+(?=[ \t]*(?:(?:[십백천]?[만억조경]|[십백천])+[ \t]*(?:원|\d|\n|$)|원)))?'
 )
 # 숫자 뒤의 배율 단위. 11,000원과 11,000만원, 1천원과 1천억원은 숫자가 같아도 다른 금액이다.
 # 뒤에 원·숫자·끝이 와야 단위다("2026 천안시"의 천은 단위가 아니다).
@@ -392,8 +394,11 @@ def _numbers_with_units(text, amounts_only=False):
             counter = COUNTER_UNIT.match(rest)
             attached = ATTACHED_HANGUL.match(rest)
             if attached and not attached.group().startswith('원'):
-                # 금액 단위가 아닌 낱말이 숫자에 붙어 있다. 원문에서는 이름표가 붙어 읽힌 것일 수 있어 세는 말만 가린다.
-                unit = counter.group(1) if counter else ('' if amounts_only else attached.group())
+                # 금액 단위가 아닌 낱말이 숫자에 붙어 있다. 원문에서는 이름표가 붙어 읽힌 것일 수 있어("11,000세액")
+                # 세는 말과 배율로 시작하는 수량(1만명, 3천개)만 금액이 아닌 것으로 본다.
+                quantity = attached.group()[0] in '십백천만억조경'
+                unit = counter.group(1) if counter else (
+                    attached.group() if quantity or not amounts_only else '')
         if amounts_only and not is_money and (
             text[max(match.start() - 1, 0):match.start()] in CODE_BEFORE and match.start() > 0
             or rest[:1] in CODE_AFTER and rest[:1] != ''

@@ -394,6 +394,24 @@ class AddressTests(SimpleTestCase):
                     self.assertEqual(result['masked_count'], 1)
                     self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
 
+    def test_building_line_after_unlabeled_address_is_masked(self):
+        """주소 이름표 없이 찾은 주소도 다음 줄이 동·호·층 모양이면 함께 가린다."""
+        for detail in ('견본빌라 302호', '견본빌라302호', '101동 1001호'):
+            with self.subTest(detail=detail):
+                result = mask_personal_info(f'충청남도 아산시 배방읍 가상로 123\n{detail}\n세액 6,250원')
+
+                self.assertEqual(result['masked_text'], '충청남도 아산시 [주소 가림]\n[주소 가림]\n세액 6,250원')
+                self.assertEqual(result['masked_count'], 1)
+                self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
+    def test_other_line_after_unlabeled_address_is_kept(self):
+        # 이름표가 없는 주소 뒤에서는 줄 전체가 동·호·층 모양일 때만 가린다.
+        for following in ('우리 시는 납부 편의를 위해 노력합니다.', '납부기한 2026년 8월 31일', '시청 본관 2층 세무과로 방문해 주세요.'):
+            with self.subTest(following=following):
+                text = f'충청남도 아산시 배방읍 가상로 123\n{following}'
+
+                self.assertEqual(masked(text), f'충청남도 아산시 [주소 가림]\n{following}')
+
     def test_amount_or_other_field_line_after_address_is_not_detail(self):
         """동·호·층 숫자가 있어도 금액이나 다른 항목이 적힌 줄은 주소로 보지 않는다."""
         for following in (
@@ -442,6 +460,25 @@ class NameTests(SimpleTestCase):
                 self.assertEqual(result['masked_text'], f'{expected}\n[이름 가림] 님께 안내드립니다.')
                 self.assertNotIn('HONG', result['masked_text'])
                 self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
+    def test_name_on_next_line_followed_by_other_field_is_masked(self):
+        """이름표 다음 줄에 이름과 다른 항목이 함께 있어도 이름만 가리고, 다시 나온 이름도 가린다(CodeRabbit)."""
+        for text, expected in (
+            ('성명\n홍길동 연락처: 010-1234-5678', '성명\n[이름 가림] 연락처: [전화번호 가림]'),
+            ('납세자\n홍길동 여권번호: M12345678', '납세자\n[이름 가림] 여권번호: [여권번호 가림]'),
+            ('수신\n홍길동 연락처: 010-1234-5678', '수신\n[이름 가림] 연락처: [전화번호 가림]'),
+        ):
+            with self.subTest(text=text):
+                result = mask_personal_info(f'{text}\n홍길동 귀하')
+
+                self.assertEqual(result['masked_text'], f'{expected}\n[이름 가림] 귀하')
+                self.assertEqual(result['masked_count'], 3)
+                self.assertEqual(mask_personal_info(result['masked_text'])['masked_text'], result['masked_text'])
+
+    def test_agency_recipient_on_next_line_keeps_name_and_masks_other_field(self):
+        text = '수신\n아산시장 연락처: 010-1234-5678'
+
+        self.assertEqual(masked(text), '수신\n아산시장 연락처: [전화번호 가림]')
 
     def test_agency_recipient_followed_by_masked_number_is_kept(self):
         """받는 사람이 기관이면 뒤의 번호만 가려지고 기관 이름은 남는다."""
