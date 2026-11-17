@@ -296,6 +296,34 @@ class JudgeTests(unittest.TestCase):
         start = text.index("입국한")
         self.assertEqual(dr.rule_kind_at(text, start, text.index("신청")), "입국일")
 
+    def test_words_after_quote_in_same_sentence(self):
+        """인용 범위 밖이어도 규칙이 든 문장 끝까지(괄호 안 포함) 금지어·단서를 검사 (CodeRabbit). 다음 문장은 제외."""
+        short = "입국한 날부터 90일 이내"
+        blocked = [
+            "입국한 날부터 90일 이내에 신고해야 합니다(재입국한 외국인에 한함).",
+            "입국한 날부터 90일 이내에 신고해야 합니다(재입국자의 경우).",
+            "입국한 날부터 90일 이내에 신고하되 다시 입국하면 새로 신고합니다.",
+            # 같은 종류의 구멍: 기간 계산 방식이 바뀌거나 뜻이 뒤집히는 단서
+            "입국한 날부터 90일 이내(공휴일 제외)에 신고합니다.",
+            "입국한 날부터 90일 이내(영업일 기준)에 신고합니다.",
+            "입국한 날부터 90일 이내에는 신고할 수 없습니다.",
+            "입국한 날부터 90일 이내에 신고하며, 기간 연장이 가능합니다.",
+            "입국한 날부터 90일 이내에 신고하고, 다만 예외가 있습니다.",
+        ]
+        for source in blocked:
+            with self.subTest(blocked=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # 금지어·단서가 다음 문장에만 있으면 영향 없음
+        for source in ("입국한 날부터 90일 이내에 신고합니다. 재입국한 외국인은 별도로 안내합니다.",
+                       "입국한 날부터 90일 이내에 신고합니다! 공휴일에는 방문할 수 없습니다.",
+                       "입국한 날부터 90일 이내에 신고합니다.\n(재입국자는 다음 안내를 따릅니다.)"):
+            with self.subTest(next_sentence=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "MATCHED")
+        # 정부24 원문(줄 나뉨 포함)은 계속 MATCHED
+        gov24 = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이\n입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는\n출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        self.assertEqual(dr.judge(rule(quote=short), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
+
     def test_source_context_not_cut_at_newline(self):
         """공식 원문 줄바꿈에서 문맥을 자르지 않음 (CodeRabbit #115). 줄바꿈·연속 공백은 공백 하나."""
         short = "입국한 날부터 90일 이내"

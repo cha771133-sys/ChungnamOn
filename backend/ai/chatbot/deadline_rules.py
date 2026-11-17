@@ -138,6 +138,10 @@ def _one_line(text: str) -> str:
     return re.sub(r"\s+", " ", text or "")
 
 
+# 규칙이 든 문장에 있으면 기간 계산 방식이 바뀌거나(공휴일 제외·영업일) 뜻이 뒤집힐 수 있는(할 수 없음·불가) 말.
+# 인용 범위 밖이어도 같은 문장이면 규칙을 쓰지 않는다 (UNVERIFIED)
+QUALIFIER_WORDS = ("제외", "영업일", "근무일", "평일", "공휴일", "휴일", "주말", "토요일", "일요일",
+                   "수없", "불가", "하지않", "연장", "다만")
 # 규칙 하나: "부터/로부터 N단위 이내". 기준 표현은 이 바로 앞
 # core = 인용 구간 안에 있어야 하는 부분, 뒤의 '에'("이내에")는 경계 계산용으로만 포함
 RULE_RE = re.compile(r"(?P<core>(?:으로부터|로부터|부터)\s*(\d{1,4})\s*(개월|일|주|달|년)\s*(?:이내|안에|내에|까지))에?")
@@ -148,6 +152,12 @@ CONNECTIVE_RE = re.compile(r"(?:하고|하며|하거나|이고|이며|되고|되
 def _sentence_start(text: str, pos: int) -> int:
     """pos가 든 문장의 시작 위치 (앞쪽 마지막 마침표·물음표·느낌표 다음)."""
     return max([0, *(b.end() for b in SENTENCE_BREAK_RE.finditer(text, 0, pos))])
+
+
+def _sentence_end(text: str, pos: int) -> int:
+    """pos가 든 문장의 끝 위치 (뒤쪽 첫 마침표·물음표·느낌표까지, 없으면 글 끝). 괄호 안도 포함."""
+    b = SENTENCE_BREAK_RE.search(text, pos)
+    return b.end() if b else len(text)
 
 
 def _kind_of_clause(raw_clause: str) -> str | None:
@@ -166,7 +176,8 @@ def rule_kind_at(text: str, start: int, end: int) -> str | None:
     - 인용 구간 안의 "부터 N단위 이내"가 정확히 하나여야 한다.
     - 기준 표현은 그 '부터' 바로 앞 구절: 문장 시작·문장부호(쉼표 등)·이어 주는 말(하고·하며 …)·
       앞 규칙("~부터 N일 이내") 너머로는 넘어가지 않는다. 인용 시작 바로 앞에 공백으로만 붙은 말은 포함.
-    - 금지어(다시·재입국·재차·새로·재입)는 문장 전체(문장 시작 ~ 인용 끝)에서 검사한다.
+    - 금지어(다시·재입국·재차·새로·재입)와 단서(공휴일 제외·영업일·할 수 없음 …)는 규칙이 든 문장 전체
+      (문장 시작 ~ 문장 끝, 괄호 안 포함)에서 검사한다. 인용 범위 밖이어도 같은 문장이면 UNVERIFIED. 다음 문장은 제외.
     예) "입국한 날부터 90일 이내에 등록하고, 체류지를 변경한 날부터 14일 이내에 신고"에서
         두 번째 규칙만 인용 → 체류지 변경일 (앞 규칙의 '입국한 날'을 쓰지 않음)
     """
@@ -175,7 +186,8 @@ def rule_kind_at(text: str, start: int, end: int) -> str | None:
         return None
     rule_start = rules[0].start()
     sentence_start = _sentence_start(text, rule_start)
-    if any(word in _squeeze(text[sentence_start:end]) for word in REENTRY_WORDS):
+    sentence = _squeeze(text[sentence_start:_sentence_end(text, rules[0].end())])
+    if any(word in sentence for word in (*REENTRY_WORDS, *QUALIFIER_WORDS)):
         return None
     cut = sentence_start
     for pattern in (PHRASE_BREAK_RE, CONNECTIVE_RE, RULE_RE):  # 이 경계들 너머의 말은 기준 표현이 아님
