@@ -269,11 +269,20 @@ export async function connectPush(userId: string | number): Promise<PushStatus> 
     })
     try {
       // 앞서 걸린 해제(로그아웃·세션 만료)가 끝난 뒤, 이 계정이 그대로일 때만 등록한다
-      const registered = await enqueue(async () => {
-        if (!isCurrent(o)) return false
-        await fcm.sdk.register(fcm.messaging, { vapidKey, serviceWorkerRegistration })
-        return true
-      })
+      // 앞선 해제가 멈춰 차례가 오지 않아도 '연결 중'에 갇히지 않게 기다리는 시간을 제한한다.
+      // 시간이 지나면 '실패'로 보여 주고, 등록은 대기열에 남아 차례가 오면 실행된다 (성공하면 '연결됨'으로 바뀜)
+      const registered = await withTimeout(
+        enqueue(async () => {
+          if (!isCurrent(o)) return false
+          await fcm.sdk.register(fcm.messaging, { vapidKey, serviceWorkerRegistration })
+          return true
+        }),
+        FID_WAIT_MS,
+      )
+      if (registered === undefined) {
+        if (isCurrent(o)) setStatus('failed')
+        return status
+      }
       if (!registered) return status
       const ok = await done
       if (isCurrent(o) && !ok) setStatus('failed')
@@ -354,8 +363,10 @@ function unregisterInQueue(session: number): Promise<void> {
   return enqueue(async () => {
     if (!pending) return
     const fcm = await pending.catch(() => null)
-    // 차례가 오기 전에 다른 계정으로 로그인했으면 그 계정의 등록을 지우지 않는다
-    if (fcm && tokenStore.session() === session) await fcm.sdk.unregister(fcm.messaging).catch(() => {})
+    // 차례가 오기 전에 다른 계정으로 새로 로그인했으면 그 계정이 이 등록을 이어 쓰므로 지우지 않는다.
+    // 로그아웃만 된 경우(세션 번호는 바뀌었지만 토큰이 없음)에는 예약한 해제를 그대로 실행한다
+    const reloggedIn = tokenStore.session() !== session && Boolean(tokenStore.getRefresh())
+    if (fcm && !reloggedIn) await fcm.sdk.unregister(fcm.messaging).catch(() => {})
   })
 }
 
