@@ -85,6 +85,9 @@ REGION_PREFIX = re.compile(rf'^[ \t]*(?P<keep>{_REGION})(?=[ \t,]|$)(?P<rest>.*)
 DETAIL_LINE = re.compile(
     r'^[ \t]*(?:[가-힣0-9]+(?:읍|면|동|리|로|길)(?=[ \t\d,]|$)|\d+(?:-\d+)?(?:번지|동|호|층)(?=[ \t,]|$))'
 )
+# 건물 이름으로 시작하는 상세주소 줄: "가상아파트 101동 1001호", "견본빌라 302호", "행복오피스텔 5층 501호".
+# 동·호·층 숫자가 있어야 하고, 금액(…원)이나 다른 항목(콜론)이 있는 줄은 주소로 보지 않는다.
+BUILDING_LINE = re.compile(r'^(?![^\n]*(?:\d[ \t]*원|[:：]))[^\n]*?(?<!\d)\d+(?:-\d+)?[ \t]*(?:동|호|층)(?=[ \t,)]|$)')
 # 라벨 없이 줄 안에 나온 주소: 시·군·구 + 읍·면·동·도로명 + 숫자
 ADDRESS_IN_LINE = re.compile(
     rf'(?:(?<=[ \t:：(])|^)(?P<keep>{_REGION})[ \t]+(?P<rest>{_DETAIL_START}[^\n]*\d[^\n]*)$'
@@ -254,6 +257,19 @@ def _digit_count(text):
     return sum(char.isdigit() for char in text)
 
 
+def _split_at_first_mark(value):
+    """값을 (첫 가림 표시 앞부분, 가림 표시부터 끝까지)로 나눈다. 앞부분 끝의 띄어쓰기는 뒤로 넘긴다.
+
+    "홍길동 [전화번호 가림]"처럼 이름 뒤에 붙은 번호가 먼저 가려진 값에서 이름만 꺼낼 때 쓴다.
+    가림 표시가 없으면 뒤는 빈 문자열이다.
+    """
+    positions = [value.find(mark) for mark in _ALL_MARKS if mark in value]
+    if not positions:
+        return value, ''
+    head = value[:min(positions)]
+    return head.rstrip(), value[len(head.rstrip()):]
+
+
 def _split_at_next_field(value):
     """값을 (이 항목의 값, 같은 줄에 이어진 다음 항목)으로 나눈다. 다음 항목이 없으면 뒤는 빈 문자열."""
     candidates = [match.start() for match in (NEXT_FIELD_LABEL.search(value), INLINE_NEXT_LABEL.search(value)) if match]
@@ -345,8 +361,8 @@ def _mask_address_value(value, *, require_address_form):
 def _mask_detail_lines(lines, start):
     """start 줄부터 상세주소 모양의 줄을 다음 필드 전까지 가린다. 하나라도 가렸으면 True."""
     index = start
-    while (index < len(lines) and DETAIL_LINE.match(lines[index]) and ADDRESS_MARK not in lines[index]
-           and not _is_table_label(lines[index])):
+    while (index < len(lines) and (DETAIL_LINE.match(lines[index]) or BUILDING_LINE.match(lines[index]))
+           and ADDRESS_MARK not in lines[index] and not _is_table_label(lines[index])):
         lines[index] = ADDRESS_MARK
         index += 1
     return index > start
@@ -606,9 +622,11 @@ def mask_names(lines):
             # 이름을 가리지 않는 경우에도 뒤 항목은 가린다.
             rest, rest_count = _mask_other_fields(rest)
             count += rest_count
-            # 이름 자체가 이미 가려졌는지만 본다. 뒤에 이어진 다른 항목의 가림 표시는 상관없다.
-            if not name.strip() or any(mark in name for mark in _ALL_MARKS) \
-                    or (not has_colon and not _looks_like_name(name)):
+            # 이름 뒤에 붙은 번호가 먼저 가려졌으면("홍길동 [전화번호 가림]") 가림 표시 앞부분만 이름으로 본다.
+            # 앞부분이 비어 있으면 이름이 이미 가려진 것이다.
+            name, marked = _split_at_first_mark(name)
+            rest = marked + rest
+            if not name.strip() or (not has_colon and not _looks_like_name(name)):
                 lines[index] = line[:match.start('value')] + name + rest
                 continue
             if recipient:
@@ -625,19 +643,20 @@ def mask_names(lines):
         following = _next_value_index(lines, index)
         if following is None:
             continue
-        candidate = lines[following]
-        # 다른 가림 표시나 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
-        if any(mark in candidate for mark in _ALL_MARKS) or any(char.isdigit() for char in candidate):
+        # 이름 뒤에 붙은 번호가 먼저 가려졌으면 가림 표시 앞부분만 이름으로 본다(같은 줄의 값과 같은 기준).
+        candidate, marked = _split_at_first_mark(lines[following])
+        # 앞부분이 비었으면 이미 가려진 것이고, 숫자가 있으면 이름이 아니다. 표의 값 칸이라 문장 끝 검사는 하지 않는다.
+        if not candidate.strip() or any(char.isdigit() for char in candidate):
             continue
         if recipient:
             new_line, masked, names = _mask_recipient_value(candidate)
             if masked:
-                lines[following] = new_line
+                lines[following] = new_line + marked
                 found.extend(names)
                 count += masked
             continue
         found.append(candidate)
-        lines[following] = NAME_MARK
+        lines[following] = NAME_MARK + marked
         count += 1
 
     # 뒤 항목 안에서 찾은 이름도 문서 전체에서 가릴 수 있게 mask_text()로 넘긴다.

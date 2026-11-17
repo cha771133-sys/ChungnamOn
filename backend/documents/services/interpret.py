@@ -203,8 +203,9 @@ YEAR = re.compile(r'(?<!\d)(20\d{2})(?!\d)')
 # 기간 표기(8.16.~8.31.)의 물결표·줄표
 RANGE_SEP = r'\s*[~∼〜～–-]\s*'
 # 2026.8.16.~8.31. 처럼 끝 날짜의 연도를 줄인 기간. 시작 날짜의 연도를 끝 날짜에 쓴다.
+# 끝 날짜가 시작 날짜보다 앞이면(2026.12.16.~1.3.) 해를 넘긴 기간이라 다음 해로 읽는다.
 RANGE_END = re.compile(
-    r'(?<!\d)(\d{4})\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{1,2}\s*\.?' + RANGE_SEP
+    r'(?<!\d)(\d{4})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2})\s*\.?' + RANGE_SEP
     + r'(\d{1,2})\s*[./]\s*(\d{1,2})(?!\d)'
 )
 # 8.16.~8.31. 처럼 양쪽 모두 연도가 없는 기간. 점으로만 적힌 월.일은 기간 모양일 때만 날짜로 본다.
@@ -213,6 +214,8 @@ YEARLESS_RANGE = re.compile(
 )
 # 금액 숫자 하나. 11,000 / 11, 000(OCR 띄어쓰기) / 11000
 NUMBER = re.compile(r'(?<![\d,])\d{1,3}(?:,\s?\d{3})+(?!\d)|(?<![\d,])\d+(?!,?\d)')
+# 금액 숫자와 바로 뒤의 배율 단위(억·만·천 등). 11,000원과 11,000만원은 숫자가 같아도 다른 금액이다.
+NUMBER_WITH_UNIT = re.compile(rf'({NUMBER.pattern})\s*(억|천만|백만|십만|만|천|백)?')
 # 금액 칸: 칸 이름 바로 뒤(같은 줄이나 다음 줄)에 적힌 "숫자+원". AI가 금액을 비워 보냈을 때만 쓴다.
 AMOUNT_FIELD = re.compile(
     r'(?:납부\s*할?\s*금액|납기\s*내\s*금액|고지\s*금액|합계\s*금액|수수료|세액)\s*[:：]?[ \t]*\n?[ \t]*'
@@ -347,6 +350,11 @@ def _numbers(text):
     return {_digits(number) for number in NUMBER.findall(text)}
 
 
+def _numbers_with_units(text):
+    """글자에 적힌 (숫자, 배율 단위) 쌍들. 단위가 없으면 빈 문자열이다."""
+    return {(_digits(number), unit) for number, unit in NUMBER_WITH_UNIT.findall(text)}
+
+
 def _phones_in_text(text):
     """원문에 적힌 전화번호들(숫자만)."""
     return {_digits(phone) for pattern in PHONE_PATTERNS for phone in pattern.findall(text)}
@@ -362,8 +370,9 @@ def _dates_in_text(text):
             month_day.add((int(month), int(day)))
     for year, month, day in NUMERIC_DATE.findall(text):
         full.add((int(year), int(month), int(day)))
-    for year, month, day in RANGE_END.findall(text):
-        full.add((int(year), int(month), int(day)))
+    for year, start_month, start_day, month, day in RANGE_END.findall(text):
+        crosses_year = (int(month), int(day)) < (int(start_month), int(start_day))
+        full.add((int(year) + crosses_year, int(month), int(day)))
     # 연도가 적힌 기간은 위에서 읽었다. 그 부분을 연도 없는 기간으로 또 읽으면 문서의 다른 연도와 짝지어진다.
     for start_month, start_day, end_month, end_day in YEARLESS_RANGE.findall(RANGE_END.sub(' ', text)):
         month_day.update({(int(start_month), int(start_day)), (int(end_month), int(end_day))})
@@ -471,8 +480,9 @@ def _checked_amount(amount, masked_text):
         if _digits(amount):
             return None
         return amount if re.sub(r'\s+', '', amount) in re.sub(r'\s+', '', masked_text) else None
-    written = _numbers(masked_text)
-    if any(number not in written for number in numbers):
+    # 숫자와 배율 단위를 함께 본다. 원문이 11,000원인데 11,000만원으로 온 값은 쓰지 않는다.
+    written = _numbers_with_units(masked_text)
+    if any(pair not in written for pair in _numbers_with_units(amount)):
         return None
     return amount
 

@@ -339,6 +339,17 @@ class InterpretDeadlineTests(SimpleTestCase):
                 with self.assertLogs(interpret_module.logger, 'WARNING'):
                     self.assertEqual(self.deadlines(wrong, text=text), [])
 
+    def test_range_crossing_new_year_ends_in_next_year(self):
+        """끝 날짜의 연도를 줄인 기간이 해를 넘기면(12월~1월) 끝 날짜는 다음 해다."""
+        for text in ('신청기간 2026.12.16.~1.3.', '신청기간 2026. 12. 16. ~ 1. 3.', '신청기간 2026-12-16 ~ 1.3.'):
+            with self.subTest(text=text):
+                right = [{'label': '신청 기한', 'date': '2027-01-03', 'kind': 'other'}]
+                wrong = [{'label': '신청 기한', 'date': '2026-01-03', 'kind': 'other'}]
+
+                self.assertEqual(self.deadlines(right, text=text), [{'label': '신청 기한', 'date': '2027-01-03'}])
+                with self.assertLogs(interpret_module.logger, 'WARNING'):
+                    self.assertEqual(self.deadlines(wrong, text=text), [])
+
     def test_dotted_numbers_outside_range_are_not_dates(self):
         items = [{'label': '제출 기한', 'date': '2026-03-05', 'kind': 'other'}]
 
@@ -447,6 +458,19 @@ class InterpretMissingValueTests(SimpleTestCase):
             with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING') as logs:
                 self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
                 self.assertNotIn(amount, ''.join(logs.output))
+
+    def test_amount_with_different_unit_is_emptied(self):
+        # 숫자가 같아도 배율 단위(만·천·억)가 원문과 다르면 다른 금액이다.
+        for amount in ('11,000만원', '11,000 만 원', '11,000천원', '11,000억원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount})['amount'], '')
+
+    def test_amount_with_unit_written_in_document_is_kept(self):
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 3만 5천 원')
+
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3만 5천 원'}, text=text)['amount'], '3만 5천 원')
+        with self.assertLogs(interpret_module.logger, 'WARNING'):
+            self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3천 5만 원'}, text=text)['amount'], '')
 
     def test_amount_without_number_must_be_written_in_document(self):
         # 금액이 적힌 문서에서 AI가 "무료"라고 지어내면 비운다.
