@@ -6,6 +6,7 @@
 import base64
 import json
 import logging
+import math
 import tempfile
 from unittest import mock
 
@@ -173,6 +174,122 @@ class NormalizeRegistrationNumberTests(SimpleTestCase):
 
     def test_other_label_does_not_protect_hyphenated_number(self):
         self.assertEqual(normalize_registration_numbers('고지번호: 900101 - 5123456'), '고지번호: 900101-5123456')
+
+
+def cell(text, column, row, angle=0.0, confidence=0.99, line_break=True):
+    """표의 (열, 행) 자리에 놓인 단어. 종이를 angle도 돌려 찍은 것처럼 상자 좌표를 돌려서 붙인다."""
+    left, top = 200 + column * 500, 200 + row * 60
+    corners = [(left, top), (left + 200, top), (left + 200, top + 30), (left, top + 30)]
+    cos, sin = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    item = field(text, confidence, line_break)
+    item['boundingPoly'] = {'vertices': [{'x': x * cos - y * sin, 'y': x * sin + y * cos} for x, y in corners]}
+    return item
+
+
+def table(angle, order=None):
+    """이름표(왼쪽 열)와 값(오른쪽 열)이 네 행으로 놓인 표. order는 CLOVA가 돌려준 줄 순서다."""
+    cells = [
+        cell('성명', 0, 0, angle), cell('홍길동', 1, 0, angle),
+        cell('주소', 0, 1, angle), cell('아산시 가상로 1', 1, 1, angle),
+        cell('연락처', 0, 2, angle), cell('041-000-0000', 1, 2, angle),
+        cell('입국일', 0, 3, angle), cell('2026년 10월 5일', 1, 3, angle),
+    ]
+    return [page(*(cells[index] for index in order or range(len(cells))))]
+
+
+TABLE_TEXT = '성명\n홍길동\n주소\n아산시 가상로 1\n연락처\n041-000-0000\n입국일\n2026년 10월 5일'
+# 실제 응답에서 본 모양: 값이 이름표에서 떨어지고 다른 이름표가 사이에 낀다.
+SCRAMBLED = (2, 0, 1, 6, 4, 5, 7, 3)
+SCRAMBLED_TEXT = '주소\n성명\n홍길동\n입국일\n연락처\n041-000-0000\n2026년 10월 5일\n아산시 가상로 1'
+
+
+@override_settings(OCR_MODE='dummy', MASK_MODE='dummy')
+class SkewedLineOrderTests(SimpleTestCase):
+    """기울여 찍은 사진의 줄 순서. 기울기가 기준 이상일 때만 좌표로 다시 맞춘다."""
+
+    def test_skewed_page_is_reordered_by_position(self):
+        for angle in (6, 10.5, 14.9, 29.1, -30, 90, 180):
+            with self.subTest(angle=angle):
+                self.assertEqual(build_text(table(angle, SCRAMBLED)), TABLE_TEXT)
+
+    def test_upright_page_keeps_clova_order(self):
+        # 정면 사진과 PDF는 CLOVA가 준 순서를 그대로 쓴다. 순서가 달라 보여도 손대지 않는다.
+        for angle in (0, 2, -4.9):
+            with self.subTest(angle=angle):
+                self.assertEqual(build_text(table(angle, SCRAMBLED)), SCRAMBLED_TEXT)
+
+    def test_page_without_boxes_keeps_clova_order(self):
+        images = table(30, SCRAMBLED)
+        for item in images[0]['fields']:
+            del item['boundingPoly']
+
+        self.assertEqual(build_text(images), SCRAMBLED_TEXT)
+
+    def test_line_without_box_keeps_clova_order(self):
+        # 한 줄이라도 좌표가 없으면 그 줄을 어디에 둘지 알 수 없어 다시 맞추지 않는다.
+        images = table(30, SCRAMBLED)
+        del images[0]['fields'][3]['boundingPoly']
+
+        self.assertEqual(build_text(images), SCRAMBLED_TEXT)
+
+    def test_malformed_boxes_are_ignored(self):
+        for broken in (
+            None, 'box', {}, {'vertices': None}, {'vertices': [{'x': 1, 'y': 1}]},
+            {'vertices': [{'x': 1, 'y': 1}, {'x': 2}, {'x': 2, 'y': 2}, {'x': 1, 'y': 2}]},
+            {'vertices': [{'x': '1', 'y': 1}, {'x': 2, 'y': 1}, {'x': 2, 'y': 2}, {'x': 1, 'y': 2}]},
+            {'vertices': [{'x': float('nan'), 'y': 1}, {'x': 2, 'y': 1}, {'x': 2, 'y': 2}, {'x': 1, 'y': 2}]},
+            {'vertices': [{'x': True, 'y': 1}, {'x': 2, 'y': 1}, {'x': 2, 'y': 2}, {'x': 1, 'y': 2}]},
+            {'vertices': ['a', 'b', 'c', 'd']},
+        ):
+            with self.subTest(broken=broken):
+                images = table(30, SCRAMBLED)
+                images[0]['fields'][0]['boundingPoly'] = broken
+
+                self.assertEqual(build_text(images), SCRAMBLED_TEXT)
+
+    def test_too_few_boxes_keep_clova_order(self):
+        # 상자가 몇 개뿐이면 기울기를 믿을 수 없다.
+        images = [page(cell('주소', 0, 1, 30), cell('성명', 0, 0, 30), cell('홍길동', 1, 0, 30))]
+
+        self.assertEqual(build_text(images), '주소\n성명\n홍길동')
+
+    def test_words_of_a_line_stay_together(self):
+        # CLOVA가 한 줄로 묶어 준 단어들은 나누지 않고 순서만 옮긴다.
+        images = [page(
+            cell('주소', 0, 1, 30), cell('성명', 0, 0, 30), cell('홍길동', 1, 0, 30),
+            cell('연락처', 0, 2, 30), cell('041-000-0000', 1, 2, 30),
+            cell('아산시', 1, 1, 30, line_break=False), cell('가상로 1', 1.5, 1, 30),
+        )]
+
+        self.assertEqual(build_text(images), '성명\n홍길동\n주소\n아산시 가상로 1\n연락처\n041-000-0000')
+
+    def test_each_page_is_judged_separately(self):
+        images = table(30, SCRAMBLED) + table(0, SCRAMBLED)
+
+        self.assertEqual(build_text(images), f'{TABLE_TEXT}\n{SCRAMBLED_TEXT}')
+
+    def test_reordered_text_is_masked_like_upright_text(self):
+        # 이름표와 값이 다시 붙어야 마스킹이 값을 찾는다. 주소가 이름표에서 떨어진 채로는 가려지지 않는다.
+        with override_settings(MASK_MODE='rules'):
+            upright = mask_personal_info(build_text(table(0)))
+            skewed = mask_personal_info(build_text(table(29.1, SCRAMBLED)))
+
+        self.assertEqual(skewed, upright)
+        self.assertIn('주소\n아산시 [주소 가림]', skewed['masked_text'])
+
+    def test_confidence_uses_the_same_line_order(self):
+        # 기한 이름표 다음 줄의 날짜를 찾는 계산도 다시 맞춘 순서를 본다.
+        def notice(angle, order):
+            cells = [
+                cell('납부기한', 0, 0, angle), cell('2026년 8월 11일', 1, 0, angle, confidence=0.3),
+                cell('세액', 0, 1, angle), cell('6,250원', 1, 1, angle),
+                cell('발행일', 0, 2, angle), cell('2026년 8월 1일', 1, 2, angle),
+            ]
+            return [page(*(cells[index] for index in order))]
+
+        # CLOVA가 준 순서에서는 "납부기한" 다음 줄이 "세액"이라 기한 날짜를 찾지 못한다.
+        self.assertEqual(calculate_confidence(notice(20, (0, 2, 3, 1, 4, 5))), 0.3)
+        self.assertEqual(calculate_confidence(notice(0, (0, 1, 2, 3, 4, 5))), 0.3)
 
 
 class CalculateConfidenceTests(SimpleTestCase):
