@@ -729,7 +729,7 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
             self.assertIn(b, texts)
 
     # ---- 상대 기한 (입국한 날부터 90일 이내) ----
-    REG_SOURCE = "# 외국인등록\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
+    REG_SOURCE = "# 외국인등록 안내입니다.\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
     REG_ORIGINAL = "외국인등록 안내\n성명 [이름 가림]\n입국일 2026년 10월 5일\n신청 기한 2027년 1월 3일까지\n수수료 35,000원"
 
     def registration(self, deadline="2027-01-03", original=None):

@@ -5,7 +5,7 @@ from datetime import date
 from ai.chatbot import deadline_rules as dr
 
 # 공식 원문 구절 기준으로 검사하므로, 기준 표현이 구절 시작에 오는 문장 ("이 민원은 입국한 날부터"는 UNVERIFIED)
-SOURCE = "외국인등록\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
+SOURCE = "외국인등록 안내입니다.\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
 ORIGINAL = "외국인등록 안내\n성명 [이름 가림]\n입국일 2026년 10월 5일\n신청 기한 2027년 1월 3일까지\n2026년 11월 10일"
 DEADLINES = [{"label": "신청 기한", "date": "2027-01-03"}]
 
@@ -239,7 +239,131 @@ class JudgeTests(unittest.TestCase):
                 self.assertEqual(j.status, expected, j.reason)
         self.assertIsNone(dr.source_passages(short, "재입국한 날부터 90일 이내"))
         self.assertIsNone(dr.source_passages(short, "출국한 날부터 30일 이내"))      # 원문에 없음
-        self.assertEqual(dr.source_passages(short, "안내\n귀하는, 입국한 날부터 90일 이내"), [" 입국한 날부터 90일 이내"])
+        self.assertEqual(dr.source_passages(short, "안내입니다.\n귀하는, 입국한 날부터 90일 이내"), [" 귀하는, 입국한 날부터 90일 이내"])
+
+    def test_reentry_word_before_punctuation_in_same_sentence(self):
+        """쉼표·괄호 앞 수식어도 같은 문장이면 금지어 검사 (CodeRabbit): '재입국 시, 외국인이 입국한 날부터' → UNVERIFIED."""
+        reentry = "재입국 시, 외국인이 입국한 날부터 90일 이내"
+        self.assertIsNone(dr.quote_base_kind(reentry))
+        self.assertEqual(dr.judge(rule(quote=reentry), reentry, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # LLM이 쉼표 뒤만 잘라 인용해도 원문 문장 기준으로 막힘
+        for quote in ("외국인이 입국한 날부터 90일 이내", "입국한 날부터 90일 이내"):
+            with self.subTest(quote=quote):
+                self.assertEqual(dr.judge(rule(quote=quote), reentry + "에 신고합니다.", ORIGINAL, DEADLINES).status,
+                                 "UNVERIFIED")
+        for source in ("(재입국의 경우) 입국한 날부터 90일 이내", "다시 오는 경우, 입국한 날부터 90일 이내"):
+            with self.subTest(source=source):
+                self.assertEqual(dr.judge(rule(quote="입국한 날부터 90일 이내"), source, ORIGINAL, DEADLINES).status,
+                                 "UNVERIFIED")
+        # 금지어가 앞 문장에 있으면 다른 문장이라 영향 없음
+        other_sentence = "재입국은 별도 절차입니다. 외국인이 입국한 날부터 90일 이내에 신청합니다."
+        self.assertEqual(dr.judge(rule(quote="외국인이 입국한 날부터 90일 이내에"), other_sentence, ORIGINAL,
+                                  DEADLINES).status, "MATCHED")
+
+    def test_base_and_period_only_from_quoted_rule(self):
+        """한 문장에 규칙이 둘이면, 기준·기간은 인용한 규칙에서만 (CodeRabbit). 앞 규칙의 기준을 쓰지 않음."""
+        source = "입국한 날부터 90일 이내에 등록하고, 체류지를 변경한 날부터 14일 이내에 신고합니다."
+        second = "체류지를 변경한 날부터 14일 이내에"
+        first = "입국한 날부터 90일 이내에"
+        doc = "안내문\n입국일 2026-10-05\n체류지 변경일 2026-11-02\n신고 기한 2026-10-19"
+        # 두 번째 규칙 인용 + base=입국일 + 기한=입국일+14일 → UNVERIFIED (기준이 다름)
+        wrong = dr.parse_rule({"base": "입국일", "baseLabels": ["입국일"], "amount": 14, "unit": "day",
+                               "appliesTo": "신고 기한", "quote": second, "sourceId": "s1"}, {"s1"})
+        self.assertEqual(dr.judge(wrong, source, doc, [{"label": "신고 기한", "date": "2026-10-19"}]).status,
+                         "UNVERIFIED")
+        # 두 번째 규칙 인용 + base=체류지 변경일 + 기한=체류지 변경일+14일 → MATCHED
+        right = dr.parse_rule({"base": "체류지 변경일", "baseLabels": ["체류지 변경일"], "amount": 14, "unit": "day",
+                               "appliesTo": "신고 기한", "quote": second, "sourceId": "s1"}, {"s1"})
+        j = dr.judge(right, source, doc, [{"label": "신고 기한", "date": "2026-11-16"}])
+        self.assertEqual((j.status, j.official_value),
+                         ("MATCHED", "체류지 변경일(2026-11-02)부터 14일 이내 → 2026-11-16"))
+        # 첫 번째 규칙 인용 + base=입국일 + 입국일+90일 → MATCHED
+        j = dr.judge(rule(quote=first), source, doc, [{"label": "신청 기한", "date": "2027-01-03"}])
+        self.assertEqual(j.status, "MATCHED")
+        # 쉼표 없이 '하고'로 이어져도, 줄이 나뉘어도 같음
+        for src in ("입국한 날부터 90일 이내에 등록하고 체류지를 변경한 날부터 14일 이내에 신고합니다.",
+                    "입국한 날부터 90일 이내에 등록하고\n체류지를 변경한 날부터 14일 이내에 신고합니다.",
+                    "입국한 날부터 90일 이내에 체류지를 변경한 날부터 14일 이내에 신고"):
+            with self.subTest(src=src):
+                self.assertEqual(dr.judge(wrong, src, doc, [{"label": "신고 기한", "date": "2026-10-19"}]).status,
+                                 "UNVERIFIED")
+                self.assertEqual(dr.judge(right, src, doc, [{"label": "신고 기한", "date": "2026-11-16"}]).status,
+                                 "MATCHED")
+        # 인용 안에 규칙이 둘이면 하나로 정할 수 없음 → 기준 없음
+        self.assertIsNone(dr.quote_base_kind(source))
+        # 기준 표현이 인용 시작 바로 앞에 공백으로만 붙어 있으면 포함 (정부24 '외국인이 입국한 날')
+        text = "체류하게 될 외국인이 입국한 날부터 90일 이내에 신청"
+        start = text.index("입국한")
+        self.assertEqual(dr.rule_kind_at(text, start, text.index("신청")), "입국일")
+
+    def test_real_gov24_registration_source_2a_matches(self):
+        """실제 데모 공식자료(Railway SourceDocument #2, 정부24 외국인등록) 원문 일부로 2A 판정 → MATCHED.
+
+        원문 줄바꿈 그대로. 규칙이 든 문장(앞 제목 줄들이 마침표 없이 이어짐)에 금지어·단서 없음.
+        """
+        real = ("수수료\n35,000원\n기본정보\n제공 내용\n이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 "
+                "외국인이 입국한 날부터 90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 "
+                "신청하여야 하는 민원입니다.")
+        original_2a = "외국인등록 안내\n입국일\n2026년 10월 5일\n신청 기한\n2027년 1월 3일까지"
+        for quote in ("외국인이 입국한 날부터 90일 이내에", "입국한 날부터 90일 이내", real):
+            with self.subTest(quote=quote[:20]):
+                j = dr.judge(rule(quote=quote), real, original_2a, DEADLINES)
+                self.assertEqual((j.status, j.official_value),
+                                 ("MATCHED", "입국일(2026-10-05)부터 90일 이내 → 2027-01-03"))
+
+    def test_words_after_quote_in_same_sentence(self):
+        """인용 범위 밖이어도 규칙이 든 문장 끝까지(괄호 안 포함) 금지어·단서를 검사 (CodeRabbit). 다음 문장은 제외."""
+        short = "입국한 날부터 90일 이내"
+        blocked = [
+            "입국한 날부터 90일 이내에 신고해야 합니다(재입국한 외국인에 한함).",
+            "입국한 날부터 90일 이내에 신고해야 합니다(재입국자의 경우).",
+            "입국한 날부터 90일 이내에 신고하되 다시 입국하면 새로 신고합니다.",
+            # 같은 종류의 구멍: 기간 계산 방식이 바뀌거나 뜻이 뒤집히는 단서
+            "입국한 날부터 90일 이내(공휴일 제외)에 신고합니다.",
+            "입국한 날부터 90일 이내(영업일 기준)에 신고합니다.",
+            "입국한 날부터 90일 이내에는 신고할 수 없습니다.",
+            "입국한 날부터 90일 이내에 신고하며, 기간 연장이 가능합니다.",
+            "입국한 날부터 90일 이내에 신고하고, 다만 예외가 있습니다.",
+        ]
+        for source in blocked:
+            with self.subTest(blocked=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # 숫자 뒤 마침표("2026. 10. 5.")는 문장 끝이 아님 → 괄호 안 날짜 뒤 단서도 같은 문장 (CodeRabbit)
+        for source in ("입국한 날부터 90일 이내에 신고해야 합니다(2026. 10. 5.부터 영업일 기준 적용).",
+                       "입국한 날부터 90일 이내에 신고해야 합니다(2026. 10. 5.부터 공휴일 제외).",
+                       "입국한 날부터 90일 이내에 신고합니다(2026.10.5. 이후 재입국자 포함).",
+                       "입국한 날부터 90일 이내에 신고합니다 1. 공휴일 제외 2. 기타"):
+            with self.subTest(number_dot=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # 금지어·단서가 다음 문장에만 있으면 영향 없음
+        for source in ("입국한 날부터 90일 이내에 신고합니다. 재입국한 외국인은 별도로 안내합니다.",
+                       "입국한 날부터 90일 이내에 신고합니다! 공휴일에는 방문할 수 없습니다.",
+                       "입국한 날부터 90일 이내에 신고합니다.\n(재입국자는 다음 안내를 따릅니다.)"):
+            with self.subTest(next_sentence=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "MATCHED")
+        # 정부24 원문(줄 나뉨 포함)은 계속 MATCHED
+        gov24 = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이\n입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는\n출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        self.assertEqual(dr.judge(rule(quote=short), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
+
+    def test_source_context_not_cut_at_newline(self):
+        """공식 원문 줄바꿈에서 문맥을 자르지 않음 (CodeRabbit #115). 줄바꿈·연속 공백은 공백 하나."""
+        short = "입국한 날부터 90일 이내"
+        for source in ("다시 한국에\n입국한 날부터 90일 이내", "재\n입국한 날부터 90일 이내", "재입국 시\n\n입국한 날부터 90일 이내",
+                       "새로\r\n  입국한 날부터 90일 이내"):
+            with self.subTest(source=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        self.assertEqual(dr.source_passages(short, "다시 한국에\n입국한 날부터 90일 이내"),
+                         ["다시 한국에 입국한 날부터 90일 이내"])
+        # 정부24 문장이 줄로 나뉘어도 긴 표현 '외국인이 입국한 날'로 MATCHED (짧게 인용해도, 나뉜 그대로 인용해도)
+        gov24 = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이\n입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는\n출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        for quote in (short, "외국인이 입국한 날부터 90일 이내에", "외국인이\n입국한 날부터 90일 이내에"):
+            with self.subTest(quote=quote):
+                self.assertEqual(dr.judge(rule(quote=quote), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
+        # 앞 문장이 마침표로 끝나면 줄바꿈 뒤는 새 문장 → 짧은 표현도 인정
+        self.assertEqual(dr.judge(rule(quote=short), "안내입니다.\n입국한 날부터 90일 이내에 신청", ORIGINAL,
+                                  DEADLINES).status, "MATCHED")
 
     def test_changed_deadline_mismatch(self):
         j = self.judge(deadlines=[{"label": "신청 기한", "date": "2027-01-20"}])
@@ -282,25 +406,32 @@ class JudgeTests(unittest.TestCase):
             with self.subTest(base=base, unit=unit):
                 r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": n, "unit": unit,
                                    "appliesTo": "신고 기한", "quote": quote, "sourceId": "s1"}, {"s1"})
-                j = dr.judge(r, f"안내\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
+                j = dr.judge(r, f"안내입니다.\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
                              [{"label": "신고 기한", "date": due}])
                 self.assertEqual(j.status, "MATCHED", j.reason)
 
     def test_unsupported_bases_are_unverified(self):
         """고지일·출생일·자격 취득일 등은 지원하지 않음: 문서에 날짜가 있어도 UNVERIFIED, reason에 공식 기준."""
+        # 인용문마다 맞는 기간·단위를 줘서, 기간 불일치가 아니라 '지원하지 않는 기준' 때문에 UNVERIFIED인지 확인
         cases = [
-            ("고지일", ["고지일"], "고지일로부터 1개월 이내에", "고지일 2027년 1월 31일", "2027-02-28"),
-            ("고지일", ["고지를 받은 날"], "고지를 받은 날부터 30일 이내", "고지를 받은 날 2026.10.05", "2026-11-04"),
-            ("고지일", ["고지한 날"], "고지한 날부터 30일 이내", "고지한 날 2026.10.05", "2026-11-04"),
-            ("자격 취득일", ["자격 취득일"], "자격 취득일부터 3개월 이내", "자격 취득일: 2026-08-31", "2026-11-30"),
-            ("출생일", ["출생일"], "출생한 날부터 1년 이내", "출생일 2028.02.29", "2029-02-28"),
-            ("출생일", ["생년월일"], "출생한 날부터 90일 이내", "생년월일: ******-*******", "2027-01-03"),
+            ("고지일", ["고지일"], "고지일로부터 1개월 이내에", 1, "month", "고지일 2027년 1월 31일", "2027-02-28"),
+            ("고지일", ["고지를 받은 날"], "고지를 받은 날부터 30일 이내", 30, "day",
+             "고지를 받은 날 2026.10.05", "2026-11-04"),
+            ("고지일", ["고지한 날"], "고지한 날부터 30일 이내", 30, "day", "고지한 날 2026.10.05", "2026-11-04"),
+            ("자격 취득일", ["자격 취득일"], "자격 취득일부터 3개월 이내", 3, "month",
+             "자격 취득일: 2026-08-31", "2026-11-30"),
+            ("출생일", ["출생일"], "출생한 날부터 1년 이내", 1, "year", "출생일 2028.02.29", "2029-02-28"),
+            ("출생일", ["생년월일"], "출생한 날부터 90일 이내", 90, "day", "생년월일: ******-*******", "2027-01-03"),
         ]
-        for base, labels, quote, line, due in cases:
+        for base, labels, quote, amount, unit, line, due in cases:
             with self.subTest(quote=quote):
-                r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": 1, "unit": "day",
+                r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": amount, "unit": unit,
                                    "appliesTo": "신고 기한", "quote": quote, "sourceId": "s1"}, {"s1"})
-                j = dr.judge(r, f"안내\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
+                # 기간·단위는 인용문과 같음 → 막히는 이유는 기준일 종류뿐
+                self.assertEqual([(int(n), dr.UNIT_WORDS[u]) for n, u in dr.PERIOD_RE.findall(quote)],
+                                 [(amount, unit)])
+                self.assertIsNone(dr.quote_base_kind(quote))
+                j = dr.judge(r, f"안내입니다.\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
                              [{"label": "신고 기한", "date": due}])
                 self.assertEqual((j.status, j.official_value), ("UNVERIFIED", None))
                 self.assertIn(f"공식 기준: {quote}", j.reason)
