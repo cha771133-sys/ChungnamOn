@@ -53,8 +53,9 @@ LONG_PHRASE_RES = {
     kind: [re.compile(r"(?:^|(?<=\s))" + r"\s*".join(map(re.escape, words)) + r"\s*$") for words in phrases]
     for kind, phrases in LONG_PHRASES.items()
 }
-# 문장 경계 (마침표·물음표·느낌표·줄바꿈). 숫자 사이 마침표(2026.10.05)는 문장 끝이 아님
-SENTENCE_BREAK_RE = re.compile(r"(?<!\d)\.|\.(?!\d)|[!?。\n]")
+# 문장 경계 (마침표·물음표·느낌표). 숫자 사이 마침표(2026.10.05)는 문장 끝이 아님.
+# 줄바꿈은 경계가 아님: 공식 원문이 "다시 한국에\n입국한 날부터"처럼 줄이 나뉘어도 앞 문맥을 잃지 않게 (공백 하나로 봄)
+SENTENCE_BREAK_RE = re.compile(r"(?<!\d)\.|\.(?!\d)|[!?。]")
 # 기준 표현이 든 문장(쉼표·괄호 앞 수식어 포함)에 이 말이 있으면 다른 입국(재입국 등)일 수 있어 규칙을 쓰지 않는다
 # 예) "재입국 시, 외국인이 입국한 날부터 90일 이내" → 쉼표 앞 '재입국'도 검사
 REENTRY_WORDS = ("다시", "재입국", "재차", "새로", "재입")
@@ -137,6 +138,11 @@ def _squeeze(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
+def _one_line(text: str) -> str:
+    """줄바꿈·연속 공백을 공백 하나로."""
+    return re.sub(r"\s+", " ", text or "")
+
+
 def quote_base_kind(quote: str) -> str | None:
     """인용문 '~부터/~로부터' 앞 기준 표현으로 기준일 종류를 정한다 (BASE_KINDS 고정 표). 표에 없으면 None.
 
@@ -146,7 +152,7 @@ def quote_base_kind(quote: str) -> str | None:
     예) "외국인이 입국한 날부터 90일 이내에" → 입국일, "입국한 날로부터 90일 이내" → 입국일
         "다시 한국에 입국한 날부터 …", "재입국한 날부터 …", "최초 입국한 날부터 …", "이 민원은 입국한 날부터 …" → None
     """
-    m = BASE_PHRASE_RE.search(quote or "")
+    m = BASE_PHRASE_RE.search(_one_line(quote))
     if not m:
         return None
     sentence = SENTENCE_BREAK_RE.split(m.group(1))[-1]           # 문장 시작 ~ '부터' 앞 (쉼표 앞 수식어 포함)
@@ -166,15 +172,18 @@ def source_passages(quote: str, source_text: str) -> list[str] | None:
     """공식 자료 원문에서 인용문이 나오는 모든 위치의 '원문 구절' (앞 문맥 + 인용 부분). 쓸 수 없으면 None.
 
     - 인용문은 공백을 무시하고 찾는다.
-    - 원문 구절 = 그 위치가 든 문장의 시작(앞쪽 마지막 마침표·줄바꿈 다음)부터 인용 부분 끝까지.
-      쉼표·괄호 앞 수식어("재입국 시, …")까지 들어가야 금지어 검사가 된다.
+    - 원문의 줄바꿈·연속 공백은 공백 하나로 본다 (줄바꿈에서 문맥을 자르지 않음).
+    - 원문 구절 = 그 위치가 든 문장의 시작(앞쪽 마지막 마침표·물음표·느낌표 다음)부터 인용 부분 끝까지.
+      쉼표·괄호 앞 수식어("재입국 시, …")나 앞 줄의 수식어("다시 한국에\\n입국한 날")까지 들어가야 금지어 검사가 된다.
       (LLM이 "재입국한 날부터"에서 "입국한 날부터"만 잘라 인용해도 원문 문맥으로 검사하려고)
     - 인용 위치 바로 앞 글자가 한글·영문·숫자면(예: "재" + "입국한 날") None.
+      "재\\n입국한 날"처럼 줄이 나뉘면 앞 글자는 공백이 되지만, 구절의 금지어 검사("재입국")에서 막힌다.
     - 여러 번 나오면 모든 위치를 돌려주고, 하나라도 앞 글자 검사에 걸리면 None. 한 번도 없으면 None.
     """
     key = _squeeze(quote)
     if not key or not source_text:
         return None
+    source_text = _one_line(source_text)
     pattern = re.compile(r"\s*".join(map(re.escape, key)))
     passages = []
     for m in pattern.finditer(source_text):

@@ -5,7 +5,7 @@ from datetime import date
 from ai.chatbot import deadline_rules as dr
 
 # 공식 원문 구절 기준으로 검사하므로, 기준 표현이 구절 시작에 오는 문장 ("이 민원은 입국한 날부터"는 UNVERIFIED)
-SOURCE = "외국인등록\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
+SOURCE = "외국인등록 안내입니다.\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
 ORIGINAL = "외국인등록 안내\n성명 [이름 가림]\n입국일 2026년 10월 5일\n신청 기한 2027년 1월 3일까지\n2026년 11월 10일"
 DEADLINES = [{"label": "신청 기한", "date": "2027-01-03"}]
 
@@ -239,7 +239,7 @@ class JudgeTests(unittest.TestCase):
                 self.assertEqual(j.status, expected, j.reason)
         self.assertIsNone(dr.source_passages(short, "재입국한 날부터 90일 이내"))
         self.assertIsNone(dr.source_passages(short, "출국한 날부터 30일 이내"))      # 원문에 없음
-        self.assertEqual(dr.source_passages(short, "안내\n귀하는, 입국한 날부터 90일 이내"), ["귀하는, 입국한 날부터 90일 이내"])
+        self.assertEqual(dr.source_passages(short, "안내입니다.\n귀하는, 입국한 날부터 90일 이내"), [" 귀하는, 입국한 날부터 90일 이내"])
 
     def test_reentry_word_before_punctuation_in_same_sentence(self):
         """쉼표·괄호 앞 수식어도 같은 문장이면 금지어 검사 (CodeRabbit): '재입국 시, 외국인이 입국한 날부터' → UNVERIFIED."""
@@ -258,6 +258,25 @@ class JudgeTests(unittest.TestCase):
         # 금지어가 앞 문장에 있으면 다른 문장이라 영향 없음
         other_sentence = "재입국은 별도 절차입니다. 외국인이 입국한 날부터 90일 이내에 신청합니다."
         self.assertEqual(dr.judge(rule(quote="외국인이 입국한 날부터 90일 이내에"), other_sentence, ORIGINAL,
+                                  DEADLINES).status, "MATCHED")
+
+    def test_source_context_not_cut_at_newline(self):
+        """공식 원문 줄바꿈에서 문맥을 자르지 않음 (CodeRabbit #115). 줄바꿈·연속 공백은 공백 하나."""
+        short = "입국한 날부터 90일 이내"
+        for source in ("다시 한국에\n입국한 날부터 90일 이내", "재\n입국한 날부터 90일 이내", "재입국 시\n\n입국한 날부터 90일 이내",
+                       "새로\r\n  입국한 날부터 90일 이내"):
+            with self.subTest(source=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        self.assertEqual(dr.source_passages(short, "다시 한국에\n입국한 날부터 90일 이내"),
+                         ["다시 한국에 입국한 날부터 90일 이내"])
+        # 정부24 문장이 줄로 나뉘어도 긴 표현 '외국인이 입국한 날'로 MATCHED (짧게 인용해도, 나뉜 그대로 인용해도)
+        gov24 = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이\n입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는\n출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        for quote in (short, "외국인이 입국한 날부터 90일 이내에", "외국인이\n입국한 날부터 90일 이내에"):
+            with self.subTest(quote=quote):
+                self.assertEqual(dr.judge(rule(quote=quote), gov24, ORIGINAL, DEADLINES).status, "MATCHED")
+        # 앞 문장이 마침표로 끝나면 줄바꿈 뒤는 새 문장 → 짧은 표현도 인정
+        self.assertEqual(dr.judge(rule(quote=short), "안내입니다.\n입국한 날부터 90일 이내에 신청", ORIGINAL,
                                   DEADLINES).status, "MATCHED")
 
     def test_changed_deadline_mismatch(self):
@@ -301,7 +320,7 @@ class JudgeTests(unittest.TestCase):
             with self.subTest(base=base, unit=unit):
                 r = dr.parse_rule({"base": base, "baseLabels": labels, "amount": n, "unit": unit,
                                    "appliesTo": "신고 기한", "quote": quote, "sourceId": "s1"}, {"s1"})
-                j = dr.judge(r, f"안내\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
+                j = dr.judge(r, f"안내입니다.\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
                              [{"label": "신고 기한", "date": due}])
                 self.assertEqual(j.status, "MATCHED", j.reason)
 
@@ -326,7 +345,7 @@ class JudgeTests(unittest.TestCase):
                 self.assertEqual([(int(n), dr.UNIT_WORDS[u]) for n, u in dr.PERIOD_RE.findall(quote)],
                                  [(amount, unit)])
                 self.assertIsNone(dr.quote_base_kind(quote))
-                j = dr.judge(r, f"안내\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
+                j = dr.judge(r, f"안내입니다.\n{quote} 신고해야 합니다.", f"안내문\n{line}\n신고 기한 {due}",
                              [{"label": "신고 기한", "date": due}])
                 self.assertEqual((j.status, j.official_value), ("UNVERIFIED", None))
                 self.assertIn(f"공식 기준: {quote}", j.reason)
