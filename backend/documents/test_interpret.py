@@ -509,6 +509,14 @@ class InterpretMissingValueTests(SimpleTestCase):
         with self.assertLogs(interpret_module.logger, 'WARNING'):
             self.assertEqual(run({**TAX_PAYLOAD, 'amount': '3원'}, text=text)['amount'], '')
 
+    def test_decimal_amount_is_kept_and_compared_as_one_number(self):
+        # 1.5만원의 1을 날짜 숫자로 보고 빼면 같은 금액이 비워진다(CodeRabbit). 소수는 한 숫자로 읽는다.
+        text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 1.5만원')
+        self.assertEqual(run({**TAX_PAYLOAD, 'amount': '1.5만원'}, text=text)['amount'], '1.5만원')
+        for amount in ('15만원', '2.5만원', '1.5억원', '5만원'):
+            with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
+                self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount}, text=text)['amount'], '')
+
     def test_amount_without_won_in_document_is_kept(self):
         # 원문에 "원"이 없이 숫자만 적힌 금액 칸도 금액으로 본다.
         text = TAX_NOTICE.replace('납부할 금액 11,000원', '납부할 금액 11,000')

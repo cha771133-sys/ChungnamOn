@@ -380,7 +380,11 @@ class AddressTests(SimpleTestCase):
 
     def test_building_name_line_after_address_is_masked(self):
         """주소 다음 줄이 건물 이름으로 시작해도 동·호·층 숫자가 있으면 상세주소다."""
-        for detail in ('가상아파트 101동 1001호', '견본빌라 302호', '행복오피스텔 5층 501호', '가상아파트 101-1001호'):
+        for detail in (
+            '가상아파트 101동 1001호', '견본빌라 302호', '행복오피스텔 5층 501호', '가상아파트 101-1001호',
+            # OCR이 띄어쓰기를 빼서 건물 이름과 숫자가 붙은 줄(CodeRabbit)
+            '견본빌라302호', '가상아파트101동1001호', '가상아파트 101동1001호', '행복오피스텔5층 501호',
+        ):
             for address in ('주소: 아산시 배방읍 가상로 123', '주소\n충청남도 아산시 배방읍 가상로 123'):
                 with self.subTest(detail=detail, address=address):
                     result = mask_personal_info(f'{address}\n{detail}\n세액 6,250원')

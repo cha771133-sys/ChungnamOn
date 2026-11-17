@@ -214,6 +214,11 @@ YEARLESS_RANGE = re.compile(
 )
 # 금액 숫자 하나. 11,000 / 11, 000(OCR 띄어쓰기) / 11000
 NUMBER = re.compile(r'(?<![\d,])\d{1,3}(?:,\s?\d{3})+(?!\d)|(?<![\d,])\d+(?!,?\d)')
+# 금액을 대조할 때 읽는 숫자 하나. NUMBER와 같고, 1.5만원·1.5원처럼 단위나 "원" 앞의 소수는 한 숫자로 읽는다.
+# 날짜(2026.8.31.)와 길이(3.5cm)의 점은 소수로 읽지 않는다.
+AMOUNT_NUMBER = re.compile(
+    r'(?<![\d,])(?:\d{1,3}(?:,\s?\d{3})+(?!\d)|\d+(?!,?\d))(?:\.\d+(?=[ \t]*(?:[십백천만억조경]|원)))?'
+)
 # 숫자 뒤의 배율 단위. 11,000원과 11,000만원, 1천원과 1천억원은 숫자가 같아도 다른 금액이다.
 # 뒤에 원·숫자·끝이 와야 단위다("2026 천안시"의 천은 단위가 아니다).
 MULTIPLIER_UNIT = re.compile(r'[ \t]*((?:[십백천]?[만억조경]|[십백천])+)(?=[ \t]*(?:원|\d|$)|[^가-힣 \t])')
@@ -377,7 +382,7 @@ def _numbers_with_units(text, amounts_only=False):
     amounts_only: 원문에서 금액일 수 있는 숫자만 모은다. 전화번호·문서번호·날짜처럼 기호로 이어진 숫자는 뺀다.
     """
     pairs = set()
-    for match in NUMBER.finditer(text):
+    for match in AMOUNT_NUMBER.finditer(text):
         rest = text[match.end():]
         multiplier = MULTIPLIER_UNIT.match(rest)
         unit = multiplier.group(1) if multiplier else ''
@@ -395,7 +400,8 @@ def _numbers_with_units(text, amounts_only=False):
             or re.match(r'\.\d', rest)
         ):
             continue
-        pairs.add((_digits(match.group()), unit))
+        # 소수점은 남긴다. 1.5만원과 15만원은 다른 금액이다.
+        pairs.add((re.sub(r'[^\d.]', '', match.group()), unit))
     return pairs
 
 
