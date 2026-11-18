@@ -203,8 +203,9 @@ YEAR = re.compile(r'(?<!\d)(20\d{2})(?!\d)')
 # 기간 표기(8.16.~8.31.)의 물결표·줄표
 RANGE_SEP = r'\s*[~∼〜～–-]\s*'
 # 2026.8.16.~8.31. 처럼 끝 날짜의 연도를 줄인 기간. 시작 날짜의 연도를 끝 날짜에 쓴다.
+# 끝 날짜가 시작 날짜보다 앞이면(2026.12.16.~1.3.) 해를 넘긴 기간이라 다음 해로 읽는다.
 RANGE_END = re.compile(
-    r'(?<!\d)(\d{4})\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{1,2}\s*\.?' + RANGE_SEP
+    r'(?<!\d)(\d{4})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2})\s*\.?' + RANGE_SEP
     + r'(\d{1,2})\s*[./]\s*(\d{1,2})(?!\d)'
 )
 # 8.16.~8.31. 처럼 양쪽 모두 연도가 없는 기간. 점으로만 적힌 월.일은 기간 모양일 때만 날짜로 본다.
@@ -213,6 +214,34 @@ YEARLESS_RANGE = re.compile(
 )
 # 금액 숫자 하나. 11,000 / 11, 000(OCR 띄어쓰기) / 11000
 NUMBER = re.compile(r'(?<![\d,])\d{1,3}(?:,\s?\d{3})+(?!\d)|(?<![\d,])\d+(?!,?\d)')
+# 금액을 대조할 때 읽는 숫자 하나. NUMBER와 같고, 1.5만원·1.5원처럼 단위나 "원" 앞의 소수는 한 숫자로 읽는다.
+# 날짜(2026.8.31.)와 길이(3.5cm)의 점은 소수로 읽지 않는다.
+AMOUNT_NUMBER = re.compile(
+    r'(?<![\d,])(?:\d{1,3}(?:,\s?\d{3})+(?!\d)|\d+(?!,?\d))'
+    # 배율 뒤에 다른 낱말이 붙은 수량(1.5만명)은 금액이 아니라 소수로 읽지 않는다.
+    r'(?:\.\d+(?=[ \t]*(?:(?:[십백천]?[만억조경]|[십백천])+[ \t]*(?:원|\d|\n|$)|원)))?'
+)
+# 숫자 뒤의 배율 단위. 11,000원과 11,000만원, 1천원과 1천억원은 숫자가 같아도 다른 금액이다.
+# 뒤에 원·숫자·끝이 와야 단위다("2026 천안시"의 천은 단위가 아니다).
+MULTIPLIER_UNIT = re.compile(r'[ \t]*((?:[십백천]?[만억조경]|[십백천])+)(?=[ \t]*(?:원|\d|$)|[^가-힣 \t])')
+# 숫자에 바로 붙어 금액이 아님을 알려 주는 낱말(3월, 10일, 101동, 2부, 90일). 금액 숫자와 짝짓지 않는다.
+# 날짜(년·월·일)가 아닌 세는 말은 뒤에 다른 한글이 이어지지 않을 때만 본다("11,000세액"처럼 이름표가 붙어 읽힌 경우를 피한다).
+COUNTER_UNIT = re.compile(r'([년월일]|(?:개월|번지|[시분초호동층번개명건장부매회차세살주])(?![가-힣]))')
+# 숫자에 바로 붙은 그 밖의 한글. AI가 낸 금액에서는 모르는 단위(달러 등)로 보고 그대로 비교한다.
+ATTACHED_HANGUL = re.compile(r'[가-힣]+')
+# 전화번호·문서번호·날짜처럼 기호로 이어진 숫자의 앞뒤 글자. 이런 숫자는 금액이 아니다.
+CODE_BEFORE = '-.)/~∼〜～'
+CODE_AFTER = '-/~∼〜～)'
+# 2026년 12월 16일 ~ 1월 3일 처럼 끝 날짜의 연도를 줄인 기간(한글 표기).
+KOREAN_RANGE_END = re.compile(
+    r'(?<!\d)(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일(?:\s*\([^)\n]{0,6}\))?(?:\s*부터)?' + RANGE_SEP
+    + r'(\d{1,2})\s*월\s*(\d{1,2})\s*일'
+)
+# 12월 16일 ~ 1월 3일 처럼 양쪽 모두 연도가 없는 기간(한글 표기).
+KOREAN_YEARLESS_RANGE = re.compile(
+    r'(?<!\d)(\d{1,2})\s*월\s*(\d{1,2})\s*일(?:\s*\([^)\n]{0,6}\))?(?:\s*부터)?' + RANGE_SEP
+    + r'(\d{1,2})\s*월\s*(\d{1,2})\s*일'
+)
 # 금액 칸: 칸 이름 바로 뒤(같은 줄이나 다음 줄)에 적힌 "숫자+원". AI가 금액을 비워 보냈을 때만 쓴다.
 AMOUNT_FIELD = re.compile(
     r'(?:납부\s*할?\s*금액|납기\s*내\s*금액|고지\s*금액|합계\s*금액|수수료|세액)\s*[:：]?[ \t]*\n?[ \t]*'
@@ -347,14 +376,72 @@ def _numbers(text):
     return {_digits(number) for number in NUMBER.findall(text)}
 
 
+def _numbers_with_units(text, amounts_only=False):
+    """글자에 적힌 (숫자, 단위) 쌍들. 단위가 없으면 빈 문자열이다.
+
+    단위는 배율(만·천억·조 등), 금액이 아님을 알려 주는 낱말(월·일·동·부 등), 숫자에 바로 붙은 그 밖의 한글이다.
+    "원"과 그 뒤는 단위에 넣지 않는다(11,000원 → '', 11,000만원 → '만', 3월 → '월').
+    amounts_only: 원문에서 금액일 수 있는 숫자만 모은다. 전화번호·문서번호·날짜처럼 기호로 이어진 숫자는 뺀다.
+    """
+    pairs = set()
+    for match in AMOUNT_NUMBER.finditer(text):
+        rest = text[match.end():]
+        multiplier = MULTIPLIER_UNIT.match(rest)
+        unit = multiplier.group(1) if multiplier else ''
+        after = rest[multiplier.end():] if multiplier else rest
+        is_money = after.lstrip(' \t').startswith('원')
+        not_amount = False
+        if not multiplier:
+            counter = COUNTER_UNIT.match(rest)
+            attached = ATTACHED_HANGUL.match(rest)
+            if attached and not attached.group().startswith('원'):
+                # 금액 단위가 아닌 낱말이 숫자에 붙어 있다. 세는 말(3월, 2부)과, 배율 글자로 시작하지만 금액 단위가
+                # 아닌 수량(1만명, 3천개, 3천 개)은 금액이 아니다. 그 밖의 낱말은 원문에서 이름표가 붙어 읽힌 것일 수
+                # 있어("11,000세액") 금액일 수 있는 숫자로 둔다.
+                quantity = attached.group()[0] in '십백천만억조경'
+                not_amount = bool(counter) or quantity
+                unit = counter.group(1) if counter else (
+                    attached.group() if quantity or not amounts_only else '')
+        if amounts_only and (not_amount or not is_money and (
+            text[max(match.start() - 1, 0):match.start()] in CODE_BEFORE and match.start() > 0
+            or rest[:1] in CODE_AFTER and rest[:1] != ''
+            or re.match(r'\.\d', rest)
+        )):
+            # 금액이 아닌 숫자는 원문의 금액 후보에 넣지 않는다. AI가 "3천원"을 내도 "3천 개"로는 확인되지 않는다.
+            continue
+        # 소수점은 남긴다. 1.5만원과 15만원은 다른 금액이다.
+        pairs.add((re.sub(r'[^\d.]', '', match.group()), unit))
+    return pairs
+
+
 def _phones_in_text(text):
     """원문에 적힌 전화번호들(숫자만)."""
     return {_digits(phone) for pattern in PHONE_PATTERNS for phone in pattern.findall(text)}
 
 
 def _dates_in_text(text):
-    """원문에 적힌 날짜. (연·월·일이 다 있는 날짜 집합, 연도 없이 적힌 (월, 일) 집합, 원문에 나온 연도 집합)"""
-    full, month_day = set(), set()
+    """원문에 적힌 날짜.
+
+    (연·월·일이 다 있는 날짜 집합, 연도 없이 적힌 (월, 일) 집합, 원문에 나온 연도 집합,
+     연도 없이 적힌 기간이 해를 넘겨 다음 해가 되는 끝 날짜 (월, 일) 집합)
+    """
+    full, month_day, next_year = set(), set(), set()
+
+    def korean_range(match):
+        # 시작 날짜의 연도를 끝 날짜에 쓴다. 끝 날짜가 시작 날짜보다 앞이면 해를 넘긴 기간이다.
+        year, start_month, start_day, month, day = (int(value) for value in match.groups())
+        full.add((year + ((month, day) < (start_month, start_day)), month, day))
+        # 끝 날짜를 연도 없는 날짜로 또 읽으면 문서의 다른 연도와 짝지어진다. 시작 날짜만 남긴다.
+        return f'{year}년 {start_month}월 {start_day}일 '
+
+    def korean_yearless_range(match):
+        start_month, start_day, month, day = (int(value) for value in match.groups())
+        if (month, day) >= (start_month, start_day):
+            return match.group(0)
+        next_year.add((month, day))
+        return f'{start_month}월 {start_day}일 '
+
+    text = KOREAN_YEARLESS_RANGE.sub(korean_yearless_range, KOREAN_RANGE_END.sub(korean_range, text))
     for year, month, day in KOREAN_DATE.findall(text):
         if year:
             full.add((int(year), int(month), int(day)))
@@ -362,12 +449,16 @@ def _dates_in_text(text):
             month_day.add((int(month), int(day)))
     for year, month, day in NUMERIC_DATE.findall(text):
         full.add((int(year), int(month), int(day)))
-    for year, month, day in RANGE_END.findall(text):
-        full.add((int(year), int(month), int(day)))
+    for year, start_month, start_day, month, day in RANGE_END.findall(text):
+        crosses_year = (int(month), int(day)) < (int(start_month), int(start_day))
+        full.add((int(year) + crosses_year, int(month), int(day)))
     # 연도가 적힌 기간은 위에서 읽었다. 그 부분을 연도 없는 기간으로 또 읽으면 문서의 다른 연도와 짝지어진다.
     for start_month, start_day, end_month, end_day in YEARLESS_RANGE.findall(RANGE_END.sub(' ', text)):
-        month_day.update({(int(start_month), int(start_day)), (int(end_month), int(end_day))})
-    return full, month_day, {int(year) for year in YEAR.findall(text)}
+        start, end = (int(start_month), int(start_day)), (int(end_month), int(end_day))
+        month_day.add(start)
+        # 12.16.~1.3. 처럼 해를 넘긴 기간의 끝 날짜는 문서에 적힌 연도의 다음 해로만 인정한다.
+        (next_year if end < start else month_day).add(end)
+    return full, month_day, {int(year) for year in YEAR.findall(text)}, next_year
 
 
 def _deadlines(data, masked_text):
@@ -375,7 +466,7 @@ def _deadlines(data, masked_text):
 
     OCR이 숫자를 잘못 읽은 날짜는 원문에도 그렇게 적혀 있어 여기서 걸러지지 않는다.
     """
-    full, month_day, years = _dates_in_text(masked_text)
+    full, month_day, years, next_year = _dates_in_text(masked_text)
     out, dropped = [], 0
     for item in _object_list(data, 'deadlines'):
         label, value, kind = _string(item, 'label'), _string(item, 'date'), item.get('kind')
@@ -388,6 +479,7 @@ def _deadlines(data, masked_text):
 
         written = (day.year, day.month, day.day) in full
         written = written or ((day.month, day.day) in month_day and day.year in years)
+        written = written or ((day.month, day.day) in next_year and day.year - 1 in years)
         if not written:
             dropped += 1
             continue
@@ -471,8 +563,10 @@ def _checked_amount(amount, masked_text):
         if _digits(amount):
             return None
         return amount if re.sub(r'\s+', '', amount) in re.sub(r'\s+', '', masked_text) else None
-    written = _numbers(masked_text)
-    if any(number not in written for number in numbers):
+    # 숫자와 단위를 함께 본다. 원문이 11,000원인데 11,000만원·11,000조원으로 온 값은 쓰지 않는다.
+    # 원문 쪽은 금액일 수 있는 숫자만 본다. 날짜(3월)나 전화번호의 숫자로 금액이 확인되면 안 된다.
+    written = _numbers_with_units(masked_text, amounts_only=True)
+    if any(pair not in written for pair in _numbers_with_units(amount)):
         return None
     return amount
 

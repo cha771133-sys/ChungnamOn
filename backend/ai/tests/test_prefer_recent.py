@@ -70,6 +70,7 @@ class PreferRecentTests(unittest.TestCase):
                                           "suggested_questions": []}
         doc = normalize_document({"title": "주민세 고지서", "agency": {"name": "아산시청"}, "language": "ko"})
         with mock.patch("ai.chatbot.service.search", return_value=[old, new]), \
+                mock.patch("ai.chatbot.service.embed_query", return_value=[0.0]), \
                 mock.patch("ai.chatbot.service.get_llm", return_value=llm):
             _, status, used, _, _ = answer_with_results(doc, "언제까지 내요?", official_ids={1, 2})
         user_msg = llm.complete_json.call_args_list[-1].args[1][-1]["content"]

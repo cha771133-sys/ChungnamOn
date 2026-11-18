@@ -42,6 +42,22 @@ class SearchResult:
     source_document_id: int | None = None  # DB 검색일 때 SourceDocument.pk (memory 검색은 None)
 
 
+def embed_query(query: str) -> np.ndarray:
+    """질문 벡터. 같은 질문을 범위만 바꿔 여러 번 검색할 때(공식/참고) 한 번 만들어 search(query_vector=)로 넘긴다."""
+    return np.asarray(get_embedder().embed_query(query), dtype=np.float32)
+
+
+def _query_vector(query: str, query_vector) -> np.ndarray:
+    return embed_query(query) if query_vector is None else np.asarray(query_vector, dtype=np.float32)
+
+
+def _id_allowed(doc_id, document_ids, exclude_document_ids) -> bool:
+    """document_ids: 이 SourceDocument ID만 (None이면 제한 없음), exclude_document_ids: 이 ID는 빼기."""
+    if document_ids is not None and doc_id not in document_ids:
+        return False
+    return not (exclude_document_ids and doc_id in exclude_document_ids)
+
+
 def _as_date(v) -> date | None:
     if v is None:
         return None
@@ -82,16 +98,20 @@ class MemoryRetriever:
         norms = np.linalg.norm(m, axis=1, keepdims=True)
         self.matrix = m / np.where(norms == 0, 1, norms)
 
-    def search(self, query: str, *, regions: list[str] | None, top_k: int, min_score: float) -> list[SearchResult]:
-        if not self.texts:
+    def search(self, query: str, *, regions: list[str] | None, top_k: int, min_score: float,
+               document_ids=None, exclude_document_ids=None, query_vector=None) -> list[SearchResult]:
+        # memory 자료는 SourceDocument ID가 없어서(None) document_ids를 주면 결과 없음
+        if not self.texts or (document_ids is not None and not document_ids):
             return []
-        q = np.asarray(get_embedder().embed_query(query), dtype=np.float32)
+        q = _query_vector(query, query_vector)
         q = q / (np.linalg.norm(q) or 1)
         scores = self.matrix @ q
         out = []
         for i in np.argsort(-scores):
             r = self.rows[i]
             if regions and r["region"] not in regions:
+                continue
+            if not _id_allowed(None, document_ids, exclude_document_ids):
                 continue
             if scores[i] < min_score:
                 break
@@ -144,7 +164,7 @@ class DbRetriever:
             row = cur.fetchone()
         return bool(row and str(row[0]).startswith("vector"))
 
-    def _where(self, regions):
+    def _where(self, regions, document_ids=None, exclude_document_ids=None):
         # ai_eligible·is_current와 같은 조건. 임베딩이 아직 없는 청크(null)도 뺀다
         sql = (
             f"FROM {self.chunk_t} c JOIN {self.doc_t} d ON d.id = c.source_document_id "
@@ -157,6 +177,15 @@ class DbRetriever:
         if regions:
             sql += " AND d.region IN (" + ", ".join(["%s"] * len(regions)) + ")"
             params += list(regions)
+        # 공식/참고 자료를 따로 검색할 때 SourceDocument ID로 범위를 나눔 (먼저 잘라서 나누면 한쪽이 밀려남)
+        if document_ids is not None:
+            ids = sorted(int(i) for i in document_ids)
+            sql += " AND d.id IN (" + ", ".join(["%s"] * len(ids)) + ")"
+            params += ids
+        if exclude_document_ids:
+            ids = sorted(int(i) for i in exclude_document_ids)
+            sql += " AND d.id NOT IN (" + ", ".join(["%s"] * len(ids)) + ")"
+            params += ids
         return sql, params
 
     @staticmethod
@@ -165,10 +194,15 @@ class DbRetriever:
             r[0], r[1], float(score), r[3], r[4], r[5], r[6], _as_date(r[7]), _as_date(r[8]) or date.today(), r[9],
         )
 
-    def search(self, query: str, *, regions: list[str] | None, top_k: int, min_score: float) -> list[SearchResult]:
-        q = np.asarray(get_embedder().embed_query(query), dtype=np.float32)
+    def search(self, query: str, *, regions: list[str] | None, top_k: int, min_score: float,
+               document_ids=None, exclude_document_ids=None, query_vector=None) -> list[SearchResult]:
+        """document_ids: 이 SourceDocument ID 안에서만, exclude_document_ids: 이 ID는 빼고 검색.
+        query_vector: 미리 만든 질문 벡터 (없으면 query를 임베딩)."""
+        if document_ids is not None and not document_ids:
+            return []  # 빈 범위 (IN () 는 SQL 오류)
+        q = _query_vector(query, query_vector)
         conn = self._connection()
-        where, params = self._where(regions)
+        where, params = self._where(regions, document_ids, exclude_document_ids)
 
         if self._uses_vector(conn):
             qv = to_pgvector(q)
@@ -224,11 +258,18 @@ def get_retriever():
     raise RuntimeError(f"AI_RETRIEVER={kind}는 지원 안 해 (memory | db)")
 
 
-def search(query: str, regions: list[str] | None = None, top_k: int | None = None, min_score: float | None = None):
+def search(query: str, regions: list[str] | None = None, top_k: int | None = None, min_score: float | None = None,
+           *, document_ids=None, exclude_document_ids=None, query_vector=None):
+    """document_ids: 이 SourceDocument ID 안에서만 검색 (None이면 제한 없음, 빈 집합이면 결과 없음).
+    exclude_document_ids: 이 ID는 빼고 검색.
+    query_vector: embed_query(query)로 미리 만든 벡터. 없으면 지금처럼 안에서 임베딩한다."""
     s = get_settings()
     return get_retriever().search(
         query,
         regions=regions,
         top_k=top_k or s.top_k,
         min_score=s.min_score if min_score is None else min_score,
+        document_ids=document_ids,
+        exclude_document_ids=exclude_document_ids,
+        query_vector=query_vector,
     )

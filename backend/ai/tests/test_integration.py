@@ -559,6 +559,305 @@ class VerifyInterpretationTests(AIEnvMixin, TestCase):
         for d in excluded:
             self.assertNotIn(d.pk, doc_ids)
 
+    # ---- 자료당 여러 청크 (연락처가 점수 낮은 청크에만 있던 문제) ----
+    def chunk(self, doc, text, order):
+        from sources.models import SourceChunk
+
+        return SourceChunk.objects.create(source_document=doc, chunk_text=text, chunk_order=order,
+                                          embedding=[0.0], source_content_hash=doc.content_hash)
+
+    @staticmethod
+    def hit(chunk, score):
+        import datetime
+
+        from ai.chatbot.retriever import SearchResult
+
+        d = chunk.source_document
+        return SearchResult(chunk.pk, chunk.chunk_text, score, d.source_url, d.title, d.agency, d.region,
+                            None, datetime.date(2026, 11, 16), d.pk)
+
+    def verify_prompt(self, hits, result=None):
+        """search를 hits로 바꿔 verify를 돌리고 LLM에 간 user 메시지와 결과를 돌려준다."""
+        from ai.chatbot import verify_interpretation
+
+        llm = {"items": []}
+        with mock.patch("ai.chatbot.integration.search", return_value=hits), \
+                mock.patch("ai.chatbot.llm.MockLLM.complete_json", return_value=llm) as call:
+            out = verify_interpretation(C1_RESULT if result is None else result)
+        return call.call_args.args[1][-1]["content"], out
+
+    def test_contact_in_low_score_chunk_reaches_llm(self):
+        """연락처 번호가 검색 점수 낮은(결과에 없는) 청크에만 있어도 같은 자료 안이면 LLM 입력에 들어감."""
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요: 납부 안내", 0)
+        mid = self.chunk(a, "A 납부 방법 설명", 1)
+        low = self.chunk(a, "A 문의처 041-000-0000 (세무과)", 2)   # 검색 결과에 없음
+        prompt, out = self.verify_prompt([self.hit(best, 0.8), self.hit(mid, 0.6)])
+        self.assertIn("041-000-0000 (세무과)", prompt)
+        for c in (best, mid, low):
+            self.assertIn(c.chunk_text, prompt)
+        self.assertLess(prompt.index("A 개요"), prompt.index("A 문의처"))  # 원문 순서로 이음
+        self.assertEqual([s["sourceDocumentId"] for s in out["sources"]], [a.pk])  # 출처는 자료 단위 s1 하나
+        self.assertEqual(prompt.count("<s1 |"), 1)
+        self.assertNotIn("<s2", prompt)
+
+    def test_amount_digits_chunk_also_added(self):
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요", 0)
+        fee = self.chunk(a, "A 수수료 6,250 원", 1)
+        prompt, _ = self.verify_prompt([self.hit(best, 0.8)])
+        self.assertIn(fee.chunk_text, prompt)
+
+    def test_value_numbers_found_anywhere_in_document_value(self):
+        """금액·연락처에서 숫자 후보를 모두 뽑음: "1인당 35,000원"의 1은 짧아서 빼고 35,000으로 찾음 (CodeRabbit)."""
+        from ai.chatbot.integration import _literal_needles
+
+        self.assertEqual(_literal_needles({"amount": "1인당 35,000원", "agency": {"phone": "대표 02-2110-4092"}}),
+                         ["02-2110-4092", "35,000", "35000"])
+        self.assertEqual(_literal_needles({"amount": "1인 12원", "agency": {"phone": "내선 123"}}), [])
+
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요", 0)
+        fee = self.chunk(a, "A 수수료 35,000원", 1)
+        plain = self.source("b", title="자료 B", index=False)
+        best_b = self.chunk(plain, "B 개요", 0)
+        fee_b = self.chunk(plain, "B 수수료 35000원 (쉼표 없음)", 1)
+        result = {**C1_RESULT, "amount": "1인당 35,000원", "agency": {**C1_RESULT["agency"], "phone": ""}}
+        prompt, _ = self.verify_prompt([self.hit(best, 0.8), self.hit(best_b, 0.7)], result)
+        self.assertIn(fee.chunk_text, prompt)
+        self.assertIn(fee_b.chunk_text, prompt)
+        self.assertNotIn("A 개요\n\n…\n\nB", prompt)  # 다른 자료끼리는 안 섞임
+
+    def test_source_count_capped_and_no_empty_text(self):
+        """자료가 13개 이상이어도 전체 청크 상한(12)만큼만 반환, 빈 text 자료는 없음 (CodeRabbit)."""
+        from ai.chatbot.integration import VERIFY_MAX_CHUNKS, related_sources
+        from ai.chatbot.service import normalize_document
+
+        hits = []
+        for n in range(13):
+            d = self.source(f"d{n}", title=f"자료 {n}", index=False)
+            hits.append(self.hit(self.chunk(d, f"자료{n} 청크", 0), 0.9 - n * 0.01))
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            related = related_sources(normalize_document(C1_RESULT), limit=20)
+        self.assertEqual(len(related), VERIFY_MAX_CHUNKS)
+        self.assertTrue(all(r.text.strip() for r, _ in related))
+        self.assertEqual([d.pk for _, d in related], [h.source_document_id for h in hits[:VERIFY_MAX_CHUNKS]])
+
+        # 청크 본문이 비어 있는 자료는 출처로 내지 않음
+        empty = self.source("empty", title="빈 자료", index=False)
+        with mock.patch("ai.chatbot.integration.search", return_value=[self.hit(self.chunk(empty, "", 0), 0.95)]):
+            self.assertEqual(related_sources(normalize_document(C1_RESULT)), [])
+
+    def test_search_chunks_with_old_body_hash_are_dropped(self):
+        """검색 직후 자료가 새 본문(H2)으로 재승인되면 H1 검색 청크는 빼고 현재 해시 청크만 넣음 (CodeRabbit)."""
+        from ai.chatbot.integration import related_sources
+        from ai.chatbot.service import normalize_document
+
+        a = self.source("a", title="자료 A", index=False)
+        old_best = self.chunk(a, "A 옛 본문 개요", 0)       # 검색 시점(H1) 청크
+        old_mid = self.chunk(a, "A 옛 본문 설명", 1)
+        hits = [self.hit(old_best, 0.9), self.hit(old_mid, 0.8)]
+        self.set_body(a, "새 본문 H2")                      # 검색 뒤 재승인 → content_hash가 H2
+        new_phone = self.chunk(a, "A 새 본문 연락처 041-000-0000", 2)  # H2 literal 청크 (자료+순서는 유일해서 2부터)
+        new_plain = self.chunk(a, "A 새 본문 기타", 3)                 # H2지만 검색에도 literal에도 안 걸림
+
+        prompt, out = self.verify_prompt(hits)
+        self.assertNotIn("옛 본문", prompt)
+        self.assertIn(new_phone.chunk_text, prompt)   # 첫 후보가 빠진 자리를 literal 청크가 채움
+        self.assertNotIn(new_plain.chunk_text, prompt)
+        self.assertEqual([s["sourceDocumentId"] for s in out["sources"]], [a.pk])
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            (merged, _), = related_sources(normalize_document(C1_RESULT))
+        self.assertEqual((merged.chunk_id, merged.text), (new_phone.pk, new_phone.chunk_text))
+
+        # 현재 해시 청크가 하나도 없으면 그 자료는 출처로 내지 않음
+        new_phone.delete()
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            self.assertEqual(related_sources(normalize_document(C1_RESULT)), [])
+
+    def test_chunks_joined_by_chunk_order_not_id(self):
+        """청크 id가 아니라 chunk_order 순으로 이어 붙임 (CodeRabbit)."""
+        a = self.source("a", title="자료 A", index=False)
+        second = self.chunk(a, "A 두 번째 부분", 1)   # 먼저 만들어서 id가 더 작음
+        first = self.chunk(a, "A 첫 번째 부분", 0)
+        self.assertLess(second.pk, first.pk)
+        prompt, _ = self.verify_prompt([self.hit(second, 0.9), self.hit(first, 0.8)])
+        self.assertLess(prompt.index("A 첫 번째 부분"), prompt.index("A 두 번째 부분"))
+
+    def test_at_most_three_chunks_per_source_value_chunk_first(self):
+        a = self.source("a", title="자료 A", index=False)
+        chunks = [self.chunk(a, f"A 본문 {i}번 청크", i) for i in range(5)]
+        phone = self.chunk(a, "A 연락처 041-000-0000", 5)
+        hits = [self.hit(c, 0.9 - i * 0.05) for i, c in enumerate(chunks)]
+        prompt, _ = self.verify_prompt(hits)
+        # 최고 점수 + 값 청크 + 다음 점수 청크 = 3개. 나머지는 빠짐
+        self.assertEqual([c.chunk_text in prompt for c in chunks], [True, True, False, False, False])
+        self.assertIn(phone.chunk_text, prompt)
+
+    def test_value_chunks_of_other_or_ineligible_sources_not_added(self):
+        a = self.source("a", title="자료 A", index=False)
+        best = self.chunk(a, "A 개요", 0)
+        other = self.source("other", title="자료 B", index=False)          # 승인·ACTIVE지만 검색 결과에 없음
+        self.chunk(other, "B 연락처 041-000-0000", 0)
+        pending = self.source("pending", title="자료 C", status="PENDING", index=False)  # ACTIVE 아님
+        p = self.chunk(pending, "C 연락처 041-000-0000", 0)
+        old = self.chunk(a, "A 옛 본문 041-000-0000", 1)
+        old.source_content_hash = "old-hash"                                # 이전 본문 청크
+        old.save(update_fields=["source_content_hash"])
+        prompt, out = self.verify_prompt([self.hit(best, 0.8), self.hit(p, 0.7)])
+        for text in ("B 연락처", "C 연락처", "A 옛 본문"):
+            self.assertNotIn(text, prompt)
+        self.assertEqual([s["sourceDocumentId"] for s in out["sources"]], [a.pk])
+
+    def test_total_chunk_cap_keeps_best_chunk_of_every_source(self):
+        from ai.chatbot.integration import VERIFY_MAX_CHUNKS, related_sources
+        from ai.chatbot.service import normalize_document
+
+        hits, bests = [], []
+        for n in range(6):
+            d = self.source(f"d{n}", title=f"자료 {n}", index=False)
+            cs = [self.chunk(d, f"자료{n} 청크{i}", i) for i in range(3)]
+            bests.append(cs[0].chunk_text)
+            hits += [self.hit(c, 0.9 - n * 0.01 - i * 0.1) for i, c in enumerate(cs)]
+        hits.sort(key=lambda h: -h.score)
+        with mock.patch("ai.chatbot.integration.search", return_value=hits):
+            related = related_sources(normalize_document(C1_RESULT))
+        self.assertEqual(len(related), 6)
+        texts = "\n".join(r.text for r, _ in related)
+        self.assertEqual(texts.count("청크"), VERIFY_MAX_CHUNKS)  # 6×3=18개 중 12개
+        for b in bests:
+            self.assertIn(b, texts)
+
+    # ---- 상대 기한 (입국한 날부터 90일 이내) ----
+    REG_SOURCE = "# 외국인등록 안내입니다.\n입국한 날부터 90일 이내에 체류지를 관할하는 출입국·외국인관서장에게 신청해야 합니다."
+    REG_ORIGINAL = "외국인등록 안내\n성명 [이름 가림]\n입국일 2026년 10월 5일\n신청 기한 2027년 1월 3일까지\n수수료 35,000원"
+
+    def registration(self, deadline="2027-01-03", original=None):
+        return {**C1_RESULT, "title": "외국인등록 안내문", "doc_type": "안내문",
+                "original_text": self.REG_ORIGINAL if original is None else original,
+                "deadlines": [{"label": "신청 기한", "date": deadline}], "amount": "", "payment_methods": [],
+                "agency": {"name": "대전출입국·외국인사무소 천안출장소", "phone": ""}, "region": "전국"}
+
+    def deadline_item(self, result, rule=None, status="UNVERIFIED"):
+        rule = rule if rule is not None else {
+            "base": "입국일", "baseLabels": ["입국일", "입국한 날"], "amount": 90, "unit": "day",
+            "appliesTo": "신청 기한", "quote": "입국한 날부터 90일 이내에", "sourceId": "s1"}
+        llm = {"items": [{"key": "DEADLINE", "status": status, "officialValue": None, "reason": "LLM 이유",
+                          "sourceIds": [], "rule": rule}]}
+        import logging
+
+        records = []
+        handler = logging.Handler(logging.DEBUG)
+        handler.emit = lambda record: records.append(record.getMessage())
+        logger = logging.getLogger("ai.chatbot")
+        old_level = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        try:
+            out = self.verify(result, llm)
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+        (item,) = [i for i in out["items"] if i["key"] == "DEADLINE"]
+        return item, out, "\n".join(records)
+
+    def test_relative_deadline_2a_matches(self):
+        doc = self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        item, out, logs = self.deadline_item(self.registration())
+        self.assertEqual(item["status"], "MATCHED")
+        self.assertEqual(item["officialValue"], "입국일(2026-10-05)부터 90일 이내 → 2027-01-03")
+        self.assertEqual(item["sourceIds"], ["s1"])
+        self.assertEqual(out["sources"][0]["sourceDocumentId"], doc.pk)
+        self.assertEqual(out["overall"], "MATCHED")
+        # 로그에는 원문·날짜를 남기지 않음 (판정 결과만)
+        self.assertIn("verify 상대 기한 판정: MATCHED", logs)
+        for secret in ("2026-10-05", "2027-01-03", "2026년 10월", "입국일 2026", "[이름 가림]"):
+            self.assertNotIn(secret, logs)
+
+    def test_relative_deadline_entry_date_on_next_line_matches(self):
+        """Railway 문서 #4 원문 모양: '입국일' 줄 다음 줄에 날짜, 본문에도 '입국한 날부터 90일' 문장이 있음."""
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        original = ("외국인등록 안내\n입국일\n2026년 10월 5일\n안내 내용\n"
+                    "귀하는 입국한 날부터 90일을 초과하여 대한민국에 체류할 예정이므로, 입국한 날부터 90일 이내\n"
+                    "신청 기한\n2027년 1월 3일까지")
+        item, _, _ = self.deadline_item(self.registration(original=original))
+        self.assertEqual(item["status"], "MATCHED")
+
+    def test_relative_deadline_2a_with_gov24_wording_and_reentry_guards(self):
+        """2A + 정부24 원문 표현은 MATCHED, 재입국 표현·재입국일만 있는 문서는 UNVERIFIED (CodeRabbit)."""
+        gov24 = ("# 외국인등록\n이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이 입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 하는 민원입니다.\n"
+                 "다시 한국에 입국한 날부터 90일 이내에 신고하는 경우도 있습니다.")
+        self.source("gov24", title="외국인등록", region="전국", text=gov24)
+        rule = {"base": "입국일", "baseLabels": ["입국일", "입국한 날"], "amount": 90, "unit": "day",
+                "appliesTo": "신청 기한", "quote": "외국인이 입국한 날부터 90일 이내에", "sourceId": "s1"}
+        original = "외국인등록 안내\n입국일\n2026년 10월 5일\n신청 기한\n2027년 1월 3일까지"
+        item, _, logs = self.deadline_item(self.registration(original=original), rule)
+        self.assertEqual((item["status"], item["officialValue"]),
+                         ("MATCHED", "입국일(2026-10-05)부터 90일 이내 → 2027-01-03"))
+        for secret in ("2026-10-05", "2027-01-03", "입국일\n"):
+            self.assertNotIn(secret, logs)
+        # LLM이 정부24 문장 전체를 인용해도 MATCHED (긴 표현 '외국인이 입국한 날'은 낱말 시작이면 인정)
+        whole = ("이 민원은 입국한 날로부터 90일을 초과하여 대한민국에 체류하게 될 외국인이 입국한 날부터 "
+                 "90일 이내에 그의 체류지를 관할하는 출입국·외국인관서장에게 외국인등록을 하는 민원입니다.")
+        item, _, _ = self.deadline_item(self.registration(original=original), {**rule, "quote": whole})
+        self.assertEqual(item["status"], "MATCHED")
+        # 공식 인용이 재입국 표현이면 UNVERIFIED
+        for quote in ("다시 한국에 입국한 날부터 90일 이내에", "다시 한국에 외국인이 입국한 날부터 90일 이내에"):
+            item, _, _ = self.deadline_item(self.registration(original=original), {**rule, "quote": quote})
+            self.assertEqual(item["status"], "UNVERIFIED")
+        # 문서에 재입국일만 있으면 UNVERIFIED, 둘 다 있으면 입국일 날짜로 MATCHED
+        item, _, _ = self.deadline_item(self.registration(original="재입국일 2026-10-05\n신청 기한 2027-01-03"), rule)
+        self.assertEqual(item["status"], "UNVERIFIED")
+        item, _, _ = self.deadline_item(self.registration(original="재입국일 2026-11-20\n입국일 2026-10-05"), rule)
+        self.assertEqual(item["status"], "MATCHED")
+
+    def test_relative_deadline_does_not_override_whole_deadline_item(self):
+        """상대 기한 결과는 그 기한 하나에만 해당 (CodeRabbit): MISMATCH 유지, 기한 여러 개면 MATCHED로 안 올림."""
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        two = {**self.registration(), "deadlines": [{"label": "신청 기한", "date": "2027-01-03"},
+                                                   {"label": "납부 기한", "date": "2026-12-01"}]}
+        rule = {"base": "입국일", "baseLabels": ["입국일"], "amount": 90, "unit": "day",
+                "appliesTo": "신청 기한", "quote": "입국한 날부터 90일 이내에", "sourceId": "s1"}
+        # 신청 기한은 계산상 일치, 납부 기한은 LLM이 공식 자료와 다르다고 판정 → MISMATCH 유지
+        llm = {"items": [{"key": "DEADLINE", "status": "MISMATCH", "officialValue": "납부 기한 2026-12-31",
+                          "reason": "납부 기한이 다름", "sourceIds": ["s1"], "rule": rule}]}
+        (item,) = [i for i in self.verify(two, llm)["items"] if i["key"] == "DEADLINE"]
+        self.assertEqual((item["status"], item["officialValue"]), ("MISMATCH", "납부 기한 2026-12-31"))
+        # 다른 기한이 확인 안 됐으면 신청 기한이 일치해도 UNVERIFIED (근거는 reason에)
+        item, _, _ = self.deadline_item(two, rule)
+        self.assertEqual((item["status"], item["officialValue"], item["sourceIds"]), ("UNVERIFIED", None, []))
+        self.assertIn("2027-01-03", item["reason"])
+        self.assertIn("다른 기한은 공식 자료로 확인하지 못했어요", item["reason"])
+        # 신청 기한이 계산과 다르면 MISMATCH
+        bad = {**two, "deadlines": [{"label": "신청 기한", "date": "2027-02-01"}, two["deadlines"][1]]}
+        item, _, _ = self.deadline_item(bad, rule)
+        self.assertEqual(item["status"], "MISMATCH")
+
+    def test_relative_deadline_changed_document_mismatch(self):
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        item, out, _ = self.deadline_item(self.registration("2027-01-20"))
+        self.assertEqual((item["status"], out["overall"]), ("MISMATCH", "MISMATCH"))
+        self.assertIn("2027-01-20", item["reason"])
+
+    def test_relative_deadline_without_entry_date_unverified(self):
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        original = "외국인등록 안내\n신청 기한 2027년 1월 3일까지"
+        item, _, _ = self.deadline_item(self.registration(original=original), status="MATCHED")
+        self.assertEqual((item["status"], item["officialValue"], item["sourceIds"]), ("UNVERIFIED", None, []))
+        self.assertIn("공식 기준: 입국한 날부터 90일 이내에", item["reason"])
+
+    def test_relative_deadline_rule_not_in_source_or_bad_is_ignored_or_unverified(self):
+        self.source("reg", title="외국인등록", region="전국", text=self.REG_SOURCE)
+        # 인용문이 자료에 없음 → 계산하지 않고 UNVERIFIED
+        made_up = {"base": "입국일", "baseLabels": ["입국일"], "amount": 30, "unit": "day",
+                   "appliesTo": "신청 기한", "quote": "입국한 날부터 30일 이내", "sourceId": "s1"}
+        item, _, _ = self.deadline_item(self.registration(), made_up)
+        self.assertEqual(item["status"], "UNVERIFIED")
+        # rule 모양이 이상하면(없는 출처) 예전처럼 LLM 판정 검사만 → UNVERIFIED
+        item, _, _ = self.deadline_item(self.registration(), {**made_up, "sourceId": "s9"})
+        self.assertEqual((item["status"], item["reason"]), ("UNVERIFIED", "LLM 이유"))
+
     def test_items_without_document_value_are_excluded(self):
         self.source("a")
         # 지금 더미 interpret처럼 amount·payment_methods가 없으면 → 2개만
@@ -841,6 +1140,65 @@ class ChatAnswerTests(AIEnvMixin, TestCase):
         self.assertIn("S1 | 연결된 자료", official_part)
         self.assertEqual(hint["source_ids"], ["S1"])
         self.assertLessEqual(reference_part.count("| 연결 안 된 자료"), k)  # 참고 자료도 k개까지만
+
+    def test_official_searched_separately_even_if_many_unlinked_are_closer(self):
+        """연결 안 된 자료가 아주 많고(예전 방식의 k×4개보다 많음) 훨씬 비슷해도 공식 자료는 따로 검색돼 S1·GROUNDED (CodeRabbit P1)."""
+        from ai.chatbot.config import get_settings
+        from ai.chatbot.embedder import get_embedder
+
+        k = get_settings().top_k
+        question = "주민세 납부 기간이 언제예요?"
+        for i in range(k * 4 + 3):
+            self.source(f"other{i}", title=f"연결 안 된 자료 {i}", text=question)
+        linked = self.source("linked", title="연결된 자료", text="# 안내\n세무과 문의 " * 3)
+        raw = {"answer": "답", "status": "GROUNDED", "used_sources": ["S1"], "suggested_questions": []}
+        emb = get_embedder()
+        with mock.patch.object(emb, "embed_query", wraps=emb.embed_query) as embed:
+            prompt, hint, out = self._prompt(self.official(linked), raw)
+        official_part, reference_part = prompt.split("[참고 자료 — 공식 출처로 표시 불가]")
+        self.assertIn("S1 | 연결된 자료", official_part)
+        self.assertNotIn("연결 안 된 자료", official_part)
+        self.assertEqual(hint["source_ids"], ["S1"])
+        self.assertEqual(reference_part.count("| 연결 안 된 자료"), k)  # 참고 자료는 k개
+        self.assertEqual((out["status"], out["sources"]), ("GROUNDED", [{"sourceDocumentId": linked.pk}]))
+        self.assertEqual(embed.call_count, 1)  # 공식·참고 두 번 검색해도 질문 임베딩은 한 번
+
+    def test_search_limits_by_source_document_ids(self):
+        from ai.chatbot.retriever import search
+
+        a, b = self.source("a", title="자료 A"), self.source("b", title="자료 B")
+        ids = lambda **kw: {r.source_document_id for r in search("주민세 납부", top_k=10, **kw)}  # noqa: E731
+        self.assertEqual(ids(), {a.pk, b.pk})
+        self.assertEqual(ids(document_ids={a.pk}), {a.pk})
+        self.assertEqual(ids(exclude_document_ids={a.pk}), {b.pk})
+        self.assertEqual(ids(document_ids=set()), set())          # 빈 범위면 결과 없음 (SQL 오류 아님)
+        self.assertEqual(ids(exclude_document_ids=set()), {a.pk, b.pk})
+
+    def test_query_vector_is_passed_not_cached(self):
+        """질문 벡터는 호출한 쪽이 넘긴 것만 씀 (프로세스 전역 캐시 없음). 다른 질문이 끼어들어도 영향 없음."""
+        from ai.chatbot.embedder import get_embedder
+        from ai.chatbot.retriever import embed_query, search
+
+        self.source("a", title="주민세 자료", text="# 주민세\n주민세 납부 기간은 8월입니다.")
+        self.source("b", title="외국인등록 자료", text="# 외국인등록\n입국 후 90일 이내에 외국인등록을 해야 합니다.")
+        scores = lambda rs: [(r.source_document_id, round(r.score, 6)) for r in rs]  # noqa: E731
+        q1, q2 = "주민세 납부 기간", "외국인등록 기한"
+        expected1, expected2 = scores(search(q1, top_k=5)), scores(search(q2, top_k=5))
+        self.assertNotEqual(expected1, expected2)
+
+        v1 = embed_query(q1)
+        emb = get_embedder()
+        with mock.patch.object(emb, "embed_query", wraps=emb.embed_query) as embed:
+            self.assertEqual(scores(search(q2, top_k=5)), expected2)                  # 사이에 다른 질문
+            self.assertEqual(scores(search(q1, top_k=5, query_vector=v1)), expected1)  # 넘긴 벡터 그대로 씀
+            self.assertEqual(scores(search(q1, top_k=5)), expected1)                   # 안 넘기면 다시 임베딩
+        self.assertEqual([c.args[0] for c in embed.call_args_list], [q2, q1])
+
+        # 챗봇 답변마다 질문 임베딩은 1번 (공식·참고 두 번 검색해도). 답변 사이에 남는 캐시는 없음
+        with mock.patch.object(emb, "embed_query", wraps=emb.embed_query) as embed:
+            self._prompt([{"sourceDocumentId": 1}])
+            self._prompt([{"sourceDocumentId": 1}])
+        self.assertEqual(embed.call_count, 2)
 
     def test_reference_numbers_are_never_sources(self):
         linked = self.source("linked", title="연결된 자료")

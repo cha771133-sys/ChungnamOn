@@ -11,6 +11,22 @@ def is_manual_metadata(metadata):
     return isinstance(metadata, dict) and 'manual_import' in metadata
 
 
+def inherit_manual_terms(latest, previous, content_hash):
+    """자동 관측의 실제 출처와 구분하여 이전 TXT 이력·조건을 보존한다.
+
+    manual_import는 원래 TXT의 지문이다. 현재 자동 본문의 지문으로 해석하지 않도록
+    당시 본문 해시와 현재 수집 방식을 함께 기록한다. 명시적 수동 재등록은 정정으로 본다.
+    """
+    if is_manual_metadata(latest) or not is_manual_metadata(previous):
+        return latest
+    return {
+        **latest, 'manual_import': previous['manual_import'],
+        'usage_terms': previous.get('usage_terms', {}),
+        'manual_import_content_hash': previous.get('manual_import_content_hash', content_hash),
+        'collection_method': 'automatic',
+    }
+
+
 def is_registry_excluded(url):
     """추적 쿼리·순서·공식 www 별칭과 무관하게 목록에서 제외한 자료인지 판단한다."""
     if not url:

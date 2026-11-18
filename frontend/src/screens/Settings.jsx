@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChevronRight, Download, LogOut, RotateCcw, ShieldCheck, Server } from 'lucide-react'
-import { api, parseApiError } from '../lib/api'
+import { api, parseApiError, tokenStore } from '../lib/api'
 import { refreshNotifyPreference, saveNotifyPreference } from '../lib/notifications'
 import { releasePushForLogout, requestPushPermission, retryPush } from '../lib/push'
 import { hasSession, logout as apiLogout, updateMe } from '../lib/auth'
@@ -99,12 +99,17 @@ export default function Settings() {
   /** 서버의 Refresh Token을 무효화하고 로그인 화면으로 이동한다. */
   const logout = async () => {
     // 토큰이 아직 유효할 때 이 기기의 알림 연결부터 해제한다
+    const session = tokenStore.session()
+    const marker = tokenStore.marker()
     await releasePushForLogout()
     try {
-      await apiLogout()
+      await apiLogout(session)
     } catch {
       /* 서버 요청이 실패해도 저장된 토큰은 이미 지웠다 */
     }
+    // 알림 해제를 기다리는 사이 다른 계정으로 새로 로그인했으면(새 세션 표식이 생김) 그 계정의 화면 상태는 건드리지 않는다
+    const nowMarker = tokenStore.marker()
+    if (nowMarker && nowMarker !== marker) return
     update((d) => ({ ...purgeServerData(d), user: null }))
     tab('login')
   }

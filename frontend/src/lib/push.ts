@@ -259,16 +259,21 @@ export async function connectPush(userId: string | number): Promise<PushStatus> 
     }
     const serviceWorkerRegistration = await getServiceWorker()
     if (!isCurrent(o)) return status
+    // 이 호출의 대기만 정리한다 (끄고 바로 켠 경우 새 호출의 대기를 지우지 않게)
+    let mine: ((ok: boolean) => void) | null = null
     const done = new Promise<boolean>((resolve) => {
+      mine = resolve
       waiter = resolve
       setTimeout(() => resolve(false), FID_WAIT_MS)
     })
-    await fcm.sdk.register(fcm.messaging, { vapidKey, serviceWorkerRegistration })
-    const ok = await done
-    waiter = null
-    if (isCurrent(o) && !ok) setStatus('failed')
+    try {
+      await fcm.sdk.register(fcm.messaging, { vapidKey, serviceWorkerRegistration })
+      const ok = await done
+      if (isCurrent(o) && !ok) setStatus('failed')
+    } finally {
+      if (waiter === mine) waiter = null
+    }
   } catch {
-    waiter = null
     if (isCurrent(o)) setStatus('failed')
   }
   return status
@@ -331,16 +336,29 @@ export async function releasePushForLogout(): Promise<void> {
   if (messagingPromise) {
     // SDK를 불러오는 중이면 그것도 몇 초만 기다린다 (로그아웃이 멈추지 않게)
     const fcm = await withTimeout(messagingPromise.catch(() => null), LOGOUT_WAIT_MS)
-    if (fcm) await withTimeout(fcm.sdk.unregister(fcm.messaging).catch(() => {}), LOGOUT_WAIT_MS)
+    // 기다리는 사이 다른 계정으로 로그인했으면 그 계정의 등록을 지우지 않는다
+    if (fcm && tokenStore.session() === session) await withTimeout(fcm.sdk.unregister(fcm.messaging).catch(() => {}), LOGOUT_WAIT_MS)
   }
 }
 
-/** 세션이 만료돼 서버에 해제 요청을 보낼 수 없을 때: 저장한 기기 정보만 지운다. 다음 로그인 때 다시 등록된다. */
+/**
+ * 세션이 만료돼 서버에 해제 요청을 보낼 수 없을 때: 저장한 기기 정보를 지우고 FCM 등록도 해제한다.
+ * 다음 로그인 때 새 FID로 다시 등록된다.
+ */
 export function forgetPush(): void {
   owner = null
   waiter = null
   writeSaved(null)
   setStatus(pushConfigured ? 'off' : 'unconfigured')
+  // 서버에서는 해제할 수 없지만, FCM 등록을 지워 이 브라우저로 이전 계정 알림이 더 오지 않게 한다
+  const pending = messagingPromise
+  if (pending) {
+    const session = tokenStore.session()
+    pending
+      .catch(() => null)
+      .then((fcm) => (fcm && tokenStore.session() === session ? fcm.sdk.unregister(fcm.messaging) : undefined))
+      .catch(() => {})
+  }
 }
 
 /** 서비스 워커가 알림 문구를 안내 언어로 보여주도록 알려준다. */

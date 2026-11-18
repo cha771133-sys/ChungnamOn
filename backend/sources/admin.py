@@ -296,6 +296,8 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
 
     @admin.display(description='등록 방식')
     def registration_method(self, obj):
+        if obj.metadata.get('metadata', {}).get('collection_method') == 'automatic':
+            return '자동 수집 (TXT 이력 보존)'
         return '수동 TXT' if is_manual_metadata(obj.metadata.get('metadata', {})) else '자동 수집'
 
     @admin.display(description='TXT 이용조건')
@@ -325,13 +327,14 @@ class SourceRevisionAdmin(PipelineReadOnlyMixin, admin.ModelAdmin):
 
     @admin.display(description='TXT 원문·이용조건 검토')
     def manual_review_notice(self, obj):
-        if self.registration_method(obj) != '수동 TXT':
+        if not is_manual_metadata(obj.metadata.get('metadata', {})):
             return '해당 없음'
         return (
             f'현재 TXT 이용조건: {self.usage_terms_status(obj)}. '
             '확인일을 입력해도 AI 이용조건 확인 상태는 자동으로 바뀌지 않습니다. '
             '공식 URL만으로 원문 일치를 보증하지 않습니다. 새 본문과 공식 원문을 직접 대조하고 '
-            'metadata의 manual_import(파일명·원본 해시·등록자), usage_terms(조건·근거·확인일)를 검토하세요. '
+            'metadata의 manual_import(원래 TXT의 파일명·원본 해시·등록자), usage_terms(조건·근거·확인일)를 검토하세요. '
+            '자동 수집 후보의 manual_import_content_hash는 원래 TXT 본문 해시이며 현재 자동 본문과 다를 수 있습니다. '
             'AI 정제·청크·임베딩·검색 허용과 현재 적용 범위를 확인한 뒤 기존 승인 액션을 사용하세요. '
             '이용조건과 수집 목록 제외 표시는 참고 기록이며 관리자 승인을 제한하지 않습니다.'
         )

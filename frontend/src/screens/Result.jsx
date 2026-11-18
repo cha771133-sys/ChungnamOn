@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck, RefreshCw } from 'lucide-react'
+import { ListChecks, MessageCircle, ShieldCheck, ChevronRight, Building2, Trash2, CalendarPlus, CalendarCheck, RefreshCw, AlertTriangle } from 'lucide-react'
 import { useApp, getSource, dday, ddayLabel, fmtDate, pick, addDays, isVisibleDoc, docDeadline, docScheduleState } from '../store.js'
 import { LANGS } from '../data/mock.js'
 import { TopBar, Badge, Stamp, Disclaimer } from '../components/ui.jsx'
@@ -58,7 +58,16 @@ export default function Result({ docId }) {
 
   const v = doc.verification
   const matched = v.filter((x) => x.status === 'MATCHED').length
-  const hasMis = v.some((x) => x.status === 'MISMATCH')
+  const misItems = v.filter((x) => x.status === 'MISMATCH')
+  const hasMis = misItems.length > 0
+  // 요약·핵심 정보에 나온 값이 공식 자료와 다르면 그 칸에 바로 표시한다 (배지를 못 봐도 틀린 값을 믿지 않게)
+  const misKeys = new Set(misItems.map((x) => x.key))
+  const misTag = (k) =>
+    misKeys.has(k) ? (
+      <span className="fact-mismatch">
+        <AlertTriangle size={13} /> {T('공식 자료와 달라요')}
+      </span>
+    ) : null
   const hasUn = v.some((x) => x.status === 'UNVERIFIED')
   const tone = hasMis ? 'amber' : hasUn ? 'slate' : 'green'
   const deadline = docDeadline(doc)
@@ -119,7 +128,17 @@ export default function Result({ docId }) {
           </div>
         )}
 
-        <section className="summary" aria-label={T('핵심 요약')}>
+        <section className={`summary${hasMis ? ' has-mismatch' : ''}`} aria-label={T('핵심 요약')}>
+          {hasMis && (
+            <button className="summary-alert" onClick={() => openEvidence(misItems[0].id)}>
+              <AlertTriangle size={18} />
+              <span>
+                <strong>{T('공식 자료와 다른 내용이 있어요: {v0}', { v0: misItems.map((x) => T(x.label)).join(', ') })}</strong>
+                <span>{T('아래 내용을 그대로 믿지 말고, 담당기관에 확인하세요.')}</span>
+              </span>
+              <ChevronRight size={18} className="chev" />
+            </button>
+          )}
           <ul>
             {pick(doc.summary, view).map((s, i) => (
               <li key={i}>{localizeMasks(s)}</li>
@@ -138,6 +157,7 @@ export default function Result({ docId }) {
               <>
                 <strong>{fmtDate(deadline)}</strong>
                 <span className="fact-dday">{ddayLabel(n)}</span>
+                {misTag('DEADLINE')}
               </>
             ) : (
               <strong className="muted">{T('확인되지 않음')}</strong>
@@ -155,12 +175,14 @@ export default function Result({ docId }) {
             <div className="fact">
               <span className="fact-label">{T('금액')}</span>
               <strong>{doc.amount}</strong>
+              {misTag('AMOUNT')}
             </div>
           )}
           {doc.paymentMethods?.length > 0 && (
             <div className="fact">
               <span className="fact-label">{T('처리 방법')}</span>
               <strong>{doc.paymentMethods.map((m) => (view === 'ko' ? m : T(m))).join(', ')}</strong>
+              {misTag('PAYMENT_METHOD')}
             </div>
           )}
           <div className="fact">
