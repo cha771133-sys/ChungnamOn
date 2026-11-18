@@ -328,6 +328,18 @@ class JudgeTests(unittest.TestCase):
         for source in blocked:
             with self.subTest(blocked=source):
                 self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
+        # 금지 문장: 기한이 아니라 '그 기간에는 하면 안 됨' → 계산하지 않음 (CodeRabbit #115)
+        for source in ("입국한 날부터 90일 이내에는 신청하면 안 됩니다.",
+                       "입국한 날부터 90일 이내에는 신청해서는 안 된다.",
+                       "입국한 날부터 90일 이내에는 신청이 안돼요.",
+                       "입국한 날부터 90일 이내에는 출국을 금지합니다.",
+                       "입국한 날부터 90일 이내에는 신청하지 마십시오.",
+                       "입국한 날부터 90일 이내에는 신청하지 마세요.",
+                       "입국한 날부터 90일 이내에는 신청할 수 없습니다.",
+                       "입국한 날부터 90일 이내에는 신청하지 말아야 합니다.",
+                       "입국한 날부터 90일 이내에는 신청하지 못합니다."):
+            with self.subTest(prohibition=source):
+                self.assertEqual(dr.judge(rule(quote=short), source, ORIGINAL, DEADLINES).status, "UNVERIFIED")
         # 숫자 뒤 마침표("2026. 10. 5.")는 문장 끝이 아님 → 괄호 안 날짜 뒤 단서도 같은 문장 (CodeRabbit)
         for source in ("입국한 날부터 90일 이내에 신고해야 합니다(2026. 10. 5.부터 영업일 기준 적용).",
                        "입국한 날부터 90일 이내에 신고해야 합니다(2026. 10. 5.부터 공휴일 제외).",
