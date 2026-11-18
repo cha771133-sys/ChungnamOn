@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ChungnamOn">
+<g stroke="#12A89E" stroke-width="24" stroke-linejoin="round" fill="#FFFFFF">
+<path d="M200 36 H374 L430 92 V336 H200 Z"/>
+<path d="M374 36 L430 92 H374 Z" fill="#12A89E"/>
+<path d="M150 86 H324 L380 142 V386 H150 Z"/>
+<path d="M324 86 L380 142 H324 Z" fill="#12A89E"/>
+<path d="M100 136 H274 L330 192 V436 H100 Z"/>
+<path d="M274 136 L330 192 H274 Z" fill="#12A89E"/>
+</g>
+<g stroke="#12A89E" stroke-width="22" stroke-linecap="round">
+<line x1="146" y1="236" x2="284" y2="236"/>
+<line x1="146" y1="280" x2="284" y2="280"/>
+<line x1="146" y1="324" x2="230" y2="324"/>
+<line x1="146" y1="368" x2="214" y2="368"/>
+</g>
+<path d="M268 300 H442 a36 36 0 0 1 36 36 V418 a36 36 0 0 1 -36 36 H322 L282 484 L290 454 H268 a36 36 0 0 1 -36 -36 V336 a36 36 0 0 1 36 -36 Z" fill="#E04A42" stroke="#FFFFFF" stroke-width="14" stroke-linejoin="round"/>
+<g stroke="#FFFFFF" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none">
+<path d="M266 342 H306 Q306 386 276 414"/>
+<path d="M330 330 V422"/>
+<path d="M330 374 H350"/>
+<ellipse cx="398" cy="378" rx="25" ry="43"/>
+<path d="M417 350 Q433 351 435 335"/>
+</g>
+</svg>

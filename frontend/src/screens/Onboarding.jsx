@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Bell, Camera, Languages, Globe } from 'lucide-react'
 import { useApp, purgeServerData } from '../store.js'
 import { LANGS, NATIONALITIES, VISAS } from '../data/mock.js'
@@ -49,6 +49,40 @@ function toFormErrors(error, lang, fieldMap = {}) {
   }
   if (!Object.keys(next).length) next.form = info.fields.non_field_errors || info.message || t(lang, 'errUnknown')
   return next
+}
+
+const SPLASH_MS = 1500
+
+/**
+ * ⓪ 로고(스플래시) 화면. 온보딩 전 사용자에게만 잠깐 보여주고 언어 선택으로 넘어간다.
+ * 스택을 교체(replace)해서 뒤로가기로 이 화면에 돌아오지 않는다. 화면을 누르면 바로 넘어간다.
+ */
+export function Splash() {
+  const { replace } = useApp()
+  const done = useRef(false)
+  const go = () => {
+    if (done.current) return
+    done.current = true
+    replace('language')
+  }
+  useEffect(() => {
+    const timer = setTimeout(go, SPLASH_MS)
+    return () => clearTimeout(timer)
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return (
+    <main className="splash">
+      <button type="button" className="splash-btn" onClick={go} aria-label="ChungnamOn 시작하기">
+        <img className="splash-symbol" src="/brand/chungnamon-symbol.svg" width="120" height="120" alt="" />
+        <span className="splash-name" aria-hidden="true">
+          Chungnam<span className="splash-on">On</span>
+        </span>
+        <span className="splash-slogan" lang="ko" aria-hidden="true">
+          받은 행정문서를 모국어로 이해하고, 끝까지 처리하도록
+        </span>
+      </button>
+    </main>
+  )
 }
 
 /** ① 첫 화면: 언어 선택. 외국인 사용자가 처음부터 자기 언어로 볼 수 있게 맨 앞에 둔다. */

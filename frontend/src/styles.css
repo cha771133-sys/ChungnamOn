@@ -2746,3 +2746,65 @@ ol {
   border: 1px solid var(--line);
   color: var(--ink);
 }
+
+/* ── 로고(스플래시) 화면: 온보딩 전 사용자에게만 표시 ── */
+.splash {
+  display: flex;
+  min-height: 100dvh;
+  background: #f7f7f5;
+}
+.splash-btn {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 24px 20px calc(24px + var(--safe-bottom));
+  border: 0;
+  background: transparent;
+  font-family: var(--font);
+  text-align: center;
+  cursor: pointer;
+  animation: splash-in 0.4s ease-out both;
+}
+.splash-btn:focus-visible {
+  outline: 3px solid #12a89e;
+  outline-offset: -6px;
+}
+.splash-symbol {
+  display: block;
+  width: 120px;
+  height: 120px;
+}
+.splash-name {
+  margin-top: 20px;
+  color: #171c26;
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.splash-on {
+  color: #12a89e;
+}
+.splash-slogan {
+  margin-top: 10px;
+  color: #6b7585;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: keep-all;
+}
+@keyframes splash-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .splash-btn {
+    animation: none;
+  }
+}
