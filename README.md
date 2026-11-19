@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="[프론트 배포 URL]">서비스 바로가기</a> ·
+  <a href="https://chungnam-on.vercel.app/">서비스 바로가기</a> ·
   <a href="https://chungnamon-production.up.railway.app/api/docs/">API 문서</a> ·
-  <a href="[시연 영상 URL]">시연 영상</a>
+  <a href="https://drive.google.com/file/d/1VCz_enqbndPbl2G2hapxSRq28OxBmqVQ/view">시연 영상</a>
 </p>
 
 ---
