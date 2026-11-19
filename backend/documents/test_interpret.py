@@ -529,10 +529,11 @@ class InterpretMissingValueTests(SimpleTestCase):
 
     def test_long_run_of_multiplier_words_does_not_stall(self):
         # "천만"이 길게 이어진 글에서 정규식이 멈춘 듯이 느려지지 않는다(CodeRabbit).
-        # 고치기 전에는 22번 반복에 몇 초가 걸렸고 2번 늘 때마다 4배가 됐다. 200번은 끝나지 않는다.
+        # 고치기 전에는 20번 반복에 0.5초가 걸렸고 2번 늘 때마다 4배가 됐다. 24번이면 몇 초가 걸려 아래 검사에서
+        # 실패한다. 더 길게 넣으면 예전 정규식에서는 끝나지 않아, 실패를 알리지 못하고 테스트가 멈춘다(CodeRabbit).
         for tail in ('명', '원', ''):
             with self.subTest(tail=tail):
-                text = f'{TAX_NOTICE}\n1{"천만" * 200}{tail}\n1.5{"천만" * 200}{tail}'
+                text = f'{TAX_NOTICE}\n1{"천만" * 24}{tail}\n1.5{"천만" * 24}{tail}'
                 started = time.perf_counter()
 
                 self.assertEqual(run(TAX_PAYLOAD, text=text)['amount'], '11,000원')

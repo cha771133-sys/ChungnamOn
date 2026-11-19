@@ -228,31 +228,40 @@ def _reorder_skewed_lines(lines):
     for line, boxes in zip(lines, boxed):
         centers = [(sum(x for x, _ in box) / 4, sum(y for _, y in box) / 4) for box in boxes]
         rotated = [(x * cos - y * sin, x * sin + y * cos) for x, y in centers]
-        # 아랫선은 상자 아랫변(셋째·넷째 꼭짓점)의 세로 위치다.
+        # 윗선과 아랫선은 상자 윗변(첫째·둘째 꼭짓점)과 아랫변(셋째·넷째 꼭짓점)의 세로 위치다.
+        tops = [sum(x * sin + y * cos for x, y in box[:2]) / 2 for box in boxes]
         bottoms = [sum(x * sin + y * cos for x, y in box[2:]) / 2 for box in boxes]
         placed.append((
             sum(y for _, y in rotated) / len(rotated), min(x for x, _ in rotated), line,
-            sum(bottoms) / len(bottoms),
+            sum(bottoms) / len(bottoms), sum(tops) / len(tops),
         ))
         heights.extend(math.hypot(box[3][0] - box[0][0], box[3][1] - box[0][1]) for box in boxes)
     heights.sort()
     row_gap = heights[len(heights) // 2] * SKEW_ROW_GAP_RATIO
 
     # 위에서 아래로 훑으며 세로 위치가 가까운 줄을 같은 행으로 묶고, 행 안에서는 왼쪽부터 놓는다.
-    # 글자 크기가 다르면 같은 행이어도 중심 높이가 벌어진다("마감" 옆의 큰 날짜). 아랫선이 가까워도 같은 행으로 본다.
+    # 글자 크기가 다르면 같은 행이어도 중심 높이가 벌어진다("마감" 옆의 큰 날짜). 아랫선이 가깝고 세로로
+    # 겹쳐 있으면 같은 행으로 본다. 행 바로 아래의 작은 글자는 아랫선이 가까워도 겹치지 않으므로 따로 둔다.
     # 높이가 같은 줄끼리는 중심 차이와 아랫선 차이가 같아서 결과가 달라지지 않는다.
     placed.sort(key=lambda item: item[0])
     rows, row = [], []
     for item in placed:
-        if row:
-            center_gap = item[0] - sum(other[0] for other in row) / len(row)
-            bottom_gap = abs(item[3] - sum(other[3] for other in row) / len(row))
-            if center_gap > row_gap and bottom_gap > row_gap:
-                rows.append(row)
-                row = []
+        if row and item[0] - sum(other[0] for other in row) / len(row) > row_gap and not _same_baseline(item, row, row_gap):
+            rows.append(row)
+            row = []
         row.append(item)
     rows.append(row)
-    return [line for row in rows for _, _, line, _ in sorted(row, key=lambda item: item[1])]
+    return [line for row in rows for _, _, line, _, _ in sorted(row, key=lambda item: item[1])]
+
+
+def _same_baseline(item, row, row_gap):
+    """줄(item)이 행(row)과 아랫선이 가깝고, 세로 범위가 둘 중 낮은 쪽 높이의 절반 이상 겹치는지."""
+    _, _, _, bottom, top = item
+    if abs(bottom - sum(other[3] for other in row) / len(row)) > row_gap:
+        return False
+    row_top, row_bottom = min(other[4] for other in row), max(other[3] for other in row)
+    overlap = min(bottom, row_bottom) - max(top, row_top)
+    return overlap >= min(bottom - top, row_bottom - row_top) / 2
 
 
 def _line_text(line):

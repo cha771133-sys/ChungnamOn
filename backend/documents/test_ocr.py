@@ -176,12 +176,13 @@ class NormalizeRegistrationNumberTests(SimpleTestCase):
         self.assertEqual(normalize_registration_numbers('고지번호: 900101 - 5123456'), '고지번호: 900101-5123456')
 
 
-def cell(text, column, row, angle=0.0, confidence=0.99, line_break=True, height=30):
+def cell(text, column, row, angle=0.0, confidence=0.99, line_break=True, height=30, drop=0):
     """표의 (열, 행) 자리에 놓인 단어. 종이를 angle도 돌려 찍은 것처럼 상자 좌표를 돌려서 붙인다.
 
     height를 키우면 아랫선은 그대로 두고 글자가 위로 커진다(같은 행의 큰 글자).
+    drop을 주면 그만큼 아래로 내려 놓는다(행 바로 아래의 작은 글자).
     """
-    left, bottom = 200 + column * 500, 230 + row * 60
+    left, bottom = 200 + column * 500, 230 + row * 60 + drop
     top = bottom - height
     corners = [(left, top), (left + 200, top), (left + 200, bottom), (left, bottom)]
     cos, sin = math.cos(math.radians(angle)), math.sin(math.radians(angle))
@@ -290,6 +291,19 @@ class SkewedLineOrderTests(SimpleTestCase):
                 )]
 
                 self.assertEqual(build_text(images), '성명\n홍길동\n마감\n2026년 12월 31일\n세액\n6,250원')
+
+    def test_small_text_just_below_a_row_stays_on_its_own_line(self):
+        # 행 바로 아래의 작은 글자는 아랫선이 가까워도 윗행과 겹치지 않는다. 같은 행으로 묶으면
+        # 이름표와 값 사이에 끼어든다(CodeRabbit). 따로 둔다.
+        for angle in (10, 29.1, -30, 180):
+            with self.subTest(angle=angle):
+                images = [page(
+                    cell('세액', 0, 1, angle), cell('2026년 12월 31일', 1, 0, angle),
+                    cell('※ 안내', 0.02, 0, angle, height=10, drop=14), cell('마감', 0, 0, angle),
+                    cell('6,250원', 1, 1, angle),
+                )]
+
+                self.assertEqual(build_text(images), '마감\n2026년 12월 31일\n※ 안내\n세액\n6,250원')
 
     def test_each_page_is_judged_separately(self):
         images = table(30, SCRAMBLED) + table(0, SCRAMBLED)
