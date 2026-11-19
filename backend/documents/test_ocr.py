@@ -176,10 +176,14 @@ class NormalizeRegistrationNumberTests(SimpleTestCase):
         self.assertEqual(normalize_registration_numbers('고지번호: 900101 - 5123456'), '고지번호: 900101-5123456')
 
 
-def cell(text, column, row, angle=0.0, confidence=0.99, line_break=True):
-    """표의 (열, 행) 자리에 놓인 단어. 종이를 angle도 돌려 찍은 것처럼 상자 좌표를 돌려서 붙인다."""
-    left, top = 200 + column * 500, 200 + row * 60
-    corners = [(left, top), (left + 200, top), (left + 200, top + 30), (left, top + 30)]
+def cell(text, column, row, angle=0.0, confidence=0.99, line_break=True, height=30):
+    """표의 (열, 행) 자리에 놓인 단어. 종이를 angle도 돌려 찍은 것처럼 상자 좌표를 돌려서 붙인다.
+
+    height를 키우면 아랫선은 그대로 두고 글자가 위로 커진다(같은 행의 큰 글자).
+    """
+    left, bottom = 200 + column * 500, 230 + row * 60
+    top = bottom - height
+    corners = [(left, top), (left + 200, top), (left + 200, bottom), (left, bottom)]
     cos, sin = math.cos(math.radians(angle)), math.sin(math.radians(angle))
     item = field(text, confidence, line_break)
     item['boundingPoly'] = {'vertices': [{'x': x * cos - y * sin, 'y': x * sin + y * cos} for x, y in corners]}
@@ -273,6 +277,19 @@ class SkewedLineOrderTests(SimpleTestCase):
         )]
 
         self.assertEqual(build_text(images), '성명\n홍길동\n주소\n아산시 가상로 1\n연락처\n041-000-0000')
+
+    def test_larger_text_on_the_same_row_stays_after_its_label(self):
+        # 글자가 큰 값은 상자 중심이 이름표보다 위에 있다. 중심만 보면 값이 이름표 앞줄로 간다(CodeRabbit).
+        # 아랫선이 같으면 같은 행으로 묶어 이름표 다음에 둔다.
+        for angle in (10, 29.1, -30, 180):
+            with self.subTest(angle=angle):
+                images = [page(
+                    cell('성명', 0, 0, angle), cell('홍길동', 1, 0, angle),
+                    cell('2026년 12월 31일', 1, 1, angle, height=70), cell('마감', 0, 1, angle),
+                    cell('세액', 0, 2, angle), cell('6,250원', 1, 2, angle),
+                )]
+
+                self.assertEqual(build_text(images), '성명\n홍길동\n마감\n2026년 12월 31일\n세액\n6,250원')
 
     def test_each_page_is_judged_separately(self):
         images = table(30, SCRAMBLED) + table(0, SCRAMBLED)

@@ -4,6 +4,7 @@
 """
 
 import json
+import time
 from types import SimpleNamespace
 from unittest import mock
 
@@ -525,6 +526,17 @@ class InterpretMissingValueTests(SimpleTestCase):
             with self.subTest(amount=amount), self.assertLogs(interpret_module.logger, 'WARNING'):
                 self.assertEqual(run({**TAX_PAYLOAD, 'amount': amount}, text=text)['amount'], '')
         self.assertEqual(run(TAX_PAYLOAD, text=text)['amount'], '11,000원')
+
+    def test_long_run_of_multiplier_words_does_not_stall(self):
+        # "천만"이 길게 이어진 글에서 정규식이 멈춘 듯이 느려지지 않는다(CodeRabbit).
+        # 고치기 전에는 22번 반복에 몇 초가 걸렸고 2번 늘 때마다 4배가 됐다. 200번은 끝나지 않는다.
+        for tail in ('명', '원', ''):
+            with self.subTest(tail=tail):
+                text = f'{TAX_NOTICE}\n1{"천만" * 200}{tail}\n1.5{"천만" * 200}{tail}'
+                started = time.perf_counter()
+
+                self.assertEqual(run(TAX_PAYLOAD, text=text)['amount'], '11,000원')
+                self.assertLess(time.perf_counter() - started, 1)
 
     def test_amount_without_won_in_document_is_kept(self):
         # 원문에 "원"이 없이 숫자만 적힌 금액 칸도 금액으로 본다.

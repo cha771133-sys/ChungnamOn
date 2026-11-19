@@ -222,27 +222,37 @@ def _reorder_skewed_lines(lines):
     if angle is None or abs(angle) < SKEW_REORDER_DEGREES:
         return lines
 
-    # 기울기를 되돌린 좌표에서 줄마다 세로 위치(단어 중심의 평균), 가로 위치(가장 왼쪽), 글자 높이를 구한다.
+    # 기울기를 되돌린 좌표에서 줄마다 세로 위치(단어 중심의 평균), 가로 위치(가장 왼쪽), 아랫선, 글자 높이를 구한다.
     cos, sin = math.cos(math.radians(-angle)), math.sin(math.radians(-angle))
     placed, heights = [], []
     for line, boxes in zip(lines, boxed):
         centers = [(sum(x for x, _ in box) / 4, sum(y for _, y in box) / 4) for box in boxes]
         rotated = [(x * cos - y * sin, x * sin + y * cos) for x, y in centers]
-        placed.append((sum(y for _, y in rotated) / len(rotated), min(x for x, _ in rotated), line))
+        # 아랫선은 상자 아랫변(셋째·넷째 꼭짓점)의 세로 위치다.
+        bottoms = [sum(x * sin + y * cos for x, y in box[2:]) / 2 for box in boxes]
+        placed.append((
+            sum(y for _, y in rotated) / len(rotated), min(x for x, _ in rotated), line,
+            sum(bottoms) / len(bottoms),
+        ))
         heights.extend(math.hypot(box[3][0] - box[0][0], box[3][1] - box[0][1]) for box in boxes)
     heights.sort()
     row_gap = heights[len(heights) // 2] * SKEW_ROW_GAP_RATIO
 
     # 위에서 아래로 훑으며 세로 위치가 가까운 줄을 같은 행으로 묶고, 행 안에서는 왼쪽부터 놓는다.
+    # 글자 크기가 다르면 같은 행이어도 중심 높이가 벌어진다("마감" 옆의 큰 날짜). 아랫선이 가까워도 같은 행으로 본다.
+    # 높이가 같은 줄끼리는 중심 차이와 아랫선 차이가 같아서 결과가 달라지지 않는다.
     placed.sort(key=lambda item: item[0])
     rows, row = [], []
     for item in placed:
-        if row and item[0] - sum(other[0] for other in row) / len(row) > row_gap:
-            rows.append(row)
-            row = []
+        if row:
+            center_gap = item[0] - sum(other[0] for other in row) / len(row)
+            bottom_gap = abs(item[3] - sum(other[3] for other in row) / len(row))
+            if center_gap > row_gap and bottom_gap > row_gap:
+                rows.append(row)
+                row = []
         row.append(item)
     rows.append(row)
-    return [line for row in rows for _, _, line in sorted(row, key=lambda item: item[1])]
+    return [line for row in rows for _, _, line, _ in sorted(row, key=lambda item: item[1])]
 
 
 def _line_text(line):
