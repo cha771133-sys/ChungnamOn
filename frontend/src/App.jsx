@@ -9,7 +9,7 @@ import { Ctx, CONTENT_LANGS, purgeServerData } from './store.js'
 import { INITIAL_DOCS, INITIAL_SCHEDULES, NATIONALITIES } from './data/mock.js'
 import { WifiOff } from 'lucide-react'
 import SheetHost from './components/Sheets.jsx'
-import { Intro, LanguageSelect, Login, Signup, ProfileSetup, NotifyPermission } from './screens/Onboarding.jsx'
+import { Splash, Intro, LanguageSelect, Login, Signup, ProfileSetup, NotifyPermission } from './screens/Onboarding.jsx'
 import Home from './screens/Home.jsx'
 import Docs from './screens/Docs.jsx'
 import { Upload, Analyzing, OcrLow, Failed } from './screens/Upload.jsx'
@@ -56,6 +56,7 @@ function fresh() {
 }
 
 const SCREENS = {
+  splash: Splash,
   intro: Intro,
   language: LanguageSelect,
   login: Login,
@@ -82,7 +83,8 @@ const SCREENS = {
 export default function App() {
   const [data, setData] = useState(() => load() || fresh())
   const [stack, setStack] = useState(() => {
-    if (!data.onboarded) return [{ name: 'language', params: {} }]
+    // 온보딩 전 사용자만 로고(스플래시) → 언어 선택 순서로 시작한다
+    if (!data.onboarded) return [{ name: 'splash', params: {} }]
     // 온보딩은 마쳤지만 토큰이 없으면(로그아웃·만료) 로그인부터
     if (!hasSession()) return [{ name: 'login', params: {} }]
     // 유저 플로우 n3 → n44 → n39: 마감 알림을 누르면 /?schedule=ID 로 열려 일정 상세로 이동
